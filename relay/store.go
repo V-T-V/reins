@@ -70,36 +70,34 @@ func validTransition(from, to string) bool {
 
 // UpdateTaskStatus 带状态机校验的状态更新。
 // 若当前状态为终态或转换非法，返回错误且不更新。
+//
+// E1/B2 修复：把"读当前态→校验→写新态"合并进单个 db.Update 写事务。
+// bbolt 写事务天然串行，保证 reaper 与 result 并发时不会丢失更新
+//（原 View+Update 两步非原子，可能 completed 被 reaper 覆盖为 pending）。
 func (s *Store) UpdateTaskStatus(taskID, newStatus string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.db == nil {
 		return ErrStoreClosed
 	}
-	var current *StoredTask
-	err := s.db.View(func(tx *bolt.Tx) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
 		raw := tx.Bucket([]byte(bucketTasks)).Get([]byte(taskID))
 		if raw == nil {
-			return nil
+			return fmt.Errorf("任务 %s 不存在", taskID)
 		}
-		var t StoredTask
-		if json.Unmarshal(raw, &t) == nil {
-			current = &t
+		var current StoredTask
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return fmt.Errorf("任务 %s 解析失败: %w", taskID, err)
 		}
-		return nil
-	})
-	if err != nil || current == nil {
-		return fmt.Errorf("任务 %s 不存在", taskID)
-	}
-	if !validTransition(current.Status, newStatus) {
-		return fmt.Errorf("非法状态转换 %s→%s（当前为终态，不可变更）", current.Status, newStatus)
-	}
-	current.Status = newStatus
-	if current.UpdatedAt == 0 {
-		current.UpdatedAt = time.Now().UnixMilli()
-	}
-	data, _ := json.Marshal(current)
-	return s.db.Update(func(tx *bolt.Tx) error {
+		if !validTransition(current.Status, newStatus) {
+			return fmt.Errorf("非法状态转换 %s→%s（终态不可变更）", current.Status, newStatus)
+		}
+		current.Status = newStatus
+		if current.UpdatedAt == 0 {
+			current.UpdatedAt = time.Now().UnixMilli()
+		}
+		data, err := json.Marshal(current)
+		if err != nil {
+			return err
+		}
 		return tx.Bucket([]byte(bucketTasks)).Put([]byte(taskID), data)
 	})
 }

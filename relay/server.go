@@ -264,12 +264,11 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 
 		case proto.TypeTaskAck:
 			// C5：任务 ACK，更新状态
+			// E1/B1 修复：改用 UpdateTaskStatus，经终态锁校验（防 cancel 后被 ACK 改回）
 			var ack proto.TaskAck
 			if err := env.Decode(&ack); err == nil && r.store != nil {
-				metrics.Inc("acked") // D7
-				if t, err := r.store.GetTask(ack.TaskID); err == nil && t != nil {
-					t.Status = StatusAcknowledged
-					_ = r.store.SaveTask(*t)
+				if err := r.store.UpdateTaskStatus(ack.TaskID, StatusAcknowledged); err == nil {
+					metrics.Inc("acked") // D7
 				}
 			}
 
