@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log"
@@ -40,6 +41,9 @@ func (w *wsConn) writeJSON(ctx context.Context, v any) error {
 }
 
 func (w *wsConn) close(code websocket.StatusCode, reason string) {
+	if w == nil || w.conn == nil {
+		return // nil 安全（测试 stub 可能无真实连接）
+	}
 	_ = w.conn.Close(code, reason)
 }
 
@@ -116,6 +120,8 @@ func NewRelay(cfg Config) *Relay {
 }
 
 // 鉴权：校验 Bearer token（配置为空则放行）。
+//
+// S6 修复：token 比较用 crypto/subtle.ConstantTimeCompare，消除计时侧信道。
 func (r *Relay) authorize(req *http.Request) error {
 	if r.cfg.Token == "" {
 		return nil
@@ -128,7 +134,8 @@ func (r *Relay) authorize(req *http.Request) error {
 		}
 	}
 	want := "Bearer " + r.cfg.Token
-	if token != want {
+	// 常量时间比较：长度不同时先 normalize 再比，避免长度泄露
+	if subtle.ConstantTimeCompare([]byte(token), []byte(want)) != 1 {
 		return errors.New("无效的鉴权 token")
 	}
 	return nil

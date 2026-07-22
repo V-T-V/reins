@@ -98,10 +98,10 @@ func TestScriptPS1(t *testing.T) {
 	}
 }
 
-// TestFileUploadDownload 验证文件上传下载往返。
+// TestFileUploadDownload 验证文件上传下载往返（含路径白名单）。
 func TestFileUploadDownload(t *testing.T) {
-	e := NewFile()
 	tmpDir := t.TempDir()
+	e := NewFile(WithAllowedRoots(tmpDir))
 
 	// upload
 	content := "hello-文件内容"

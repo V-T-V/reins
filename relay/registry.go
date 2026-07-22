@@ -4,6 +4,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
@@ -90,17 +92,27 @@ func (r *Registry) Snapshot() []proto.Register {
 }
 
 // Sweep 清理超时未心跳的 Agent，返回被清理的 agentID 列表。
+// Sweep 清理超时未心跳的 Agent，返回被清理的 agentID 列表。
 // 超时阈值建议为心跳间隔的 3 倍（默认心跳 15s → 阈值 45s）。
+//
+// R4 修复：删除条目时主动关闭底层 WS 连接，驱动 serveAgent 的 Read 循环退出，
+// 避免连接泄漏与状态分裂（Registry 已删但 serveAgent 仍在读）。
 func (r *Registry) Sweep(timeout time.Duration) []string {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	var removed []string
+	var connsToClose []*wsConn
 	now := time.Now()
 	for id, e := range r.agents {
 		if now.Sub(e.lastBeat) > timeout {
 			delete(r.agents, id)
 			removed = append(removed, id)
+			connsToClose = append(connsToClose, e.conn)
 		}
+	}
+	r.mu.Unlock()
+	// 在锁外关闭连接（close 可能触发对方回调，避免持锁死锁）
+	for _, c := range connsToClose {
+		c.close(websocket.StatusPolicyViolation, "heartbeat timeout")
 	}
 	return removed
 }

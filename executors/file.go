@@ -15,9 +15,32 @@ const FileMaxBytes = 10 * 1024 * 1024
 //
 //   - op=upload：把 ContentB64（base64）解码后写到 Path
 //   - op=download：读 Path 文件，base64 编码后放进结果 Data
-type FileExecutor struct{}
+//
+// 安全（S5 修复）：所有路径经 FilePolicy.Check 校验，禁止穿越到系统目录/敏感文件。
+type FileExecutor struct {
+	policy FilePolicy
+}
 
-func NewFile() *FileExecutor { return &FileExecutor{} }
+// NewFile 构造执行器，使用给定策略。策略为零值时用 DefaultFilePolicy。
+func NewFile(opts ...func(*FileExecutor)) *FileExecutor {
+	e := &FileExecutor{policy: DefaultFilePolicy()}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
+}
+
+// WithFilePolicy 注入自定义策略。
+func WithFilePolicy(p FilePolicy) func(*FileExecutor) {
+	return func(e *FileExecutor) { e.policy = p }
+}
+
+// WithAllowedRoots 便捷设置允许根目录。
+func WithAllowedRoots(roots ...string) func(*FileExecutor) {
+	return func(e *FileExecutor) {
+		e.policy.AllowedRoots = roots
+	}
+}
 
 func (e *FileExecutor) Type() string { return proto.TaskFile }
 
@@ -28,6 +51,12 @@ func (e *FileExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFunc)
 	}
 	if task.Path == "" {
 		return fail("", "path 不能为空")
+	}
+
+	// S5 修复：路径穿越校验
+	if err := e.policy.Check(task.Path); err != nil {
+		r := fail("", err.Error())
+		return r
 	}
 
 	switch task.Op {
@@ -71,8 +100,8 @@ func (e *FileExecutor) download(task proto.FileTask) proto.TaskResult {
 	}
 	r := ok("")
 	r.Data, _ = jsonMarshal(map[string]any{
-		"path":       task.Path,
-		"bytes":      len(data),
+		"path":        task.Path,
+		"bytes":       len(data),
 		"content_b64": base64.StdEncoding.EncodeToString(data),
 	})
 	return r
