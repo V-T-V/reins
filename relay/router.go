@@ -17,6 +17,7 @@ import (
 func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", r.handleListAgents)
 	mux.HandleFunc("POST /api/tasks", r.handlePostTask)
+	mux.HandleFunc("POST /api/tasks/cancel", r.handleCancelTask) // C6 取消任务
 	mux.HandleFunc("GET /api/tasks", r.handleListTasks)   // C4/F1 任务历史
 	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)    // C4 单任务详情+结果
 	mux.HandleFunc("GET /api/events", r.handleSSE)
@@ -47,6 +48,68 @@ func (r *Relay) handleListTasks(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks, "count": len(tasks), "enabled": true})
+}
+
+// POST /api/tasks/cancel —— 取消任务（C6）。转发 task_cancel 到 Agent，并更新状态。
+func (r *Relay) handleCancelTask(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	var body struct {
+		TaskID  string `json:"task_id"`
+		AgentID string `json:"agent_id"`
+		Reason  string `json:"reason,omitempty"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("请求体解析失败: %w", err)))
+		return
+	}
+	if body.TaskID == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("task_id 不能为空")))
+		return
+	}
+
+	// 从持久化找 AgentID（若请求未带）
+	agentID := body.AgentID
+	if agentID == "" && r.store != nil {
+		if t, _ := r.store.GetTask(body.TaskID); t != nil {
+			agentID = t.Request.AgentID
+		}
+	}
+	if agentID == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("无法确定任务的 agent_id")))
+		return
+	}
+
+	conn := r.agents.Conn(agentID)
+	if conn == nil {
+		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("agent %s 不在线", agentID)))
+		return
+	}
+
+	cancel := proto.TaskCancel{TaskID: body.TaskID, Reason: body.Reason}
+	env, _ := proto.NewEnvelope(proto.TypeTaskCancel, "relay", agentID, cancel)
+	ctx, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	if err := conn.writeJSON(ctx, env); err != nil {
+		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("转发取消失败: %w", err)))
+		return
+	}
+
+	// 更新持久化状态
+	if r.store != nil {
+		if t, _ := r.store.GetTask(body.TaskID); t != nil {
+			t.Status = StatusCancelled
+			_ = r.store.SaveTask(*t)
+		}
+	}
+	log.Printf("[task] 取消 task=%s → agent=%s", body.TaskID, agentID)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"task_id":  body.TaskID,
+		"status":   StatusCancelled,
+		"agent_id": agentID,
+	})
 }
 
 // GET /api/tasks/{id} —— 单任务详情 + 结果。

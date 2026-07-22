@@ -21,10 +21,15 @@ var agentBizID string
 type Agent struct {
 	cfg  Config
 	disp *executors.Dispatcher
+	pool *WorkerPool // C6 并发限流
 }
 
 func NewAgent(cfg Config, disp *executors.Dispatcher) *Agent {
-	return &Agent{cfg: cfg, disp: disp}
+	return &Agent{
+		cfg:  cfg,
+		disp: disp,
+		pool: NewWorkerPool(cfg.MaxConcurrentTasks), // C6
+	}
 }
 
 // Run 启动 Agent 主循环：连接 Relay → 注册 → 心跳 + 接收任务。
@@ -148,7 +153,7 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 		}
 		switch env.Type {
 		case proto.TypeTaskRequest:
-			a.handleTask(ctx, wc, env)
+			a.handleTaskWithPool(ctx, wc, env, a.pool)
 		case proto.TypeTaskCancel:
 			a.handleCancel(env)
 		default:
@@ -157,70 +162,73 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 	}
 }
 
-// handleTask 在独立 goroutine 中执行任务，结果回流给 Relay。
-// 所有 WS 写入经 wc 串行化，消除 R1 并发损坏 bug。
-//
-// C5 增强：
-//   - 收到任务立即发 task_ack（让 Relay 知道任务已抵达）
-//   - 幂等检查（同 IdempotencyKey/TaskID 不重复执行，直接回放结果）
-//   - 结果经 resultQueue 缓存，发送失败不丢失，重连后补发
+// handleTask 原始入口（兼容，直接 go，不经 pool）。
 func (a *Agent) handleTask(parent context.Context, wc *wsConn, env proto.Envelope) {
+	go func() { a.runTask(parent, wc, env) }()
+}
+
+// runTask 执行单个任务的核心逻辑（C5 增强版：ACK + 幂等 + 队列发送）。
+// 由 handleTaskWithPool 经 worker pool 限流后调用。
+func (a *Agent) runTask(parent context.Context, wc *wsConn, env proto.Envelope) {
 	var task proto.TaskRequest
 	if err := env.Decode(&task); err != nil {
 		log.Printf("[agent] 任务解析失败: %v", err)
 		return
 	}
-	go func() {
-		// 1. 立即发 ACK（received）
-		ackCtx, ackCancel := contextWithTimeout(5 * time.Second)
-		_ = wc.writeEnvelope(ackCtx, proto.TypeTaskAck, "relay", proto.TaskAck{
-			TaskID: task.TaskID, Status: "received",
-		})
-		ackCancel()
 
-		// 2. 幂等检查
-		idemKey := keyFor(task)
-		if cached, hit := idempotencyCache.get(idemKey); hit {
-			log.Printf("[agent] 任务 %s 命中幂等缓存，回放结果（不重复执行）", task.TaskID)
-			cached.TaskID = task.TaskID
-			a.sendResult(parent, wc, cached)
-			return
+	// 1. 立即发 ACK（received）
+	ackCtx, ackCancel := contextWithTimeout(5 * time.Second)
+	_ = wc.writeEnvelope(ackCtx, proto.TypeTaskAck, "relay", proto.TaskAck{
+		TaskID: task.TaskID, Status: "received",
+	})
+	ackCancel()
+
+	// 2. 幂等检查
+	idemKey := keyFor(task)
+	if cached, hit := idempotencyCache.get(idemKey); hit {
+		log.Printf("[agent] 任务 %s 命中幂等缓存，回放结果（不重复执行）", task.TaskID)
+		cached.TaskID = task.TaskID
+		a.sendResult(parent, wc, cached)
+		return
+	}
+
+	log.Printf("[agent] 执行任务 %s type=%s (attempt=%d)", task.TaskID, task.Type, task.Attempt)
+	start := time.Now()
+
+	// 3. 任务超时 ctx
+	timeout := proto.DefaultTaskTimeout
+	if task.Timeout > 0 {
+		timeout = task.Timeout
+	}
+	ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
+	defer cancel()
+	activeTasks.store(task.TaskID, cancel)
+	defer activeTasks.delete(task.TaskID)
+
+	// 4. 进度上报回调
+	progress := func(step, message string, percent int) {
+		p := proto.TaskProgress{TaskID: task.TaskID, Step: step, Message: message, Percent: percent}
+		pctx, pcancel := contextWithTimeout(5 * time.Second)
+		defer pcancel()
+		if err := wc.writeEnvelope(pctx, proto.TypeTaskProgress, "relay", p); err != nil {
+			log.Printf("[agent] 进度上报失败: %v", err)
 		}
+	}
 
-		log.Printf("[agent] 执行任务 %s type=%s (attempt=%d)", task.TaskID, task.Type, task.Attempt)
-		start := time.Now()
+	// 5. 执行
+	result := a.disp.Dispatch(ctx, task, progress)
+	// 如果是被取消的，标注
+	if ctx.Err() == context.Canceled {
+		result.Error = "任务被取消"
+	}
+	result.Duration = int(time.Since(start) / time.Millisecond)
+	result.TaskID = task.TaskID
 
-		// 3. 任务超时 ctx
-		timeout := proto.DefaultTaskTimeout
-		if task.Timeout > 0 {
-			timeout = task.Timeout
-		}
-		ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
-		defer cancel()
-		activeTasks.store(task.TaskID, cancel)
-		defer activeTasks.delete(task.TaskID)
+	// 6. 存入幂等缓存
+	idempotencyCache.put(idemKey, result)
 
-		// 4. 进度上报回调
-		progress := func(step, message string, percent int) {
-			p := proto.TaskProgress{TaskID: task.TaskID, Step: step, Message: message, Percent: percent}
-			pctx, pcancel := contextWithTimeout(5 * time.Second)
-			defer pcancel()
-			if err := wc.writeEnvelope(pctx, proto.TypeTaskProgress, "relay", p); err != nil {
-				log.Printf("[agent] 进度上报失败: %v", err)
-			}
-		}
-
-		// 5. 执行
-		result := a.disp.Dispatch(ctx, task, progress)
-		result.Duration = int(time.Since(start) / time.Millisecond)
-		result.TaskID = task.TaskID
-
-		// 6. 存入幂等缓存
-		idempotencyCache.put(idemKey, result)
-
-		// 7. 发送结果（经队列，失败重投）
-		a.sendResult(parent, wc, result)
-	}()
+	// 7. 发送结果（经队列，失败重投）
+	a.sendResult(parent, wc, result)
 }
 
 // sendResult 把结果经队列发送，并补发队列中积压的结果。

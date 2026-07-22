@@ -24,6 +24,9 @@ type Config struct {
 	Token     string            `json:"token,omitempty"`     // 鉴权 token
 	Tags      map[string]string `json:"tags,omitempty"`      // 业务标签
 	Heartbeat time.Duration     `json:"heartbeat,omitempty"` // 心跳间隔，默认 15s
+	// MaxConcurrentTasks 最大并发执行任务数（C6 并发限流）。0 或负数表示不限。
+	// 默认 4，防止被并发任务打爆。
+	MaxConcurrentTasks int `json:"max_concurrent_tasks,omitempty"`
 	Glm       struct {
 		APIKey  string `json:"api_key,omitempty"` // GLM 视觉模型 key（guiclick 执行器需要）
 		BaseURL string `json:"base_url,omitempty"` // 默认 https://open.bigmodel.cn/api/paas/v4
@@ -34,7 +37,8 @@ type Config struct {
 // DefaultConfig 返回带默认值的配置。
 func DefaultConfig() Config {
 	c := Config{
-		Heartbeat: 15 * time.Second,
+		Heartbeat:          15 * time.Second,
+		MaxConcurrentTasks: 4,
 	}
 	c.Glm.BaseURL = "https://open.bigmodel.cn/api/paas/v4"
 	c.Glm.Model = "glm-5-turbo"
