@@ -29,8 +29,8 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
 
 ## 当前情况（Status）
 
-- **完成度**：**P2 深度优化完成**——P1 漏洞全修 + 状态机 + 前端适配 + 可观测性增强，at-least-once 真正成立
-- **代码规模**：57 个 Go 文件，约 7400 行；13 个测试文件全绿；24 个 commit（P0×6 + P1×10 + P2×8）
+- **完成度**：**P3 收尾加固完成**——状态机原子性 + maxAttempts 兜底 + enroll 过期 + 端到端护栏，可靠性声明无懈可击
+- **代码规模**：57 个 Go 文件，约 7500 行；13 个测试文件全绿；28 个 commit（P0×6 + P1×10 + P2×8 + P3×4）
 - **P0 基础**（已稳定）：
   - **协议层**（`proto/`）：Envelope 信封 + 13 种消息类型 + 6 种任务载荷 + 幂等键 + type 校验
   - **Relay 中继**（`relay/`）：WS 连接池 + REST API + SSE 事件流 + 心跳超时清理（Sweep 主动关连接）
@@ -49,6 +49,12 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
   - **前端**：SSE 主动重连（D6）+ metrics 面板 + 取消按钮 + 重连补拉近期结果
   - **可观测性**：EventBus 慢消费者丢弃计数（D7）+ metrics 扩展至 13 项（cancelled/acked/nacked/reaped/events_dropped）+ 深度 healthz（检查 store 可用性）
   - **清理**：删除死代码 minGo122 + handleListAgents 双次 Snapshot 合并
+- **P3 收尾加固**（可靠性声明无懈可击）：
+  - **状态机原子性**：ACK 路径改走 UpdateTaskStatus（B1，防 cancel 后被 ACK 改回）+ UpdateTaskStatus 合并进单写事务（B2，bbolt 写事务串行保证读-校验-写原子，防 reaper 与 result 并发覆盖终态）
+  - **maxAttempts 兜底**：MaxTaskAttempts=5，超过转 failed（W1，防 poison task 无限重投）
+  - **enroll token 过期**：加 createdAt + 1h TTL 校验（W4，对齐前端 expires_in:3600，修复"撒谎 bug"）
+  - **reaper 周期**：30s→15s（W2，降低短任务回退延迟）
+  - **端到端护栏**：3 条核心链路 E2E 测试——reaper 回退闭环 / NACK 链路 / 状态机 vs reaper 交互（W3）
 - **已知限制**：
   - 文件任务限 10MB（WS 帧，P2 改分块流）
   - browse 执行器需 Chrome 环境（`-tags browse` 编译启用）
