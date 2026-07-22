@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // version 由 -ldflags 注入，默认 dev。
@@ -41,4 +42,13 @@ func (c Config) String() string {
 		mask = c.Token[:min(4, len(c.Token))] + "***"
 	}
 	return fmt.Sprintf("addr=%s token=%s dev=%v", c.Addr, mask, c.Dev)
+}
+
+// dataDir 返回数据目录（与可执行文件同目录的 data/）。
+func dataDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "data"
+	}
+	return filepath.Join(filepath.Dir(exe), "data")
 }

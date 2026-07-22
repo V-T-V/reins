@@ -109,6 +109,7 @@ type Relay struct {
 	cfg     Config
 	agents  *Registry
 	console *EventBus
+	store   *Store // 任务持久化（R2/F1），可为 nil（关闭持久化）
 }
 
 func NewRelay(cfg Config) *Relay {
@@ -117,6 +118,12 @@ func NewRelay(cfg Config) *Relay {
 		agents:  NewRegistry(),
 		console: NewEventBus(),
 	}
+}
+
+// WithStore 注入持久化存储（C4）。
+func (r *Relay) WithStore(s *Store) *Relay {
+	r.store = s
+	return r
 }
 
 // 鉴权：校验 Bearer token（配置为空则放行）。
@@ -214,6 +221,8 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 				TS:      time.Now().UnixMilli(),
 			})
 			log.Printf("[agent] %s 上线 (hostname=%s caps=%v 重连=%v)", agentID, reg.Hostname, reg.Capabilities, was)
+			// C4：Agent 上线后补投 pending 任务
+			r.dispatchPendingTasks(agentID)
 
 		case proto.TypeHeartbeat:
 			var hb proto.Heartbeat
@@ -221,10 +230,31 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 				r.agents.Touch(hb.AgentID, hb.Seq)
 			}
 
+		case proto.TypeTaskAck:
+			// C5：任务 ACK，更新状态
+			var ack proto.TaskAck
+			if err := env.Decode(&ack); err == nil && r.store != nil {
+				if t, err := r.store.GetTask(ack.TaskID); err == nil && t != nil {
+					t.Status = StatusAcknowledged
+					_ = r.store.SaveTask(*t)
+				}
+			}
+
 		case proto.TypeTaskResult:
-			// 任务结果回流：广播给所有控制台
+			// 任务结果回流：持久化 + 广播给控制台
 			var res proto.TaskResult
 			if err := env.Decode(&res); err == nil {
+				if r.store != nil {
+					_ = r.store.SaveResult(res.TaskID, res)
+					if t, err := r.store.GetTask(res.TaskID); err == nil && t != nil {
+						if res.Success {
+							t.Status = StatusCompleted
+						} else {
+							t.Status = StatusFailed
+						}
+						_ = r.store.SaveTask(*t)
+					}
+				}
 				r.console.Broadcast(Event{
 					Kind:    proto.TypeTaskResult,
 					AgentID: agentID,

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -20,6 +21,19 @@ func main() {
 	log.Printf("[relay] go-rmm-relay %s 启动: %s", version, cfg)
 
 	relay := NewRelay(cfg)
+
+	// C4：打开持久化存储（data/tasks.db）
+	store, err := OpenStore(filepath.Join(dataDir(), "tasks.db"))
+	if err != nil {
+		log.Printf("[relay] 持久化存储打开失败(降级为内存模式): %v", err)
+	} else {
+		relay.WithStore(store)
+		defer store.Close()
+		// 恢复在途任务（dispatched 但未完成的）
+		relay.recoverInFlightTasks()
+		log.Printf("[relay] 持久化已启用: %s", filepath.Join(dataDir(), "tasks.db"))
+	}
+
 	mux := http.NewServeMux()
 	relay.registerHTTP(mux)
 	mux.HandleFunc("/agent", relay.handleAgentWS)     // Agent 反向连接

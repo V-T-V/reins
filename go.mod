@@ -9,5 +9,6 @@ require (
 
 require (
 	github.com/kardianos/service v1.3.0 // indirect
-	golang.org/x/sys v0.34.0 // indirect
+	go.etcd.io/bbolt v1.5.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 )
