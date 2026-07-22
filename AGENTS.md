@@ -29,35 +29,57 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
 
 ## 当前情况（Status）
 
-- **完成度**：P0 开发中（~15%，骨架+协议层完成，三组件实现中）
-- **已落地**：`proto/message.go` 协议层（Envelope/TaskRequest/TaskResult 等 9 个类型 + 6 种任务载荷）、go.mod 依赖骨架
-- **待落地**：Relay 中继服务器、Agent 服务化与反向连接、6 个执行器、Web 控制台
-- **已知限制**（预设）：文件任务 P0 限 10MB（WS 帧限制）；browse 执行器需 Chrome 环境；guiclick 需 GLM API key
+- **完成度**：**P0 完成（约 90%）**——三组件全链路打通，6 类执行器实现，端到端联调通过
+- **代码规模**：32 个 Go 文件，约 3500 行（不含生成的 go.sum）；9 个测试全绿
+- **已落地**：
+  - **协议层**（`proto/`）：Envelope 信封 + 9 种消息类型 + 6 种任务载荷，纯 Go struct 零依赖
+  - **Relay 中继**（`relay/`）：`coder/websocket` WS 连接池 + Agent 注册表（conn 匹配保护）+ REST API（`GET /api/agents`、`POST /api/tasks`）+ SSE 实时事件流（`GET /api/events`）+ 心跳超时清理
+  - **Agent**（`agent/`）：`kardianos/service` 双模式（install/uninstall/start/stop/run/status）+ 反向 WS 连接 + 15s 心跳 + 指数退避重连（1s→30s 封顶）+ 任务分发框架
+  - **6 类执行器**（`executors/`）：powershell（强制 UTF-8）/script（BOM 处理）/file（base64 往返）/screenshot/guiclick（看-判-点-验循环）/browse（chromedp，build tag 隔离）
+  - **Win32 封装**（`win32/`）：Go syscall 替代 computer-use-rtc/win32.cs——PrintWindow+PW_RENDERFULLCONTENT（截 Chromium）+ SendInput（绝对坐标归一化）+ 窗口枚举/查找/激活；非 Windows 平台 stub 保证跨平台编译
+  - **视觉识别**（`vision/`）：移植 computer-use-rtc/vision.mjs——GLM-5-Turbo OpenAI 兼容 API + data URL 内联 + 正则容错提取 JSON
+  - **Web 控制台**（`console/`）：无状态反向代理 + `embed.FS` 内嵌单页 + 原生 JS 零构建（Agent 列表/任务表单动态渲染/结果流/截图预览）
+- **端到端验证**：浏览器 → Console(7781) → 反向代理 → Relay(17780) → WS 路由 → Agent PowerShell 执行 → SSE 结果回流，中文无损
+- **已知限制**：
+  - 文件任务 P0 限 10MB（WS 帧限制，P1 改分块流）
+  - browse 执行器需 Chrome 环境（默认 stub，`-tags browse` 编译启用）
+  - guiclick 需 GLM API key（未配置则该能力不上报）
+  - TLS/P1：Relay 当前仅 HTTP，公网部署需前置 TLS 或用 Tailscale
 
 ## 技术栈与架构
 
-- **语言**：Go 1.22+（开发机 go1.25.6）
-- **核心依赖**：
-  - `github.com/kardianos/service` —— Windows 服务注册/启停
-  - `github.com/coder/websocket` —— 反向长连接（nhooyr 的官方继任者，gorilla 已归档）
-  - `github.com/google/uuid` —— 消息/任务 ID
-  - `github.com/chromedp/chromedp` —— browse 执行器（build tag `browse` 隔离）
-  - `golang.org/x/sys/windows` —— Win32 API（PrintWindow/SendInput，替代 computer-use-rtc/win32.cs）
+- **语言**：Go 1.22+（开发机 go1.25.6，已验证）
+- **核心依赖**（3 个生产依赖 + 1 个可选）：
+  - `github.com/kardianos/service v1.3.0` —— Windows 服务注册/启停
+  - `github.com/coder/websocket v1.8.15` —— 反向长连接（nhooyr 的官方继任者，gorilla 已归档）
+  - `github.com/google/uuid v1.6.0` —— 消息/任务 ID
+  - `github.com/chromedp/chromedp` —— browse 执行器（**可选**，build tag `browse` 隔离，默认不编译）
+  - `golang.org/x/sys` —— Win32 API（PrintWindow/SendInput，替代 computer-use-rtc/win32.cs）
 - **零依赖原则**：无 Web 框架（标准库 `net/http`）、无 ORM、无前端构建（原生 JS + `embed.FS`）
 
 目录树：
 
 ```
 go-rmm/
-├── proto/          # 三组件共享协议（Envelope 信封 + 6 种任务载荷）
-├── relay/          # 组件1：中继服务器（go-rmm-relay）
-├── agent/          # 组件2：Windows Agent（go-rmm-agent.exe）
-├── console/        # 组件3：Web 控制台（go-rmm-console）
-├── executors/      # 6 类任务执行器
-├── win32/          # Win32 API 封装（PrintWindow/SendInput）
-├── vision/         # GLM 视觉识别客户端（移植 computer-use-rtc/vision.mjs）
-├── cmd/            # 公共 CLI 工具
-└── scripts/        # 安装/联调脚本
+├── proto/          # 三组件共享协议（Envelope 信封 + 6 种任务载荷，零外部依赖）
+├── relay/          # 组件1：中继服务器（WS连接池/REST/SSE/心跳清理）
+├── agent/          # 组件2：Windows Agent（服务化/反向连接/重连/分发）
+├── console/        # 组件3：Web 控制台（反向代理+embed.FS+原生JS单页）
+├── executors/      # 6 类执行器 + Executor 接口 + Dispatcher 路由
+│   ├── registry.go         # Executor 接口 + Dispatcher
+│   ├── register.go         # RegisterAll 能力探测注册
+│   ├── powershell.go       # UTF-8 强制 / exit code / 超时
+│   ├── script.go           # 临时文件 + UTF-8 BOM
+│   ├── file.go             # base64 上传下载（10MB 限）
+│   ├── screenshot.go       # 调 win32.CaptureWindow
+│   ├── guiclick.go         # 看-判-点-验 agentic 循环
+│   └── browse*.go          # chromedp（build tag browse 隔离）
+├── win32/          # Win32 API 封装（Go syscall 替代 win32.cs）
+│   ├── win32.go            # 跨平台常量与类型
+│   ├── *_windows.go        # Windows 真实实现（PrintWindow/SendInput/枚举）
+│   └── stub_other.go       # 非 Windows stub
+├── vision/         # GLM 视觉识别客户端（移植 vision.mjs）
+└── scripts/        # install-agent.ps1 / demo-local.ps1
 ```
 
 ## 如何运行
