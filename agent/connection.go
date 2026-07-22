@@ -85,9 +85,16 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	if err := a.sendRegister(connCtx, wc); err != nil {
 		return err
 	}
-	// 2. 启动心跳 goroutine
+	// 2. 连接建立后补发队列中积压的结果（R3 修复核心）
+	if resultQueue.len() > 0 {
+		log.Printf("[agent] 连接恢复，补发 %d 个积压结果", resultQueue.len())
+		resultQueue.flushTo(wc)
+	}
+	// 3. 启动心跳 goroutine
 	go a.heartbeatLoop(connCtx, wc)
-	// 3. 接收循环（阻塞直到断开）
+	// 4. 启动幂等缓存清理
+	go idempotencySweepLoop(connCtx)
+	// 5. 接收循环（阻塞直到断开）
 	return a.recvLoop(connCtx, wc)
 }
 
@@ -152,6 +159,11 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 
 // handleTask 在独立 goroutine 中执行任务，结果回流给 Relay。
 // 所有 WS 写入经 wc 串行化，消除 R1 并发损坏 bug。
+//
+// C5 增强：
+//   - 收到任务立即发 task_ack（让 Relay 知道任务已抵达）
+//   - 幂等检查（同 IdempotencyKey/TaskID 不重复执行，直接回放结果）
+//   - 结果经 resultQueue 缓存，发送失败不丢失，重连后补发
 func (a *Agent) handleTask(parent context.Context, wc *wsConn, env proto.Envelope) {
 	var task proto.TaskRequest
 	if err := env.Decode(&task); err != nil {
@@ -159,45 +171,76 @@ func (a *Agent) handleTask(parent context.Context, wc *wsConn, env proto.Envelop
 		return
 	}
 	go func() {
-		log.Printf("[agent] 执行任务 %s type=%s", task.TaskID, task.Type)
+		// 1. 立即发 ACK（received）
+		ackCtx, ackCancel := contextWithTimeout(5 * time.Second)
+		_ = wc.writeEnvelope(ackCtx, proto.TypeTaskAck, "relay", proto.TaskAck{
+			TaskID: task.TaskID, Status: "received",
+		})
+		ackCancel()
+
+		// 2. 幂等检查
+		idemKey := keyFor(task)
+		if cached, hit := idempotencyCache.get(idemKey); hit {
+			log.Printf("[agent] 任务 %s 命中幂等缓存，回放结果（不重复执行）", task.TaskID)
+			cached.TaskID = task.TaskID
+			a.sendResult(parent, wc, cached)
+			return
+		}
+
+		log.Printf("[agent] 执行任务 %s type=%s (attempt=%d)", task.TaskID, task.Type, task.Attempt)
 		start := time.Now()
 
-		// 任务超时 ctx
+		// 3. 任务超时 ctx
 		timeout := proto.DefaultTaskTimeout
 		if task.Timeout > 0 {
 			timeout = task.Timeout
 		}
 		ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
 		defer cancel()
-
-		// 记录到活跃任务表（供 task_cancel 查找）。
-		// C6 会完善取消机制；此处先注册 cancel 句柄。
 		activeTasks.store(task.TaskID, cancel)
 		defer activeTasks.delete(task.TaskID)
 
-		// 进度上报回调：通过 WS 发 task_progress（串行化）
+		// 4. 进度上报回调
 		progress := func(step, message string, percent int) {
 			p := proto.TaskProgress{TaskID: task.TaskID, Step: step, Message: message, Percent: percent}
-			wctx, wcancel := context.WithTimeout(parent, 5*time.Second)
-			defer wcancel()
-			if err := wc.writeEnvelope(wctx, proto.TypeTaskProgress, "relay", p); err != nil {
+			pctx, pcancel := contextWithTimeout(5 * time.Second)
+			defer pcancel()
+			if err := wc.writeEnvelope(pctx, proto.TypeTaskProgress, "relay", p); err != nil {
 				log.Printf("[agent] 进度上报失败: %v", err)
 			}
 		}
 
+		// 5. 执行
 		result := a.disp.Dispatch(ctx, task, progress)
 		result.Duration = int(time.Since(start) / time.Millisecond)
 		result.TaskID = task.TaskID
 
-		// 回流结果（串行化写入，失败记日志——C5 会加本地缓存重投）
-		wctx, wcancel := context.WithTimeout(parent, 10*time.Second)
-		defer wcancel()
-		if err := wc.writeEnvelope(wctx, proto.TypeTaskResult, "relay", result); err != nil {
-			log.Printf("[agent] 任务结果回流失败: %v", err)
-		} else {
-			log.Printf("[agent] 任务 %s 完成 success=%v duration=%dms", task.TaskID, result.Success, result.Duration)
-		}
+		// 6. 存入幂等缓存
+		idempotencyCache.put(idemKey, result)
+
+		// 7. 发送结果（经队列，失败重投）
+		a.sendResult(parent, wc, result)
 	}()
+}
+
+// sendResult 把结果经队列发送，并补发队列中积压的结果。
+func (a *Agent) sendResult(parent context.Context, wc *wsConn, result proto.TaskResult) {
+	// 构造 Envelope 入队
+	env, err := proto.NewEnvelope(proto.TypeTaskResult, a.cfg.AgentID, "relay", result)
+	if err != nil {
+		log.Printf("[agent] 结果序列化失败: %v", err)
+		return
+	}
+	resultQueue.enqueue(env)
+	// 尝试 flush（发送成功出队，失败留队列）
+	resultQueue.flushTo(wc)
+	if resultQueue.len() > 0 {
+		log.Printf("[agent] 结果 %s 入队待发（队列剩 %d），将下次重连补发",
+			result.TaskID, resultQueue.len())
+	} else {
+		log.Printf("[agent] 任务 %s 完成 success=%v duration=%dms",
+			result.TaskID, result.Success, result.Duration)
+	}
 }
 
 // handleCancel 处理任务取消（C6 完善前先实现基础版）。
@@ -217,3 +260,17 @@ var (
 	initialBackoff = 1 * time.Second
 	maxBackoff     = 30 * time.Second
 )
+
+// idempotencySweepLoop 周期清理过期的幂等缓存项。
+func idempotencySweepLoop(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			idempotencyCache.sweep()
+		}
+	}
+}
