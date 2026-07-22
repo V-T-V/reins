@@ -66,13 +66,16 @@ func TestWorkerPoolZeroMeansUnlimited(t *testing.T) {
 func TestWorkerPoolCancelWhileWaiting(t *testing.T) {
 	p := NewWorkerPool(1) // 只 1 个 slot
 
-	// 先占住唯一 slot
+	// 先占住唯一 slot，用 started 同步确认已获取 slot
+	started := make(chan struct{})
 	blockDone := make(chan struct{})
 	p.Submit(context.Background(), func() {
+		close(started)
 		<-blockDone // 阻塞
 	})
+	<-started // 确认第一个任务已占住 slot
 
-	// 提交第二个任务，但 ctx 立即取消
+	// 提交第二个任务，但 ctx 立即取消（第二个必在等 slot）
 	ctx, cancel := context.WithCancel(context.Background())
 	var executed int32
 	p.Submit(ctx, func() {
