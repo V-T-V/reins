@@ -97,11 +97,22 @@ func (s *Store) Close() error {
 }
 
 // SaveTask 保存/更新任务记录。
+//
+// UpdatedAt 处理：若调用方未设（为 0）则自动填当前时间；若已设则保留。
+// 这让 reaper 能在回退状态时保留原始 UpdatedAt（用于后续超时判断），
+// 同时普通更新路径（未显式设 UpdatedAt）自动盖时间戳。
 func (s *Store) SaveTask(t StoredTask) error {
-	t.UpdatedAt = time.Now().UnixMilli()
+	if t.UpdatedAt == 0 {
+		t.UpdatedAt = time.Now().UnixMilli()
+	}
 	data, err := json.Marshal(t)
 	if err != nil {
 		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return ErrStoreClosed
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket([]byte(bucketTasks)).Put([]byte(t.Request.TaskID), data)

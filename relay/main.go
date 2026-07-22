@@ -81,6 +81,8 @@ func main() {
 
 	// 心跳超时清理 goroutine
 	go sweepLoop(relay)
+	// D2：任务状态机 reaper（回退超时未 ACK 的任务）
+	go reaperLoop(relay)
 
 	// 优雅关闭
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

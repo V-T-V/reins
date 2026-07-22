@@ -422,20 +422,24 @@ func (r *Relay) dispatchPendingTasks(agentID string) {
 
 // recoverInFlightTasks 在 Relay 启动时调用：把 dispatched 但未 ACK 的任务重新投递。
 // 修复 R2：Relay 重启后内存丢失，但持久化的 dispatched 任务可重投。
+//
+// P1-5 修复：只重置 StatusDispatched（Agent 未 ACK），**不动 StatusAcknowledged**。
+// acknowledged 表示 Agent 已收到正在执行，重投会导致重复执行（即使有幂等兜底，
+// Agent 重启后幂等缓存也空了）。acknowledged 任务由 reaper 按超时阈值单独处理。
 func (r *Relay) recoverInFlightTasks() {
 	if r.store == nil {
 		return
 	}
-	inFlight, err := r.store.ListTasksByStatus(StatusDispatched, StatusAcknowledged)
+	// 只恢复 dispatched（未 ACK），acknowledged 保持原状
+	dispatched, err := r.store.ListTasksByStatus(StatusDispatched)
 	if err != nil {
 		log.Printf("[task] 恢复在途任务查询失败: %v", err)
 		return
 	}
-	if len(inFlight) > 0 {
-		log.Printf("[task] 发现 %d 个在途任务待恢复", len(inFlight))
+	if len(dispatched) > 0 {
+		log.Printf("[task] 发现 %d 个未 ACK 的 dispatched 任务待恢复", len(dispatched))
 	}
-	for _, t := range inFlight {
-		// 重置为 pending，等 Agent 重连后 dispatchPendingTasks 投递
+	for _, t := range dispatched {
 		t.Status = StatusPending
 		_ = r.store.SaveTask(t)
 	}
