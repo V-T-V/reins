@@ -6,6 +6,7 @@ package executors
 
 import (
 	"context"
+	"sync"
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
@@ -29,7 +30,12 @@ type Executor interface {
 type ProgressFunc func(step, message string, percent int)
 
 // Dispatcher 持有所有已注册的执行器，按任务类型路由。
+//
+// 并发安全（Q1 修复）：executors map 用 RWMutex 保护。
+// 典型用法是启动时 Register（写）、运行时 Dispatch/Types（读），但为防御
+// 运行期动态注册（如热加载执行器）+ race detector 严格性，统一加锁。
 type Dispatcher struct {
+	mu        sync.RWMutex
 	executors map[string]Executor
 }
 
@@ -40,11 +46,15 @@ func New() *Dispatcher {
 
 // Register 注册一个执行器。重复注册同一类型会覆盖（便于测试替换）。
 func (d *Dispatcher) Register(e Executor) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.executors[e.Type()] = e
 }
 
 // Types 返回所有已注册的任务类型（用于注册时上报 capabilities）。
 func (d *Dispatcher) Types() []string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	out := make([]string, 0, len(d.executors))
 	for t := range d.executors {
 		out = append(out, t)
@@ -54,7 +64,9 @@ func (d *Dispatcher) Types() []string {
 
 // Dispatch 路由并执行任务。未知类型返回失败结果。
 func (d *Dispatcher) Dispatch(ctx context.Context, task proto.TaskRequest, progress ProgressFunc) proto.TaskResult {
+	d.mu.RLock()
 	e, ok := d.executors[task.Type]
+	d.mu.RUnlock()
 	if !ok {
 		return proto.TaskResult{
 			TaskID: task.TaskID,
@@ -62,6 +74,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, task proto.TaskRequest, progr
 			Error:   "不支持的任务类型: " + task.Type,
 		}
 	}
+	// 执行器调用在锁外进行（Exec 可能很慢，不能持锁）
 	return e.Exec(ctx, task.Payload, progress)
 }
 

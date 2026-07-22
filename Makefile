@@ -47,6 +47,10 @@ run-agent:
 test:
 	$(GO) test ./...
 
+## 并发安全测试（需 CGO，race detector）
+test-race:
+	CGO_ENABLED=1 $(GO) test -race -count=3 ./...
+
 ## 静态检查
 vet:
 	$(GO) vet ./...

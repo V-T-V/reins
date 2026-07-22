@@ -33,7 +33,30 @@ func main() {
 	relayURL := flag.String("relay", getEnv("GO_RMM_RELAY_URL", "http://127.0.0.1:7780"), "Relay 地址（反向代理目标）")
 	flag.Parse()
 
-	relay, err := url.Parse(*relayURL)
+	mux := buildMux(*relayURL)
+	srv := &http.Server{Addr: *addr, Handler: mux}
+
+	// 优雅关闭
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		log.Printf("[console] go-rmm-console %s", version)
+		log.Printf("[console] 监听 %s（反向代理 Relay %s）", *addr, *relayURL)
+		log.Printf("[console] 浏览器打开 http://localhost%s", portOrDefault(*addr))
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("[console] 监听失败: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Printf("[console] 关闭中...")
+	srv.Shutdown(ctx)
+}
+
+// buildMux 构造 HTTP 路由：反向代理 /api/* 到 Relay + 静态前端。
+// 抽成独立函数便于测试（main_test.go 直接复用）。
+func buildMux(relayURL string) *http.ServeMux {
+	relay, err := url.Parse(relayURL)
 	if err != nil {
 		log.Fatalf("relay URL 解析失败: %v", err)
 	}
@@ -59,23 +82,7 @@ func main() {
 	staticFS, _ := fs.Sub(webFS, "web")
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 
-	srv := &http.Server{Addr: *addr, Handler: mux}
-
-	// 优雅关闭
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	go func() {
-		log.Printf("[console] go-rmm-console %s", version)
-		log.Printf("[console] 监听 %s（反向代理 Relay %s）", *addr, *relayURL)
-		log.Printf("[console] 浏览器打开 http://localhost%s", portOrDefault(*addr))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("[console] 监听失败: %v", err)
-		}
-	}()
-
-	<-ctx.Done()
-	log.Printf("[console] 关闭中...")
-	srv.Shutdown(ctx)
+	return mux
 }
 
 func getEnv(key, def string) string {
