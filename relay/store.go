@@ -47,6 +47,10 @@ type StoredTask struct {
 	Submitted string            `json:"submitted_by,omitempty"` // 提交者（审计用，C9 填充）
 }
 
+// MaxTaskAttempts 任务最大投递次数（E2/W1）。
+// 超过后转 failed 终态，避免 poison task（永远失败）无限重投。
+const MaxTaskAttempts = 5
+
 // isTerminal 判断状态是否为终态（不可再变更）。
 // P2-2 修复：终态一旦写入，拒绝后续变更，避免 cancel 与 result 竞态导致状态漂移。
 func isTerminal(status string) bool {

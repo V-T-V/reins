@@ -387,6 +387,23 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 
 // dispatchTask 把任务封装为 Envelope 并转发给 Agent，更新持久化状态为 dispatched。
 func (r *Relay) dispatchTask(conn *wsConn, task proto.TaskRequest) error {
+	// E2/W1：maxAttempts 兜底，防 poison task 无限重投
+	if r.store != nil {
+		if existing, _ := r.store.GetTask(task.TaskID); existing != nil && existing.Attempt >= MaxTaskAttempts {
+			log.Printf("[task] task=%s 达到最大投递次数 %d，转 failed", task.TaskID, MaxTaskAttempts)
+			r.store.UpdateTaskStatus(task.TaskID, StatusFailed)
+			r.store.SaveResult(task.TaskID, proto.TaskResult{
+				TaskID: task.TaskID, Success: false,
+				Error: fmt.Sprintf("达到最大投递次数 %d", MaxTaskAttempts),
+			})
+			metrics.Inc("failed")
+			if r.audit != nil {
+				r.audit.Log(AuditEntry{Event: "task_max_attempts", TaskID: task.TaskID, Detail: fmt.Sprintf("超过 %d 次", MaxTaskAttempts)})
+			}
+			return fmt.Errorf("任务 %s 超过最大投递次数", task.TaskID)
+		}
+	}
+
 	env, err := proto.NewEnvelope(proto.TypeTaskRequest, "relay", task.AgentID, task)
 	if err != nil {
 		return err

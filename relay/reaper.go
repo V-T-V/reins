@@ -17,7 +17,8 @@ import (
 //   - dispatched 状态：任务 timeout × 2（留足 ACK + 执行时间），最小 120s
 //   - acknowledged 状态：任务 timeout × 3（Agent 已在执行，给更多时间），最小 300s
 func reaperLoop(r *Relay) {
-	ticker := time.NewTicker(30 * time.Second)
+	// E2/W2：周期 30s→15s，降低短任务的最坏回退延迟（原 120s+30s→120s+15s）
+	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
 		r.reapStaleTasks()

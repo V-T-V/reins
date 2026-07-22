@@ -96,3 +96,30 @@ func TestRecoverOnlyDispatchedNotAcknowledged(t *testing.T) {
 		t.Fatalf("acknowledged 不应被动，得到 %s", a.Status)
 	}
 }
+
+// TestMaxAttemptsPreventsPoisonTask 验证 E2/W1：达到 maxAttempts 的任务转 failed。
+func TestMaxAttemptsPreventsPoisonTask(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := OpenStore(filepath.Join(dir, "maxattempt.db"))
+	defer s.Close()
+
+	// 插入一个已投递 MaxTaskAttempts 次的任务
+	task := proto.TaskRequest{TaskID: "poison", Type: proto.TaskPowerShell, AgentID: "ghost", Timeout: 5}
+	s.SaveTask(StoredTask{Request: task, Status: StatusPending, Attempt: MaxTaskAttempts})
+
+	r := NewRelay(Config{})
+	r.WithStore(s)
+
+	// dispatchTask 应因 maxAttempts 拒绝（ghost agent 不在线，conn 为 nil 也不影响——
+	// 检查在写 WS 前）
+	err := r.dispatchTask(&wsConn{id: "fake"}, task)
+	if err == nil {
+		t.Fatal("达到 maxAttempts 的任务应被拒绝投递")
+	}
+
+	// 任务应已转 failed
+	t2, _ := s.GetTask("poison")
+	if t2.Status != StatusFailed {
+		t.Fatalf("应转 failed，得到 %s", t2.Status)
+	}
+}
