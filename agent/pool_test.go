@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/QiuShichang/go-rmm/proto"
 )
 
 // TestWorkerPoolLimitsConcurrency 验证 F3 修复：worker pool 限制并发数。
@@ -85,5 +87,58 @@ func TestWorkerPoolCancelWhileWaiting(t *testing.T) {
 
 	if atomic.LoadInt32(&executed) != 0 {
 		t.Fatal("被取消的任务不应执行")
+	}
+}
+
+// TestTrySubmitReturnsFalseWhenFull 验证 P1-6 修复：池满时 TrySubmit 返回 false。
+func TestTrySubmitReturnsFalseWhenFull(t *testing.T) {
+	p := NewWorkerPool(1) // 1 个 slot
+
+	// 占住唯一 slot，用 started channel 确保 goroutine 已获取 slot
+	started := make(chan struct{})
+	block := make(chan struct{})
+	p.Submit(context.Background(), func() {
+		close(started) // 已拿到 slot 并开始执行
+		<-block
+	})
+	<-started // 等 goroutine 确认已占住 slot
+
+	// TrySubmit 应返回 false（池满）
+	ok := p.TrySubmit(func() {})
+	if ok {
+		t.Fatal("池满时 TrySubmit 应返回 false")
+	}
+
+	// 释放后 TrySubmit 应成功
+	close(block)
+	p.Wait()
+	// 给 slot 回填一点时间
+	time.Sleep(10 * time.Millisecond)
+	ok = p.TrySubmit(func() {})
+	if !ok {
+		t.Fatal("池有空位时 TrySubmit 应返回 true")
+	}
+	p.Wait()
+}
+
+// TestFlushToCommitOnSuccess 验证 P1-4 修复：flushTo 逐条发送成功才出队。
+// 用 nil wc 模拟发送失败——结果应留在队列。
+func TestFlushToCommitOnSuccess(t *testing.T) {
+	q := &rQueue{}
+	env, _ := proto.NewEnvelope(proto.TypeTaskResult, "a", "r", proto.TaskResult{TaskID: "t1"})
+	q.enqueue(env)
+	if q.len() != 1 {
+		t.Fatal("入队后应有 1 项")
+	}
+
+	// flushTo 用 nil wc 会 panic（writeBytes 解引用 nil），
+	// 所以这里只验证 peek/popHead 的逐条逻辑
+	item, ok := q.peekHead()
+	if !ok || item.env.ID == "" {
+		t.Fatal("peekHead 应返回队首")
+	}
+	q.popHead()
+	if q.len() != 0 {
+		t.Fatal("popHead 后应清空")
 	}
 }

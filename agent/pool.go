@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
@@ -52,11 +53,48 @@ func (p *WorkerPool) Submit(ctx context.Context, job func()) {
 	}()
 }
 
+// TrySubmit 非阻塞提交。池满立即返回 false（调用方可据此发 NACK）。
+// 成功获取 slot 返回 true，job 在独立 goroutine 执行。
+func (p *WorkerPool) TrySubmit(job func()) bool {
+	if p.slots == nil {
+		// 无限模式，直接提交
+		p.wg.Add(1)
+		go func() { defer p.wg.Done(); job() }()
+		return true
+	}
+	select {
+	case <-p.slots:
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			defer func() { p.slots <- struct{}{} }()
+			job()
+		}()
+		return true
+	default:
+		return false // 池满
+	}
+}
+
 // Wait 等待所有已提交任务完成。
 func (p *WorkerPool) Wait() { p.wg.Wait() }
 
-// handleTaskWithPool 用 worker pool 包装任务执行。
-// 这是 handleTask 的并发限流版本。
+// handleTaskWithPool 用 worker pool 包装任务执行（并发限流）。
+//
+// P1-6 修复：用 TrySubmit（非阻塞）。池满时不再静默丢弃，而是发 task_nack
+// 让 Relay 把任务回退 pending，等有空位时重新投递。
 func (a *Agent) handleTaskWithPool(ctx context.Context, wc *wsConn, env proto.Envelope, pool *WorkerPool) {
-	pool.Submit(ctx, func() { a.runTask(ctx, wc, env) })
+	var task proto.TaskRequest
+	if err := env.Decode(&task); err != nil {
+		log.Printf("[agent] 任务解析失败: %v", err)
+		return
+	}
+	if !pool.TrySubmit(func() { a.runTask(ctx, wc, env) }) {
+		// 池满：发 NACK，Relay 收到后回退 pending
+		log.Printf("[agent] 任务 %s 被拒（worker pool 满），发 NACK", task.TaskID)
+		nack := proto.TaskNack{TaskID: task.TaskID, Reason: "pool_full"}
+		nctx, ncancel := contextWithTimeout(5 * time.Second)
+		defer ncancel()
+		_ = wc.writeEnvelope(nctx, proto.TypeTaskNack, "relay", nack)
+	}
 }

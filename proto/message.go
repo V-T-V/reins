@@ -39,6 +39,8 @@ const (
 	TypeTaskAck = "task_ack"
 	// TypeTaskCancel —— Console→Relay→Agent：取消正在执行的任务。
 	TypeTaskCancel = "task_cancel"
+	// TypeTaskNack —— Agent→Relay：任务无法执行（pool 满/连接断），Relay 应回退 pending。
+	TypeTaskNack = "task_nack"
 	// TypeEnroll —— Agent→Relay：用一次性注册令牌换取客户端证书（mTLS 引导）。
 	TypeEnroll = "enroll"
 	// TypeEnrollResp —— Relay→Agent：签发的证书 + CA 证书。
@@ -241,6 +243,12 @@ type TaskAck struct {
 type TaskCancel struct {
 	TaskID string `json:"task_id"`
 	Reason string `json:"reason,omitempty"`
+}
+
+// TaskNack 任务拒绝（Agent 无法执行）。Relay 收到后应把任务回退 pending。
+type TaskNack struct {
+	TaskID string `json:"task_id"`
+	Reason string `json:"reason"` // pool_full / connection_lost / unknown
 }
 
 // --- mTLS 引导（Enrollment） ---

@@ -71,27 +71,58 @@ func (q *rQueue) len() int {
 	return len(q.results)
 }
 
-// flushTo 把队列中所有结果尝试发送到 wc，发送失败的放回队列。
+// flushTo 把队列中结果尝试发送到 wc。
+//
+// P1-4 修复：改为"逐条发送成功才出队"（peek+commit），不再先 drain 再 requeue。
+// 原实现先 drain（取出全部），若 wc 在半开连接上 writeBytes 未立即报错，
+// 已 drain 的结果会永久丢失。现在逐条发送，失败立即停止，结果留在队列等下次重连补发。
 func (q *rQueue) flushTo(wc *wsConn) {
-	items := q.drain()
-	if len(items) == 0 {
-		return
-	}
-	var failed []pendingResult
-	for _, it := range items {
-		ctx, cancel := contextWithTimeout(10 * time.Second)
-		data, _ := marshalEnvelopeBytes(it.env)
-		err := wc.writeBytes(ctx, data)
-		cancel()
-		if err != nil {
-			if it.attempt < 3 {
-				failed = append(failed, it)
-			} else {
-				log.Printf("[queue] 结果 %s 放弃发送(超3次)", it.env.ID)
-			}
+	for {
+		item, ok := q.peekHead()
+		if !ok {
+			return
 		}
+		ctx, cancel := contextWithTimeout(10 * time.Second)
+		data, err := marshalEnvelopeBytes(item.env)
+		if err != nil {
+			cancel()
+			q.popHead() // 序列化失败的无可救药，丢弃
+			continue
+		}
+		writeErr := wc.writeBytes(ctx, data)
+		cancel()
+		if writeErr != nil {
+			// 发送失败：留在队列，停止本次 flush（连接可能已断）
+			item.attempt++
+			if item.attempt >= 10 {
+				log.Printf("[queue] 结果 %s 放弃发送(超10次)", item.env.ID)
+				q.popHead()
+			}
+			return
+		}
+		// 发送成功：出队
+		q.popHead()
 	}
-	if len(failed) > 0 {
-		q.requeue(failed)
+}
+
+// peekHead 查看队首但不移除。
+func (q *rQueue) peekHead() (pendingResult, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.results) == 0 {
+		return pendingResult{}, false
 	}
+	return q.results[0], true
+}
+
+// popHead 移除并返回队首。
+func (q *rQueue) popHead() pendingResult {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.results) == 0 {
+		return pendingResult{}
+	}
+	item := q.results[0]
+	q.results = q.results[1:]
+	return item
 }

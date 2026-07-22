@@ -264,6 +264,21 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 				}
 			}
 
+		case proto.TypeTaskNack:
+			// D4：任务拒绝（Agent pool 满/无法执行），回退 pending 等重投
+			var nack proto.TaskNack
+			if err := env.Decode(&nack); err == nil && r.store != nil {
+				if t, err := r.store.GetTask(nack.TaskID); err == nil && t != nil {
+					if t.Status != StatusCompleted && t.Status != StatusFailed && t.Status != StatusCancelled {
+						t.Status = StatusPending
+						_ = r.store.SaveTask(*t)
+						log.Printf("[task] 收到 NACK task=%s reason=%s，回退 pending",
+							nack.TaskID, nack.Reason)
+						// 稍后由 reaper 或 Agent 重连时补投
+					}
+				}
+			}
+
 		case proto.TypeTaskResult:
 			// 任务结果回流：持久化 + 审计 + 广播给控制台
 			var res proto.TaskResult
