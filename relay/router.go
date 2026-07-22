@@ -25,9 +25,31 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/enroll", r.handleEnroll)               // C7 Agent 换证书
 	mux.HandleFunc("GET /api/events", r.handleSSE)
 	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, "ok")
-	})
+	mux.HandleFunc("GET /healthz", r.handleHealthz) // D8 深度健康检查
+}
+
+// GET /healthz —— 深度健康检查（D8 / P3-1）。
+// 检查 store 可用性，返回各组件状态 JSON。
+func (r *Relay) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+	status := map[string]any{
+		"relay":     "ok",
+		"store":     "disabled",
+		"agents":    len(r.agents.Snapshot()),
+		"uptime_s":  int(time.Since(metrics.StartedAt).Seconds()),
+	}
+	httpStatus := http.StatusOK
+	if r.store != nil {
+		// 探测 store：能否查询（不实际读数据）
+		if _, err := r.store.ListTasksByStatus(StatusPending); err != nil {
+			status["store"] = "error: " + err.Error()
+			httpStatus = http.StatusServiceUnavailable
+		} else {
+			status["store"] = "ok"
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(httpStatus)
+	json.NewEncoder(w).Encode(status)
 }
 
 // GET /api/tasks —— 任务历史（最新在前，?limit=N，默认 50）。
@@ -253,9 +275,11 @@ func (r *Relay) handleListAgents(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
+	// P2-10 修复：只调一次 Snapshot（原双次调用有 2x 拷贝开销 + 可能不一致）
+	list := r.agents.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"agents": r.agents.Snapshot(),
-		"count":  len(r.agents.Snapshot()),
+		"agents": list,
+		"count":  len(list),
 	})
 }
 

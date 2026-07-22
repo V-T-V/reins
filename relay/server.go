@@ -359,11 +359,3 @@ func mustMarshal(v any) json.RawMessage {
 	}
 	return b
 }
-
-// minGo122 Go 1.22 前 builtin 无 min，兜底定义。
-func minGo122(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

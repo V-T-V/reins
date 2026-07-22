@@ -29,8 +29,8 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
 
 ## 当前情况（Status）
 
-- **完成度**：**P1 工业级升级完成**——P0 全部修复 + 可靠性 + 安全 + 可观测性，对标 Tactical RMM/MeshCentral
-- **代码规模**：53 个 Go 文件，约 6500 行；11 个测试文件全绿；16 个 commit（P0 初始 6 + P1 升级 10）
+- **完成度**：**P2 深度优化完成**——P1 漏洞全修 + 状态机 + 前端适配 + 可观测性增强，at-least-once 真正成立
+- **代码规模**：57 个 Go 文件，约 7400 行；13 个测试文件全绿；24 个 commit（P0×6 + P1×10 + P2×8）
 - **P0 基础**（已稳定）：
   - **协议层**（`proto/`）：Envelope 信封 + 13 种消息类型 + 6 种任务载荷 + 幂等键 + type 校验
   - **Relay 中继**（`relay/`）：WS 连接池 + REST API + SSE 事件流 + 心跳超时清理（Sweep 主动关连接）
@@ -43,6 +43,12 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
   - **并发安全**：Agent 并发写 WS 串行化（wsConn writeMu）+ Dispatcher 加锁 + Sweep 主动关连接防泄漏
   - **可观测性**：metrics 端点（`/api/metrics`：在线 agent/任务计数/uptime/goroutines）+ 任务历史查询（`/api/tasks`）
   - **功能增强**：标签批量下发（`POST /api/tasks/batch`）+ 任务取消（`POST /api/tasks/cancel`）+ 并发限流（worker pool，默认 4）
+- **P2 深度优化**（at-least-once 真正成立）：
+  - **致命漏洞修复**：批量下发绕过命令策略（D1，安全洞）+ 任务卡 dispatched 永不重投（D2，reaper 周期回退）+ CRL 重启丢失（D3，ca-state.json 持久化）+ 结果队列半开连接丢结果（D4，peek+逐条commit）+ pool 满丢任务无 NACK（D4，TrySubmit+task_nack）
+  - **状态机**：终态（completed/failed/cancelled）锁死不可变更（D5，防 cancel/result 竞态漂移）+ store 并发关停安全（db==nil 检查）
+  - **前端**：SSE 主动重连（D6）+ metrics 面板 + 取消按钮 + 重连补拉近期结果
+  - **可观测性**：EventBus 慢消费者丢弃计数（D7）+ metrics 扩展至 13 项（cancelled/acked/nacked/reaped/events_dropped）+ 深度 healthz（检查 store 可用性）
+  - **清理**：删除死代码 minGo122 + handleListAgents 双次 Snapshot 合并
 - **已知限制**：
   - 文件任务限 10MB（WS 帧，P2 改分块流）
   - browse 执行器需 Chrome 环境（`-tags browse` 编译启用）
