@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,7 +36,15 @@ const (
 const (
 	bucketTasks   = "tasks"
 	bucketResults = "results"
+	// F1：状态索引 bucket，key="status\x00taskID"，value=nil。
+	// ListTasksByStatus 按前缀扫描，避免全表遍历 + 逐条 Unmarshal。
+	bucketTasksByStatus = "tasks_by_status"
 )
+
+// statusKey 构造状态索引 key："status\x00taskID"。
+func statusKey(status, taskID string) []byte {
+	return []byte(status + "\x00" + taskID)
+}
 
 // StoredTask 持久化的任务记录。
 type StoredTask struct {
@@ -94,6 +103,7 @@ func (s *Store) UpdateTaskStatus(taskID, newStatus string) error {
 		if !validTransition(current.Status, newStatus) {
 			return fmt.Errorf("非法状态转换 %s→%s（终态不可变更）", current.Status, newStatus)
 		}
+		oldStatus := current.Status
 		current.Status = newStatus
 		if current.UpdatedAt == 0 {
 			current.UpdatedAt = time.Now().UnixMilli()
@@ -102,7 +112,16 @@ func (s *Store) UpdateTaskStatus(taskID, newStatus string) error {
 		if err != nil {
 			return err
 		}
-		return tx.Bucket([]byte(bucketTasks)).Put([]byte(taskID), data)
+		id := []byte(taskID)
+		// F1：更新状态索引（删旧加新）
+		if oldStatus != newStatus {
+			idxBucket := tx.Bucket([]byte(bucketTasksByStatus))
+			idxBucket.Delete(statusKey(oldStatus, taskID))
+			if err := idxBucket.Put(statusKey(newStatus, taskID), []byte{}); err != nil {
+				return err
+			}
+		}
+		return tx.Bucket([]byte(bucketTasks)).Put(id, data)
 	})
 }
 
@@ -130,7 +149,7 @@ func OpenStore(path string) (*Store, error) {
 	}
 	// 初始化 buckets
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range []string{bucketTasks, bucketResults} {
+		for _, b := range []string{bucketTasks, bucketResults, bucketTasksByStatus} {
 			if _, err := tx.CreateBucketIfNotExists([]byte(b)); err != nil {
 				return err
 			}
@@ -155,11 +174,10 @@ func (s *Store) Close() error {
 	return err
 }
 
-// SaveTask 保存/更新任务记录。
+// SaveTask 保存/更新任务记录，并维护状态索引。
 //
 // UpdatedAt 处理：若调用方未设（为 0）则自动填当前时间；若已设则保留。
-// 这让 reaper 能在回退状态时保留原始 UpdatedAt（用于后续超时判断），
-// 同时普通更新路径（未显式设 UpdatedAt）自动盖时间戳。
+// F1：同时更新 bucketTasksByStatus 索引，让 ListTasksByStatus 走索引而非全表扫描。
 func (s *Store) SaveTask(t StoredTask) error {
 	if t.UpdatedAt == 0 {
 		t.UpdatedAt = time.Now().UnixMilli()
@@ -174,7 +192,20 @@ func (s *Store) SaveTask(t StoredTask) error {
 		return ErrStoreClosed
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket([]byte(bucketTasks)).Put([]byte(t.Request.TaskID), data)
+		taskID := []byte(t.Request.TaskID)
+		// 若已有旧记录，先清理旧状态索引
+		if old := tx.Bucket([]byte(bucketTasks)).Get(taskID); old != nil {
+			var prev StoredTask
+			if json.Unmarshal(old, &prev) == nil && prev.Status != t.Status {
+				tx.Bucket([]byte(bucketTasksByStatus)).Delete(statusKey(prev.Status, t.Request.TaskID))
+			}
+		}
+		// 写任务记录
+		if err := tx.Bucket([]byte(bucketTasks)).Put(taskID, data); err != nil {
+			return err
+		}
+		// 写新状态索引
+		return tx.Bucket([]byte(bucketTasksByStatus)).Put(statusKey(t.Status, t.Request.TaskID), []byte{})
 	})
 }
 
@@ -242,22 +273,32 @@ func (s *Store) GetResult(taskID string) (*proto.TaskResult, error) {
 	return &r, nil
 }
 
-// ListTasksByStatus 列出指定状态的任务（用于 Relay 重启后找回在途任务）。
+// ListTasksByStatus 列出指定状态的任务（用于 reaper / recoverInFlightTasks）。
+//
+// F1 优化：走 bucketTasksByStatus 索引按前缀扫描，O(匹配数) 而非 O(全表)。
+// 原 1000 任务全表扫描 11ms → 索引扫描仅遍历匹配状态的任务。
 func (s *Store) ListTasksByStatus(statuses ...string) ([]StoredTask, error) {
 	if s.db == nil {
 		return nil, nil
 	}
-	want := make(map[string]bool, len(statuses))
-	for _, s := range statuses {
-		want[s] = true
-	}
 	var out []StoredTask
 	err := s.db.View(func(tx *bolt.Tx) error {
-		c := tx.Bucket([]byte(bucketTasks)).Cursor()
-		for k, v := c.First(); k != nil; k, v = c.Next() {
-			var t StoredTask
-			if json.Unmarshal(v, &t) == nil && want[t.Status] {
-				out = append(out, t)
+		idxBucket := tx.Bucket([]byte(bucketTasksByStatus))
+		taskBucket := tx.Bucket([]byte(bucketTasks))
+		for _, status := range statuses {
+			prefix := []byte(status + "\x00")
+			c := idxBucket.Cursor()
+			for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+				// k = "status\x00taskID"，提取 taskID
+				taskID := k[len(prefix):]
+				raw := taskBucket.Get(taskID)
+				if raw == nil {
+					continue // 索引与数据不一致（理论上不会），跳过
+				}
+				var t StoredTask
+				if json.Unmarshal(raw, &t) == nil {
+					out = append(out, t)
+				}
 			}
 		}
 		return nil
@@ -284,10 +325,18 @@ func (s *Store) ListTasks(limit int) ([]StoredTask, error) {
 	return out, err
 }
 
-// DeleteTask 删除任务（通常不用，审计保留；测试可清）。
+// DeleteTask 删除任务（通常不用，审计保留；测试可清）。同时清理状态索引。
 func (s *Store) DeleteTask(taskID string) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket([]byte(bucketTasks)).Delete([]byte(taskID))
+		id := []byte(taskID)
+		// 先读当前状态以清理索引
+		if raw := tx.Bucket([]byte(bucketTasks)).Get(id); raw != nil {
+			var t StoredTask
+			if json.Unmarshal(raw, &t) == nil {
+				tx.Bucket([]byte(bucketTasksByStatus)).Delete(statusKey(t.Status, taskID))
+			}
+		}
+		return tx.Bucket([]byte(bucketTasks)).Delete(id)
 	})
 }
 
