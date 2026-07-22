@@ -98,12 +98,13 @@ func loadConfig(args []string) (cmd string, cfg Config, err error) {
 }
 
 // saveConfig 持久化配置到文件（用于服务模式重启后恢复）。
+// Q3 修复：配置含 token/glm.api_key 等敏感信息，权限改 0600。
 func saveConfig(cfg Config) error {
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath(), b, 0644)
+	return os.WriteFile(configPath(), b, 0600)
 }
 
 // generateAgentID 生成形如 agent-<hostname>-<shortuuid> 的 ID。

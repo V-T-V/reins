@@ -273,8 +273,10 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 					if t, err := r.store.GetTask(res.TaskID); err == nil && t != nil {
 						if res.Success {
 							t.Status = StatusCompleted
+							metrics.Inc("completed")
 						} else {
 							t.Status = StatusFailed
+							metrics.Inc("failed")
 						}
 						_ = r.store.SaveTask(*t)
 					}

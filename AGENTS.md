@@ -29,30 +29,34 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
 
 ## 当前情况（Status）
 
-- **完成度**：**P0 完成（约 90%）**——三组件全链路打通，6 类执行器实现，端到端联调通过
-- **代码规模**：32 个 Go 文件，约 3500 行（不含生成的 go.sum）；9 个测试全绿
-- **已落地**：
-  - **协议层**（`proto/`）：Envelope 信封 + 9 种消息类型 + 6 种任务载荷，纯 Go struct 零依赖
-  - **Relay 中继**（`relay/`）：`coder/websocket` WS 连接池 + Agent 注册表（conn 匹配保护）+ REST API（`GET /api/agents`、`POST /api/tasks`）+ SSE 实时事件流（`GET /api/events`）+ 心跳超时清理
-  - **Agent**（`agent/`）：`kardianos/service` 双模式（install/uninstall/start/stop/run/status）+ 反向 WS 连接 + 15s 心跳 + 指数退避重连（1s→30s 封顶）+ 任务分发框架
-  - **6 类执行器**（`executors/`）：powershell（强制 UTF-8）/script（BOM 处理）/file（base64 往返）/screenshot/guiclick（看-判-点-验循环）/browse（chromedp，build tag 隔离）
-  - **Win32 封装**（`win32/`）：Go syscall 替代 computer-use-rtc/win32.cs——PrintWindow+PW_RENDERFULLCONTENT（截 Chromium）+ SendInput（绝对坐标归一化）+ 窗口枚举/查找/激活；非 Windows 平台 stub 保证跨平台编译
-  - **视觉识别**（`vision/`）：移植 computer-use-rtc/vision.mjs——GLM-5-Turbo OpenAI 兼容 API + data URL 内联 + 正则容错提取 JSON
-  - **Web 控制台**（`console/`）：无状态反向代理 + `embed.FS` 内嵌单页 + 原生 JS 零构建（Agent 列表/任务表单动态渲染/结果流/截图预览）
-- **端到端验证**：浏览器 → Console(7781) → 反向代理 → Relay(17780) → WS 路由 → Agent PowerShell 执行 → SSE 结果回流，中文无损
+- **完成度**：**P1 工业级升级完成**——P0 全部修复 + 可靠性 + 安全 + 可观测性，对标 Tactical RMM/MeshCentral
+- **代码规模**：53 个 Go 文件，约 6500 行；11 个测试文件全绿；16 个 commit（P0 初始 6 + P1 升级 10）
+- **P0 基础**（已稳定）：
+  - **协议层**（`proto/`）：Envelope 信封 + 13 种消息类型 + 6 种任务载荷 + 幂等键 + type 校验
+  - **Relay 中继**（`relay/`）：WS 连接池 + REST API + SSE 事件流 + 心跳超时清理（Sweep 主动关连接）
+  - **Agent**（`agent/`）：服务化双模式 + 反向 WS + 心跳 + 指数退避重连 + worker pool 并发限流
+  - **6 类执行器**（`executors/`）：powershell/script/file/screenshot/guiclick/browse
+  - **Win32 封装**（`win32/`）+ **视觉识别**（`vision/`）+ **Web 控制台**（`console/`）
+- **P1 升级**（工业级）：
+  - **安全性**：mTLS 双向证书认证（Relay 内置 CA 自签根 + 矾 Agent 短期证书 + CRL 撤销）+ 文件路径穿越防护（白名单+黑名单）+ 命令安全策略（15 类高危命令拦截）+ token 常量时间比较 + 审计日志（append-only JSONL）
+  - **可靠性**：bbolt 任务持久化（Relay 重启不丢任务）+ Agent 本地结果缓存重投 + 任务 ACK + 幂等执行（防重投重复）+ 任务取消
+  - **并发安全**：Agent 并发写 WS 串行化（wsConn writeMu）+ Dispatcher 加锁 + Sweep 主动关连接防泄漏
+  - **可观测性**：metrics 端点（`/api/metrics`：在线 agent/任务计数/uptime/goroutines）+ 任务历史查询（`/api/tasks`）
+  - **功能增强**：标签批量下发（`POST /api/tasks/batch`）+ 任务取消（`POST /api/tasks/cancel`）+ 并发限流（worker pool，默认 4）
 - **已知限制**：
-  - 文件任务 P0 限 10MB（WS 帧限制，P1 改分块流）
-  - browse 执行器需 Chrome 环境（默认 stub，`-tags browse` 编译启用）
-  - guiclick 需 GLM API key（未配置则该能力不上报）
-  - TLS/P1：Relay 当前仅 HTTP，公网部署需前置 TLS 或用 Tailscale
+  - 文件任务限 10MB（WS 帧，P2 改分块流）
+  - browse 执行器需 Chrome 环境（`-tags browse` 编译启用）
+  - mTLS 需手动配置（`-mtls` + TLS 证书），默认向后兼容 ws+token
+  - race detector 需 CGO（CI 环境装 gcc 后 `make test-race`）
 
 ## 技术栈与架构
 
 - **语言**：Go 1.22+（开发机 go1.25.6，已验证）
-- **核心依赖**（3 个生产依赖 + 1 个可选）：
+- **核心依赖**（4 个生产依赖 + 1 个可选）：
   - `github.com/kardianos/service v1.3.0` —— Windows 服务注册/启停
   - `github.com/coder/websocket v1.8.15` —— 反向长连接（nhooyr 的官方继任者，gorilla 已归档）
   - `github.com/google/uuid v1.6.0` —— 消息/任务 ID
+  - `go.etcd.io/bbolt v1.5.0` —— 任务持久化（P1 新增）
   - `github.com/chromedp/chromedp` —— browse 执行器（**可选**，build tag `browse` 隔离，默认不编译）
   - `golang.org/x/sys` —— Win32 API（PrintWindow/SendInput，替代 computer-use-rtc/win32.cs）
 - **零依赖原则**：无 Web 框架（标准库 `net/http`）、无 ORM、无前端构建（原生 JS + `embed.FS`）

@@ -17,12 +17,14 @@ import (
 func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", r.handleListAgents)
 	mux.HandleFunc("POST /api/tasks", r.handlePostTask)
+	mux.HandleFunc("POST /api/tasks/batch", r.handleBatchTask) // C10 批量下发
 	mux.HandleFunc("POST /api/tasks/cancel", r.handleCancelTask) // C6 取消任务
 	mux.HandleFunc("GET /api/tasks", r.handleListTasks)   // C4/F1 任务历史
 	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)    // C4 单任务详情+结果
 	mux.HandleFunc("POST /api/enroll-token", r.handleGenEnrollToken) // C7 生成注册令牌
 	mux.HandleFunc("POST /api/enroll", r.handleEnroll)               // C7 Agent 换证书
 	mux.HandleFunc("GET /api/events", r.handleSSE)
+	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, "ok")
 	})
@@ -50,6 +52,79 @@ func (r *Relay) handleListTasks(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks, "count": len(tasks), "enabled": true})
+}
+
+// POST /api/tasks/batch —— 按标签批量下发任务（C10）。
+//
+// 请求体:
+//
+//	{"tag": "env=prod", "type": "powershell", "payload": {...}, "timeout": 30}
+//
+// 响应: {"dispatched": ["agent-1","agent-2"], "offline": [], "task_ids": {...}}
+func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	var body struct {
+		Tag     string          `json:"tag"`     // 如 "env=prod"
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload"`
+		Timeout int             `json:"timeout"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("请求体解析失败: %w", err)))
+		return
+	}
+	if body.Tag == "" || body.Type == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("tag 和 type 不能为空")))
+		return
+	}
+	if !proto.IsValidTaskType(body.Type) {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("未知的任务类型: %s", body.Type)))
+		return
+	}
+
+	// 找匹配 Agent
+	agentIDs := r.agents.FindByTag(body.Tag)
+	if len(agentIDs) == 0 {
+		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("无带标签 %s 的在线 Agent", body.Tag)))
+		return
+	}
+
+	taskIDs := make(map[string]string)
+	dispatched := []string{}
+	for _, aid := range agentIDs {
+		taskID := "batch-" + body.Type + "-" + aid + "-" + fmt.Sprint(time.Now().UnixMilli())
+		task := proto.TaskRequest{
+			TaskID:  taskID,
+			Type:    body.Type,
+			AgentID: aid,
+			Payload: body.Payload,
+			Timeout: body.Timeout,
+		}
+		// 持久化 + 投递（复用 handlePostTask 的逻辑）
+		if r.store != nil {
+			r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: time.Now().UnixMilli()})
+		}
+		conn := r.agents.Conn(aid)
+		if conn != nil {
+			if err := r.dispatchTask(conn, task); err == nil {
+				dispatched = append(dispatched, aid)
+				taskIDs[aid] = taskID
+			}
+		}
+		if r.audit != nil {
+			r.audit.Log(AuditEntry{Event: "task_submitted", AgentID: aid, TaskID: taskID, Type: body.Type, Detail: "batch:" + body.Tag})
+		}
+	}
+	log.Printf("[task] 批量下发 tag=%s → %d agents", body.Tag, len(dispatched))
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"tag":        body.Tag,
+		"dispatched": dispatched,
+		"count":      len(dispatched),
+		"task_ids":   taskIDs,
+	})
 }
 
 // summarizePayload 提取载荷摘要用于审计（命令前 200 字符，避免完整记录敏感数据）。
@@ -206,6 +281,7 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 	// C9 命令安全策略校验：拦截高危命令
 	if err := r.policy.CheckPayload(task.Type, task.Payload); err != nil {
 		log.Printf("[policy] 拦截高危任务 task=%s type=%s: %v", task.TaskID, task.Type, err)
+		metrics.Inc("blocked")
 		if r.audit != nil {
 			r.audit.Log(AuditEntry{
 				Event:   "task_blocked",
@@ -220,6 +296,7 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// C9 审计：记录任务提交
+	metrics.Inc("submitted")
 	if r.audit != nil {
 		r.audit.Log(AuditEntry{
 			Event:   "task_submitted",
@@ -296,6 +373,7 @@ func (r *Relay) dispatchTask(conn *wsConn, task proto.TaskRequest) error {
 		st.Attempt++
 		st.Request = task
 		_ = r.store.SaveTask(st)
+		metrics.Inc("dispatched")
 		log.Printf("[task] 下发 task=%s type=%s → agent=%s (attempt=%d)",
 			task.TaskID, task.Type, task.AgentID, st.Attempt)
 	} else {

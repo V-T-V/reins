@@ -91,6 +91,23 @@ func (r *Registry) Snapshot() []proto.Register {
 	return out
 }
 
+// FindByTag 返回带指定标签的在线 Agent ID 列表（C10 批量下发用）。
+// tag 格式 "key=value"，匹配 Agent 的 Tags。
+func (r *Registry) FindByTag(tag string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for id, e := range r.agents {
+		for k, v := range e.info.Tags {
+			if k+"="+v == tag {
+				out = append(out, id)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // Sweep 清理超时未心跳的 Agent，返回被清理的 agentID 列表。
 // Sweep 清理超时未心跳的 Agent，返回被清理的 agentID 列表。
 // 超时阈值建议为心跳间隔的 3 倍（默认心跳 15s → 阈值 45s）。
