@@ -19,9 +19,10 @@ var agentBizID string
 
 // Agent 主体：持有配置与 dispatcher，管理到 Relay 的反向连接。
 type Agent struct {
-	cfg  Config
-	disp *executors.Dispatcher
-	pool *WorkerPool // C6 并发限流
+	cfg   Config
+	disp  *executors.Dispatcher
+	pool  *WorkerPool  // C6 并发限流
+	certs *AgentCerts  // C8 mTLS 证书（nil=非 mTLS 模式）
 }
 
 func NewAgent(cfg Config, disp *executors.Dispatcher) *Agent {
@@ -29,6 +30,22 @@ func NewAgent(cfg Config, disp *executors.Dispatcher) *Agent {
 		cfg:  cfg,
 		disp: disp,
 		pool: NewWorkerPool(cfg.MaxConcurrentTasks), // C6
+	}
+}
+
+// WithCerts 注入 mTLS 证书（C8）。
+func (a *Agent) WithCerts(c *AgentCerts) *Agent { a.certs = c; return a }
+
+// mtlsHTTPClient 构造用 AgentCerts 的 http.Client（跳过 Relay 证书 ServerName 校验兜底）。
+func mtlsHTTPClient(certs *AgentCerts) *http.Client {
+	tlsCfg := certs.TLSConfig()
+	if tlsCfg == nil {
+		return http.DefaultClient
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: tlsCfg,
+		},
 	}
 }
 
@@ -61,18 +78,26 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 // connectAndServe 建立一次连接的完整生命周期。
+//
+// C8：mTLS 模式下用客户端证书 dial（wss://）。
 func (a *Agent) connectAndServe(ctx context.Context) error {
 	header := http.Header{}
-	if a.cfg.Token != "" {
-		header.Set("Authorization", "Bearer "+a.cfg.Token)
+	dialOpts := &websocket.DialOptions{HTTPHeader: header}
+
+	// 非 mTLS 模式：用 token
+	if a.certs == nil {
+		if a.cfg.Token != "" {
+			header.Set("Authorization", "Bearer "+a.cfg.Token)
+		}
+	} else {
+		// mTLS 模式：注入 TLS 配置
+		dialOpts.HTTPClient = mtlsHTTPClient(a.certs)
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	c, _, err := websocket.Dial(dialCtx, a.cfg.RelayURL, &websocket.DialOptions{
-		HTTPHeader: header,
-	})
+	c, _, err := websocket.Dial(dialCtx, a.cfg.RelayURL, dialOpts)
 	if err != nil {
 		return err
 	}

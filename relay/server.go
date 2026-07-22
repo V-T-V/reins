@@ -156,13 +156,20 @@ func (r *Relay) authorize(req *http.Request) error {
 }
 
 // handleAgentWS 处理 Agent 的反向 WS 连接。
+//
+// 鉴权策略（S3 修复）：
+//   - mTLS 模式（r.ca != nil）：身份由 TLS 客户端证书保证，跳过 token
+//   - 非 mTLS：用 token（向后兼容）
+//   - Origin：Agent 非浏览器，InsecureSkipVerify 仅在 Dev 模式（收紧）
 func (r *Relay) handleAgentWS(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+	if r.ca == nil {
+		// 非 mTLS：用 token 校验
+		if err := r.authorize(req); err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 	c, err := websocket.Accept(w, req, &websocket.AcceptOptions{
-		// 允许任意 Origin（Agent 通常无浏览器 Origin），生产建议收紧
 		InsecureSkipVerify: r.cfg.Dev,
 	})
 	if err != nil {

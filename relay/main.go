@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"log"
 	"net/http"
 	"os"
@@ -56,6 +58,17 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// C8：mTLS 模式配置 TLSConfig（要求客户端证书）
+	if cfg.MTLS && relay.ca != nil {
+		srv.TLSConfig = &tls.Config{
+			// 要求并验证客户端证书：用内置 CA 校验
+			ClientCAs:  caCertPool(relay.ca),
+			ClientAuth: tls.RequireAndVerifyClientCert,
+			MinVersion: tls.VersionTLS12,
+		}
+		log.Printf("[relay] mTLS 已启用：要求 Agent 客户端证书")
+	}
+
 	// 心跳超时清理 goroutine
 	go sweepLoop(relay)
 
@@ -64,9 +77,16 @@ func main() {
 	defer stop()
 
 	go func() {
-		log.Printf("[relay] HTTP 监听 %s", cfg.Addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("[relay] 监听失败: %v", err)
+		if cfg.MTLS && cfg.CertFile != "" && cfg.KeyFile != "" {
+			log.Printf("[relay] HTTPS(mTLS) 监听 %s", cfg.Addr)
+			if err := srv.ListenAndServeTLS(cfg.CertFile, cfg.KeyFile); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("[relay] mTLS 监听失败: %v", err)
+			}
+		} else {
+			log.Printf("[relay] HTTP 监听 %s", cfg.Addr)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("[relay] 监听失败: %v", err)
+			}
 		}
 	}()
 
@@ -93,4 +113,11 @@ func sweepLoop(r *Relay) {
 			})
 		}
 	}
+}
+
+// caCertPool 用内置 CA 的根证书构造一个 CertPool，用于 mTLS 客户端证书校验。
+func caCertPool(ca *CA) *x509.CertPool {
+	pool := x509.NewCertPool()
+	pool.AddCert(ca.rootCert)
+	return pool
 }
