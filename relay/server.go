@@ -266,16 +266,12 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 
 		case proto.TypeTaskNack:
 			// D4：任务拒绝（Agent pool 满/无法执行），回退 pending 等重投
+			// D5：UpdateTaskStatus 自带终态校验
 			var nack proto.TaskNack
 			if err := env.Decode(&nack); err == nil && r.store != nil {
-				if t, err := r.store.GetTask(nack.TaskID); err == nil && t != nil {
-					if t.Status != StatusCompleted && t.Status != StatusFailed && t.Status != StatusCancelled {
-						t.Status = StatusPending
-						_ = r.store.SaveTask(*t)
-						log.Printf("[task] 收到 NACK task=%s reason=%s，回退 pending",
-							nack.TaskID, nack.Reason)
-						// 稍后由 reaper 或 Agent 重连时补投
-					}
+				if err := r.store.UpdateTaskStatus(nack.TaskID, StatusPending); err == nil {
+					log.Printf("[task] 收到 NACK task=%s reason=%s，回退 pending",
+						nack.TaskID, nack.Reason)
 				}
 			}
 
@@ -285,15 +281,17 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			if err := env.Decode(&res); err == nil {
 				if r.store != nil {
 					_ = r.store.SaveResult(res.TaskID, res)
-					if t, err := r.store.GetTask(res.TaskID); err == nil && t != nil {
+					// D5：用状态机校验更新（终态不可变更，防 cancel/result 竞态）
+					newStatus := StatusFailed
+					if res.Success {
+						newStatus = StatusCompleted
+					}
+					if err := r.store.UpdateTaskStatus(res.TaskID, newStatus); err == nil {
 						if res.Success {
-							t.Status = StatusCompleted
 							metrics.Inc("completed")
 						} else {
-							t.Status = StatusFailed
 							metrics.Inc("failed")
 						}
-						_ = r.store.SaveTask(*t)
 					}
 				}
 				// C9 审计：记录任务结果

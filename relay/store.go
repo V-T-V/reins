@@ -47,6 +47,63 @@ type StoredTask struct {
 	Submitted string            `json:"submitted_by,omitempty"` // 提交者（审计用，C9 填充）
 }
 
+// isTerminal 判断状态是否为终态（不可再变更）。
+// P2-2 修复：终态一旦写入，拒绝后续变更，避免 cancel 与 result 竞态导致状态漂移。
+func isTerminal(status string) bool {
+	return status == StatusCompleted || status == StatusFailed || status == StatusCancelled
+}
+
+// validTransition 校验从 from 到 to 的状态转换是否合法。
+//
+// 规则：
+//   - 终态不可变更（completed/failed/cancelled → 任何 都拒绝）
+//   - pending → dispatched/acknowledged/cancelled 允许
+//   - dispatched → acknowledged/pending(回退)/cancelled 允许
+//   - acknowledged → completed/failed/pending(超时回退)/cancelled 允许
+func validTransition(from, to string) bool {
+	if isTerminal(from) {
+		return false // 终态锁死
+	}
+	// 非终态间的转换基本都允许（具体语义由调用方保证）
+	return true
+}
+
+// UpdateTaskStatus 带状态机校验的状态更新。
+// 若当前状态为终态或转换非法，返回错误且不更新。
+func (s *Store) UpdateTaskStatus(taskID, newStatus string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return ErrStoreClosed
+	}
+	var current *StoredTask
+	err := s.db.View(func(tx *bolt.Tx) error {
+		raw := tx.Bucket([]byte(bucketTasks)).Get([]byte(taskID))
+		if raw == nil {
+			return nil
+		}
+		var t StoredTask
+		if json.Unmarshal(raw, &t) == nil {
+			current = &t
+		}
+		return nil
+	})
+	if err != nil || current == nil {
+		return fmt.Errorf("任务 %s 不存在", taskID)
+	}
+	if !validTransition(current.Status, newStatus) {
+		return fmt.Errorf("非法状态转换 %s→%s（当前为终态，不可变更）", current.Status, newStatus)
+	}
+	current.Status = newStatus
+	if current.UpdatedAt == 0 {
+		current.UpdatedAt = time.Now().UnixMilli()
+	}
+	data, _ := json.Marshal(current)
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte(bucketTasks)).Put([]byte(taskID), data)
+	})
+}
+
 // Store 基于 bbolt 的任务持久化层。
 //
 // 修复 R2(P0) + F1(P1)：Relay 重启后内存任务全部丢失。
@@ -120,7 +177,11 @@ func (s *Store) SaveTask(t StoredTask) error {
 }
 
 // GetTask 读取单个任务。
+// P2-7：db==nil 返回 nil（优雅降级）。
 func (s *Store) GetTask(taskID string) (*StoredTask, error) {
+	if s.db == nil {
+		return nil, nil
+	}
 	var raw []byte
 	err := s.db.View(func(tx *bolt.Tx) error {
 		raw = tx.Bucket([]byte(bucketTasks)).Get([]byte(taskID))
@@ -140,10 +201,16 @@ func (s *Store) GetTask(taskID string) (*StoredTask, error) {
 }
 
 // SaveResult 保存任务结果。
+// P2-7 修复：检查 db != nil，防 Close 后写 panic。
 func (s *Store) SaveResult(taskID string, r proto.TaskResult) error {
 	data, err := json.Marshal(r)
 	if err != nil {
 		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db == nil {
+		return ErrStoreClosed
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket([]byte(bucketResults)).Put([]byte(taskID), data)
@@ -152,6 +219,9 @@ func (s *Store) SaveResult(taskID string, r proto.TaskResult) error {
 
 // GetResult 读取任务结果。
 func (s *Store) GetResult(taskID string) (*proto.TaskResult, error) {
+	if s.db == nil {
+		return nil, nil
+	}
 	var raw []byte
 	err := s.db.View(func(tx *bolt.Tx) error {
 		raw = tx.Bucket([]byte(bucketResults)).Get([]byte(taskID))
@@ -172,6 +242,9 @@ func (s *Store) GetResult(taskID string) (*proto.TaskResult, error) {
 
 // ListTasksByStatus 列出指定状态的任务（用于 Relay 重启后找回在途任务）。
 func (s *Store) ListTasksByStatus(statuses ...string) ([]StoredTask, error) {
+	if s.db == nil {
+		return nil, nil
+	}
 	want := make(map[string]bool, len(statuses))
 	for _, s := range statuses {
 		want[s] = true
