@@ -162,3 +162,28 @@ func genTestCSR(t *testing.T, agentID string) []byte {
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 }
+
+// TestEnrollmentTokenExpires 验证 E3/W4：注册令牌过期后失效。
+func TestEnrollmentTokenExpires(t *testing.T) {
+	ca, _ := LoadOrCreateCA(t.TempDir())
+
+	token, _ := ca.GenerateEnrollmentToken("agent-expire")
+
+	// 立即校验应成功
+	if !ca.ValidateEnrollmentToken(token, "agent-expire") {
+		t.Fatal("新生成的令牌应有效")
+	}
+
+	// 再生成一个，手动改成 2 小时前（模拟过期）
+	token2, _ := ca.GenerateEnrollmentToken("agent-expire2")
+	ca.mu.Lock()
+	e := ca.tokens[token2]
+	e.createdAt = time.Now().Add(-2 * time.Hour) // 2h 前，超过 1h TTL
+	ca.tokens[token2] = e
+	ca.mu.Unlock()
+
+	// 过期令牌应校验失败
+	if ca.ValidateEnrollmentToken(token2, "agent-expire2") {
+		t.Fatal("过期的令牌应校验失败")
+	}
+}

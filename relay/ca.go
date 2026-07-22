@@ -40,13 +40,23 @@ type CA struct {
 	keyPath  string // 根私钥落盘路径
 	statePath string // CRL 状态落盘路径（ca-state.json）
 
-	// 注册令牌：token → 绑定的 agentID（一次性，签发后删除，不持久化）
-	tokens map[string]string
+	// 注册令牌：token → 绑定信息（agentID + 创建时间，一次性，签发后删除，不持久化）
+	// E3/W4：加 createdAt 用于过期校验，对齐前端返回的 expires_in:3600
+	tokens map[string]tokenEntry
 	// 已签发证书：agentID → 序列号（用于撤销/查询，持久化）
 	issued map[string]*big.Int
 	// 已撤销序列号（持久化）
 	revoked map[string]bool
 }
+
+// tokenEntry 注册令牌绑定信息。
+type tokenEntry struct {
+	agentID   string
+	createdAt time.Time
+}
+
+// EnrollmentTokenTTL 注册令牌有效期（E3：对齐前端 expires_in:3600）。
+const EnrollmentTokenTTL = time.Hour
 
 // LoadOrCreateCA 加载现有 CA，不存在则自签创建。
 func LoadOrCreateCA(dataDir string) (*CA, error) {
@@ -54,7 +64,7 @@ func LoadOrCreateCA(dataDir string) (*CA, error) {
 		certPath:  filepath.Join(dataDir, "ca-root.crt"),
 		keyPath:   filepath.Join(dataDir, "ca-root.key"),
 		statePath: filepath.Join(dataDir, "ca-state.json"),
-		tokens:    make(map[string]string),
+		tokens:    make(map[string]tokenEntry),
 		issued:    make(map[string]*big.Int),
 		revoked:   make(map[string]bool),
 	}
@@ -165,6 +175,7 @@ func (c *CA) CAPEM() []byte { return c.caPEM }
 
 // GenerateEnrollmentToken 为指定 agentID 生成一次性注册令牌。
 // 同一 agentID 重复生成会覆盖旧令牌。
+// E3：记录 createdAt，校验时用于过期判断。
 func (c *CA) GenerateEnrollmentToken(agentID string) (string, error) {
 	tokBytes := make([]byte, 32)
 	if _, err := rand.Read(tokBytes); err != nil {
@@ -172,17 +183,24 @@ func (c *CA) GenerateEnrollmentToken(agentID string) (string, error) {
 	}
 	token := fmt.Sprintf("%x", tokBytes)
 	c.mu.Lock()
-	c.tokens[token] = agentID
+	c.tokens[token] = tokenEntry{agentID: agentID, createdAt: time.Now()}
 	c.mu.Unlock()
 	return token, nil
 }
 
-// ValidateEnrollmentToken 校验令牌是否绑定到指定 agentID。校验成功后令牌作废（一次性）。
+// ValidateEnrollmentToken 校验令牌是否绑定到指定 agentID 且未过期。
+// 校验成功后令牌作废（一次性）。
+// E3/W4：加过期校验，对齐前端 expires_in:3600。
 func (c *CA) ValidateEnrollmentToken(token, agentID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	bound, ok := c.tokens[token]
-	if !ok || bound != agentID {
+	entry, ok := c.tokens[token]
+	if !ok || entry.agentID != agentID {
+		return false
+	}
+	// 过期校验
+	if time.Since(entry.createdAt) > EnrollmentTokenTTL {
+		delete(c.tokens, token) // 清理过期令牌
 		return false
 	}
 	delete(c.tokens, token) // 一次性
