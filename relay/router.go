@@ -52,6 +52,28 @@ func (r *Relay) handleListTasks(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks, "count": len(tasks), "enabled": true})
 }
 
+// summarizePayload 提取载荷摘要用于审计（命令前 200 字符，避免完整记录敏感数据）。
+func summarizePayload(taskType string, payload []byte) string {
+	const maxLen = 200
+	var text string
+	switch taskType {
+	case "powershell":
+		var t struct{ Command string `json:"command"` }
+		json.Unmarshal(payload, &t)
+		text = t.Command
+	case "script":
+		var t struct{ Content string `json:"content"` }
+		json.Unmarshal(payload, &t)
+		text = t.Content
+	default:
+		return fmt.Sprintf("%s(%d bytes)", taskType, len(payload))
+	}
+	if len(text) > maxLen {
+		text = text[:maxLen] + "..."
+	}
+	return text
+}
+
 // POST /api/tasks/cancel —— 取消任务（C6）。转发 task_cancel 到 Agent，并更新状态。
 func (r *Relay) handleCancelTask(w http.ResponseWriter, req *http.Request) {
 	if err := r.authorize(req); err != nil {
@@ -179,6 +201,33 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 	if !proto.IsValidTaskType(task.Type) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("未知的任务类型: %s", task.Type)))
 		return
+	}
+
+	// C9 命令安全策略校验：拦截高危命令
+	if err := r.policy.CheckPayload(task.Type, task.Payload); err != nil {
+		log.Printf("[policy] 拦截高危任务 task=%s type=%s: %v", task.TaskID, task.Type, err)
+		if r.audit != nil {
+			r.audit.Log(AuditEntry{
+				Event:   "task_blocked",
+				AgentID: task.AgentID,
+				TaskID:  task.TaskID,
+				Type:    task.Type,
+				Detail:  err.Error(),
+			})
+		}
+		writeJSON(w, http.StatusForbidden, errMap(err))
+		return
+	}
+
+	// C9 审计：记录任务提交
+	if r.audit != nil {
+		r.audit.Log(AuditEntry{
+			Event:   "task_submitted",
+			AgentID: task.AgentID,
+			TaskID:  task.TaskID,
+			Type:    task.Type,
+			Detail:  summarizePayload(task.Type, task.Payload),
+		})
 	}
 
 	// C4 持久化：先存为 pending（即使 Agent 离线也不丢）

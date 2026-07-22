@@ -47,6 +47,16 @@ func main() {
 		}
 	}
 
+	// C9：打开审计日志（data/audit.log）
+	audit, err := OpenAuditLog(filepath.Join(dataDir(), "audit.log"))
+	if err != nil {
+		log.Printf("[relay] 审计日志打开失败(降级): %v", err)
+	} else {
+		relay.WithAudit(audit)
+		defer audit.Close()
+		log.Printf("[relay] 审计日志已启用: %s", filepath.Join(dataDir(), "audit.log"))
+	}
+
 	mux := http.NewServeMux()
 	relay.registerHTTP(mux)
 	mux.HandleFunc("/agent", relay.handleAgentWS)     // Agent 反向连接

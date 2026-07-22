@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -109,15 +110,18 @@ type Relay struct {
 	cfg     Config
 	agents  *Registry
 	console *EventBus
-	store   *Store // 任务持久化（R2/F1），可为 nil（关闭持久化）
-	ca      *CA    // 内置 CA（C7 身份认证），可为 nil（关闭 mTLS）
+	store   *Store        // 任务持久化（R2/F1），可为 nil（关闭持久化）
+	ca      *CA           // 内置 CA（C7 身份认证），可为 nil（关闭 mTLS）
+	policy  *CommandPolicy // 命令安全策略（S4）
+	audit   *AuditLog     // 审计日志（F1）
 }
 
 func NewRelay(cfg Config) *Relay {
 	return &Relay{
-		cfg:     cfg,
-		agents:  NewRegistry(),
-		console: NewEventBus(),
+		cfg:    cfg,
+		agents: NewRegistry(),
+		// 命令策略默认启用（无配置即用 DefaultCommandPolicy）
+		policy: DefaultCommandPolicy(),
 	}
 }
 
@@ -130,6 +134,12 @@ func (r *Relay) WithStore(s *Store) *Relay {
 // WithCA 注入内置 CA（C7）。
 func (r *Relay) WithCA(ca *CA) *Relay {
 	r.ca = ca
+	return r
+}
+
+// WithAudit 注入审计日志（C9）。
+func (r *Relay) WithAudit(a *AuditLog) *Relay {
+	r.audit = a
 	return r
 }
 
@@ -255,7 +265,7 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			}
 
 		case proto.TypeTaskResult:
-			// 任务结果回流：持久化 + 广播给控制台
+			// 任务结果回流：持久化 + 审计 + 广播给控制台
 			var res proto.TaskResult
 			if err := env.Decode(&res); err == nil {
 				if r.store != nil {
@@ -268,6 +278,15 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 						}
 						_ = r.store.SaveTask(*t)
 					}
+				}
+				// C9 审计：记录任务结果
+				if r.audit != nil {
+					r.audit.Log(AuditEntry{
+						Event:   "task_result",
+						AgentID: agentID,
+						TaskID:  res.TaskID,
+						Detail:  fmt.Sprintf("success=%v exit=%d duration=%dms", res.Success, res.ExitCode, res.Duration),
+					})
 				}
 				r.console.Broadcast(Event{
 					Kind:    proto.TypeTaskResult,
