@@ -88,6 +88,7 @@ bin/go-rmm-console -addr :7781 -relay http://127.0.0.1:7780
 ## 文档
 
 - [`DEPLOYMENT.md`](./DEPLOYMENT.md) —— **生产部署运维指南**（内网/公网/mTLS/服务化/故障排查）
+- [`BENCHMARK.md`](./BENCHMARK.md) —— **性能基线**（关键路径 benchmark + 优化记录 + 回归门禁）
 - [`AGENTS.md`](./AGENTS.md) —— 完整架构与开发约定
 - [`proto/message.go`](./proto/message.go) —— 通信协议定义
 
