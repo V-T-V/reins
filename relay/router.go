@@ -56,6 +56,11 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("type 不能为空")))
 		return
 	}
+	// R5 修复：校验 type 在已知集合内，防透传未知类型给 Agent 制造噪音
+	if !proto.IsValidTaskType(task.Type) {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("未知的任务类型: %s", task.Type)))
+		return
+	}
 
 	conn := r.agents.Conn(task.AgentID)
 	if conn == nil {

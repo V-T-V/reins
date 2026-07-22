@@ -35,6 +35,14 @@ const (
 	TypeAgentOnline = "agent_online"
 	// TypeAgentOffline —— Relay→Console：Agent 离线通知。
 	TypeAgentOffline = "agent_offline"
+	// TypeTaskAck —— Agent→Relay：任务已接收/已开始执行（可靠性 ACK）。
+	TypeTaskAck = "task_ack"
+	// TypeTaskCancel —— Console→Relay→Agent：取消正在执行的任务。
+	TypeTaskCancel = "task_cancel"
+	// TypeEnroll —— Agent→Relay：用一次性注册令牌换取客户端证书（mTLS 引导）。
+	TypeEnroll = "enroll"
+	// TypeEnrollResp —— Relay→Agent：签发的证书 + CA 证书。
+	TypeEnrollResp = "enroll_resp"
 	// TypeError —— 任意方→对方：协议级错误（未知类型、鉴权失败等）。
 	TypeError = "error"
 )
@@ -48,6 +56,19 @@ const (
 	TaskBrowse     = "browse"     // headless 浏览器自动化
 	TaskGUIClick   = "guiclick"   // 视觉驱动的桌面 GUI 点击
 )
+
+// ValidTaskTypes 已知任务类型集合（用于 Relay 侧 type 校验，防透传未知类型）。
+var ValidTaskTypes = map[string]bool{
+	TaskPowerShell: true,
+	TaskScript:     true,
+	TaskFile:       true,
+	TaskScreenshot: true,
+	TaskBrowse:     true,
+	TaskGUIClick:   true,
+}
+
+// IsValidTaskType 判断是否为已知任务类型。
+func IsValidTaskType(t string) bool { return ValidTaskTypes[t] }
 
 // 默认任务超时（秒）。TaskRequest.Timeout 为 0 时使用此值。
 const DefaultTaskTimeout = 60
@@ -125,6 +146,11 @@ type TaskRequest struct {
 	Payload  json.RawMessage `json:"payload"`         // 按 Type 反序列化
 	Timeout  int             `json:"timeout"`         // 秒，0 表示用 DefaultTaskTimeout
 	Priority int             `json:"priority,omitempty"` // 0-9，预留
+	// IdempotencyKey 幂等键：同一 key 在窗口期内只执行一次（防重投重复执行）。
+	// 为空时由 Relay 用 TaskID 兜底。
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	// Attempt 第几次投递（Relay 重投时递增，Agent 可据此判断是否重复）。
+	Attempt int `json:"attempt,omitempty"`
 }
 
 // TaskResult 任务终态结果。
@@ -200,6 +226,40 @@ type GUIClickTask struct {
 type ErrorPayload struct {
 	Code    string `json:"code"`    // 机器可读错误码
 	Message string `json:"message"` // 人类可读描述
+}
+
+// --- 可靠性与取消 ---
+
+// TaskAck 任务确认。Agent 收到任务后立即发（status=received），执行完成也可再发（status=completed）。
+// Relay 据此判断任务是否抵达 Agent，未收到 ACK 的任务在 Relay 重启后会重新投递。
+type TaskAck struct {
+	TaskID string `json:"task_id"`
+	Status string `json:"status"` // received / completed / failed
+}
+
+// TaskCancel 任务取消请求。
+type TaskCancel struct {
+	TaskID string `json:"task_id"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// --- mTLS 引导（Enrollment） ---
+
+// Enroll Agent→Relay：用一次性注册令牌换取客户端证书。
+type Enroll struct {
+	AgentID string `json:"agent_id"` // 申请者自报 Agent ID（Relay 校验令牌绑定）
+	Token   string `json:"token"`    // 一次性注册令牌
+	CSRPEM  string `json:"csr_pem"`  // PEM 编码的 CSR（CN=agent-id）
+}
+
+// EnrollResp Relay→Agent：签发的客户端证书 + CA 证书。
+type EnrollResp struct {
+	AgentID    string `json:"agent_id"`
+	CertPEM    string `json:"cert_pem"`    // 签发给 Agent 的客户端证书（短期）
+	CAPEM      string `json:"ca_pem"`      // Relay 的 CA 根证书（Agent 用于校验 Relay）
+	ExpiresAt  int64  `json:"expires_at"`  // 证书过期 Unix 时间戳
+	Success    bool   `json:"success"`
+	Error      string `json:"error,omitempty"`
 }
 
 // --- 辅助 ---

@@ -13,10 +13,14 @@ import (
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
+// agentBizID 是当前 Agent 的业务身份（用于 Envelope.From）。
+// 进程级变量，在 Run 启动时设置。
+var agentBizID string
+
 // Agent 主体：持有配置与 dispatcher，管理到 Relay 的反向连接。
 type Agent struct {
-	cfg     Config
-	disp    *executors.Dispatcher
+	cfg  Config
+	disp *executors.Dispatcher
 }
 
 func NewAgent(cfg Config, disp *executors.Dispatcher) *Agent {
@@ -27,6 +31,7 @@ func NewAgent(cfg Config, disp *executors.Dispatcher) *Agent {
 //
 // 阻塞直到 ctx 取消。断线自动指数退避重连（1s→2s→…→30s 封顶）。
 func (a *Agent) Run(ctx context.Context) error {
+	agentBizID = a.cfg.AgentID
 	backoff := initialBackoff
 	for {
 		if ctx.Err() != nil {
@@ -69,6 +74,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	defer c.CloseNow()
 	c.SetReadLimit(32 << 20) // 32MiB，支持大截图
 
+	wc := newWSConn(c)
 	log.Printf("[agent] 已连接到 Relay %s", a.cfg.RelayURL)
 
 	// 子 ctx：连接级取消（断线时让心跳 goroutine 退出）
@@ -76,17 +82,17 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	defer connCancel()
 
 	// 1. 发送 register
-	if err := a.sendRegister(connCtx, c); err != nil {
+	if err := a.sendRegister(connCtx, wc); err != nil {
 		return err
 	}
 	// 2. 启动心跳 goroutine
-	go a.heartbeatLoop(connCtx, c)
+	go a.heartbeatLoop(connCtx, wc)
 	// 3. 接收循环（阻塞直到断开）
-	return a.recvLoop(connCtx, c)
+	return a.recvLoop(connCtx, wc)
 }
 
 // sendRegister 发送注册消息。
-func (a *Agent) sendRegister(ctx context.Context, c *websocket.Conn) error {
+func (a *Agent) sendRegister(ctx context.Context, wc *wsConn) error {
 	reg := proto.Register{
 		AgentID:      a.cfg.AgentID,
 		Hostname:     hostname(),
@@ -95,16 +101,11 @@ func (a *Agent) sendRegister(ctx context.Context, c *websocket.Conn) error {
 		Capabilities: a.disp.Types(),
 		Tags:         a.cfg.Tags,
 	}
-	env, err := proto.NewEnvelope(proto.TypeRegister, a.cfg.AgentID, "relay", reg)
-	if err != nil {
-		return err
-	}
-	data, _ := json.Marshal(env)
-	return c.Write(ctx, websocket.MessageText, data)
+	return wc.writeEnvelope(ctx, proto.TypeRegister, "relay", reg)
 }
 
-// heartbeatLoop 周期发送心跳。
-func (a *Agent) heartbeatLoop(ctx context.Context, c *websocket.Conn) {
+// heartbeatLoop 周期发送心跳。所有 Write 经 wc.writeJSON 串行化。
+func (a *Agent) heartbeatLoop(ctx context.Context, wc *wsConn) {
 	ticker := time.NewTicker(a.cfg.Heartbeat)
 	defer ticker.Stop()
 	var seq int64
@@ -115,10 +116,8 @@ func (a *Agent) heartbeatLoop(ctx context.Context, c *websocket.Conn) {
 		case <-ticker.C:
 			seq++
 			hb := proto.Heartbeat{AgentID: a.cfg.AgentID, Seq: seq}
-			env, _ := proto.NewEnvelope(proto.TypeHeartbeat, a.cfg.AgentID, "relay", hb)
-			data, _ := json.Marshal(env)
 			wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
-			if err := c.Write(wctx, websocket.MessageText, data); err != nil {
+			if err := wc.writeEnvelope(wctx, proto.TypeHeartbeat, "relay", hb); err != nil {
 				log.Printf("[agent] 心跳发送失败: %v", err)
 				wcancel()
 				return // 心跳失败视为断线，退出触发重连
@@ -128,10 +127,10 @@ func (a *Agent) heartbeatLoop(ctx context.Context, c *websocket.Conn) {
 	}
 }
 
-// recvLoop 接收并处理消息（task_request）。
-func (a *Agent) recvLoop(ctx context.Context, c *websocket.Conn) error {
+// recvLoop 接收并处理消息（task_request/task_cancel）。
+func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 	for {
-		_, data, err := c.Read(ctx)
+		_, data, err := wc.read(ctx)
 		if err != nil {
 			return err
 		}
@@ -142,7 +141,9 @@ func (a *Agent) recvLoop(ctx context.Context, c *websocket.Conn) error {
 		}
 		switch env.Type {
 		case proto.TypeTaskRequest:
-			a.handleTask(ctx, c, env)
+			a.handleTask(ctx, wc, env)
+		case proto.TypeTaskCancel:
+			a.handleCancel(env)
 		default:
 			log.Printf("[agent] 忽略消息类型 %s", env.Type)
 		}
@@ -150,7 +151,8 @@ func (a *Agent) recvLoop(ctx context.Context, c *websocket.Conn) error {
 }
 
 // handleTask 在独立 goroutine 中执行任务，结果回流给 Relay。
-func (a *Agent) handleTask(parent context.Context, c *websocket.Conn, env proto.Envelope) {
+// 所有 WS 写入经 wc 串行化，消除 R1 并发损坏 bug。
+func (a *Agent) handleTask(parent context.Context, wc *wsConn, env proto.Envelope) {
 	var task proto.TaskRequest
 	if err := env.Decode(&task); err != nil {
 		log.Printf("[agent] 任务解析失败: %v", err)
@@ -168,26 +170,29 @@ func (a *Agent) handleTask(parent context.Context, c *websocket.Conn, env proto.
 		ctx, cancel := context.WithTimeout(parent, time.Duration(timeout)*time.Second)
 		defer cancel()
 
-		// 进度上报回调：通过 WS 发 task_progress
+		// 记录到活跃任务表（供 task_cancel 查找）。
+		// C6 会完善取消机制；此处先注册 cancel 句柄。
+		activeTasks.store(task.TaskID, cancel)
+		defer activeTasks.delete(task.TaskID)
+
+		// 进度上报回调：通过 WS 发 task_progress（串行化）
 		progress := func(step, message string, percent int) {
 			p := proto.TaskProgress{TaskID: task.TaskID, Step: step, Message: message, Percent: percent}
-			pEnv, _ := proto.NewEnvelope(proto.TypeTaskProgress, a.cfg.AgentID, "relay", p)
-			pData, _ := json.Marshal(pEnv)
 			wctx, wcancel := context.WithTimeout(parent, 5*time.Second)
 			defer wcancel()
-			_ = c.Write(wctx, websocket.MessageText, pData)
+			if err := wc.writeEnvelope(wctx, proto.TypeTaskProgress, "relay", p); err != nil {
+				log.Printf("[agent] 进度上报失败: %v", err)
+			}
 		}
 
 		result := a.disp.Dispatch(ctx, task, progress)
 		result.Duration = int(time.Since(start) / time.Millisecond)
 		result.TaskID = task.TaskID
 
-		// 回流结果
-		resEnv, _ := proto.NewEnvelope(proto.TypeTaskResult, a.cfg.AgentID, "relay", result)
-		resData, _ := json.Marshal(resEnv)
+		// 回流结果（串行化写入，失败记日志——C5 会加本地缓存重投）
 		wctx, wcancel := context.WithTimeout(parent, 10*time.Second)
 		defer wcancel()
-		if err := c.Write(wctx, websocket.MessageText, resData); err != nil {
+		if err := wc.writeEnvelope(wctx, proto.TypeTaskResult, "relay", result); err != nil {
 			log.Printf("[agent] 任务结果回流失败: %v", err)
 		} else {
 			log.Printf("[agent] 任务 %s 完成 success=%v duration=%dms", task.TaskID, result.Success, result.Duration)
@@ -195,7 +200,20 @@ func (a *Agent) handleTask(parent context.Context, c *websocket.Conn, env proto.
 	}()
 }
 
-const (
+// handleCancel 处理任务取消（C6 完善前先实现基础版）。
+func (a *Agent) handleCancel(env proto.Envelope) {
+	var cancel proto.TaskCancel
+	if err := env.Decode(&cancel); err != nil {
+		return
+	}
+	if cancelFn, ok := activeTasks.load(cancel.TaskID); ok {
+		cancelFn()
+		log.Printf("[agent] 任务 %s 已取消", cancel.TaskID)
+	}
+}
+
+// 退避参数用 var（非 const），便于测试临时覆盖加速。
+var (
 	initialBackoff = 1 * time.Second
 	maxBackoff     = 30 * time.Second
 )
