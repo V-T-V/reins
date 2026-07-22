@@ -117,14 +117,34 @@ func runServiceFromConfig() {
 
 // runForeground 前台调试模式。
 func runForeground(cfg Config, disp *executors.Dispatcher) {
-	log.Printf("[agent] 前台模式启动: agent_id=%s relay=%s caps=%v",
-		cfg.AgentID, cfg.RelayURL, disp.Types())
+	log.Printf("[agent] 前台模式启动: agent_id=%s relay=%s caps=%v mtls=%v",
+		cfg.AgentID, cfg.RelayURL, disp.Types(), cfg.MTLS)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	a := NewAgent(cfg, disp)
+	// G1 修复：mTLS 模式下加载/换取证书（A1 接线）
+	if err := setupAgentCerts(ctx, a, cfg); err != nil {
+		log.Fatalf("[agent] mTLS 证书初始化失败: %v", err)
+	}
 	if err := a.Run(ctx); err != nil && ctx.Err() == nil {
 		log.Fatalf("[agent] 退出: %v", err)
 	}
+}
+
+// setupAgentCerts 在 mTLS 模式下加载或换取客户端证书，注入到 Agent。
+// 非 mTLS 模式直接返回（向后兼容 ws://+token）。
+// G1 修复（A1）：原实现 enroll 整条链是死代码，从不调用。
+func setupAgentCerts(ctx context.Context, a *Agent, cfg Config) error {
+	if !cfg.MTLS {
+		return nil // 非 mTLS 模式，跳过
+	}
+	certs := NewAgentCerts(cfg.RelayURL, agentDataDir())
+	if err := certs.LoadOrEnroll(ctx, cfg.AgentID, cfg.Token); err != nil {
+		return fmt.Errorf("证书加载/注册失败: %w", err)
+	}
+	a.WithCerts(certs)
+	log.Printf("[agent] mTLS 证书已就绪")
+	return nil
 }
 
 // buildDispatcher 构造任务分发器，注册当前可用的执行器。

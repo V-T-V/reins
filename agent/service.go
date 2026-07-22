@@ -38,6 +38,10 @@ func (p *program) Stop(s svc.Service) error {
 
 func (p *program) run() {
 	a := NewAgent(p.cfg, p.disp)
+	// G1 修复：服务模式也接线 mTLS（与 runForeground 一致）
+	if err := setupAgentCerts(p.ctx, a, p.cfg); err != nil {
+		log.Printf("[service] mTLS 证书初始化失败: %v", err)
+	}
 	if err := a.Run(p.ctx); err != nil && p.ctx.Err() == nil {
 		log.Printf("[service] Agent 异常退出: %v", err)
 	}

@@ -21,9 +21,12 @@ var version = "dev"
 type Config struct {
 	AgentID   string            `json:"agent_id"`            // Agent 唯一 ID（空则自动生成并持久化）
 	RelayURL  string            `json:"relay_url"`           // Relay 的 Agent WS 端点，如 ws://host:7780/agent
-	Token     string            `json:"token,omitempty"`     // 鉴权 token
+	Token     string            `json:"token,omitempty"`     // 鉴权 token（非 mTLS 模式）/ enrollment token（mTLS 首次注册）
 	Tags      map[string]string `json:"tags,omitempty"`      // 业务标签
 	Heartbeat time.Duration     `json:"heartbeat,omitempty"` // 心跳间隔，默认 15s
+	// MTLS 启用 mTLS 模式（wss:// + 客户端证书）。为 true 时 Token 作为 enrollment token（首次），
+	// 证书获取后用 mTLS 连接，不再用 token。为 false 时走 ws://+token 明文模式（向后兼容）。
+	MTLS      bool              `json:"mtls,omitempty"`
 	// MaxConcurrentTasks 最大并发执行任务数（C6 并发限流）。0 或负数表示不限。
 	// 默认 4，防止被并发任务打爆。
 	MaxConcurrentTasks int `json:"max_concurrent_tasks,omitempty"`
@@ -47,11 +50,22 @@ func DefaultConfig() Config {
 
 // configPath 返回配置文件路径：与可执行文件同目录的 config.json。
 func configPath() string {
+	return filepath.Join(exeDir(), "config.json")
+}
+
+// agentDataDir 返回 Agent 数据目录（与可执行文件同目录的 data/）。
+// 存放 mTLS 证书（agent.crt/agent.key/ca.crt）。
+func agentDataDir() string {
+	return filepath.Join(exeDir(), "data")
+}
+
+// exeDir 返回可执行文件所在目录。
+func exeDir() string {
 	exe, err := os.Executable()
 	if err != nil {
-		return "config.json"
+		return "."
 	}
-	return filepath.Join(filepath.Dir(exe), "config.json")
+	return filepath.Dir(exe)
 }
 
 // loadConfig 从配置文件加载（不存在则用默认值），并用 flag 覆盖。
@@ -86,14 +100,16 @@ func loadConfig(args []string) (cmd string, cfg Config, err error) {
 	cmd = args[0]
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	relayURL := fs.String("relay", cfg.RelayURL, "Relay 的 Agent WS 端点 URL")
-	token := fs.String("token", cfg.Token, "鉴权 token")
+	token := fs.String("token", cfg.Token, "鉴权 token / enrollment token（mTLS）")
 	agentID := fs.String("id", cfg.AgentID, "Agent ID")
+	mtls := fs.Bool("mtls", cfg.MTLS, "启用 mTLS 模式（wss://+客户端证书）")
 	if e := fs.Parse(args[1:]); e != nil {
 		return cmd, cfg, e
 	}
 	cfg.RelayURL = *relayURL
 	cfg.Token = *token
 	cfg.AgentID = *agentID
+	cfg.MTLS = *mtls
 	return cmd, cfg, nil
 }
 

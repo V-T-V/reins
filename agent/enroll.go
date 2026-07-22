@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/QiuShichang/go-rmm/proto"
@@ -120,10 +121,11 @@ func (a *AgentCerts) enroll(ctx context.Context, agentID, token string) error {
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 
 	// 3. POST /api/enroll
+	// A3 修复：relayURL 是 WS 端点（wss://host:port/agent），需转成 HTTP（https://host:port/api/enroll）
+	enrollURL := wsToHTTP(a.relayURL) + "/api/enroll"
 	enroll := proto.Enroll{AgentID: agentID, Token: token, CSRPEM: string(csrPEM)}
 	body, _ := json.Marshal(enroll)
-	url := a.relayURL + "/api/enroll"
-	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, "POST", enrollURL, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
@@ -182,4 +184,16 @@ func (a *AgentCerts) TLSConfig() *tls.Config {
 		ServerName:   "go-rmm-relay", // Relay 证书的 CN/SAN
 		MinVersion:   tls.VersionTLS12,
 	}
+}
+
+// wsToHTTP 把 WS 端点 URL 转成 HTTP base URL（剥掉 /agent 路径，换 scheme）。
+// "wss://host:7780/agent" → "https://host:7780"
+// "ws://host:7780/agent"  → "http://host:7780"
+func wsToHTTP(wsURL string) string {
+	u := wsURL
+	u = strings.Replace(u, "wss://", "https://", 1)
+	u = strings.Replace(u, "ws://", "http://", 1)
+	// 剥掉 /agent 后缀（enroll 是 HTTP REST，不在 WS 路径）
+	u = strings.TrimSuffix(u, "/agent")
+	return u
 }
