@@ -12,11 +12,17 @@ import (
 // 工作机制：
 //   - 任务到达时，查 cache；命中则直接回放缓存结果（不重复执行）。
 //   - 未命中则执行，执行后存入 cache。
-//   - cache 有 TTL（默认 10 分钟）自动清理，防止无限增长。
+//   - cache 有 TTL（默认 1 小时）自动清理，防止无限增长。
 //
 // 幂等键优先用 task.IdempotencyKey，否则用 TaskID。
+//
+// P2-12 改进：TTL 从 10 分钟延长到 1 小时，覆盖 Relay reaper 周期（30s×N）
+// 与大多数任务时长。内存缓存的局限：Agent 重启后失效——对此场景，Relay 侧的
+// reaper 对 acknowledged 任务用 timeout×3 阈值（最小 300s），给足时间让长任务
+// 完成，减少重启窗口期的重投。生产环境对非幂等任务（如"加用户"）应始终
+// 携带显式 IdempotencyKey 并设计为幂等操作。
 var idempotencyCache = &idemCache{
-	ttl: 10 * time.Minute,
+	ttl: time.Hour,
 }
 
 type idemCache struct {

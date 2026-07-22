@@ -119,3 +119,46 @@ func TestCASignAndVerifyCSR(t *testing.T) {
 func readFile(path string) ([]byte, error) {
 	return readFileOS(path)
 }
+
+// TestCRLPersistsAcrossRestart 验证 P1-3 修复：撤销状态跨 Relay 重启保留。
+func TestCRLPersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+
+	// 第一次：创建 CA，签发证书，撤销
+	ca1, _ := LoadOrCreateCA(dir)
+	csrPEM := genTestCSR(t, "agent-revoked")
+	certPEM, err := ca1.SignAgentCSR(csrPEM, "agent-revoked", time.Hour)
+	if err != nil {
+		t.Fatalf("签发失败: %v", err)
+	}
+	ca1.RevokeAgent("agent-revoked")
+
+	// 验证撤销生效
+	block, _ := pem.Decode(certPEM)
+	cert, _ := x509.ParseCertificate(block.Bytes)
+	if err := ca1.VerifyClientCert(cert); err == nil {
+		t.Fatal("撤销后应校验失败")
+	}
+
+	// 第二次：重新加载 CA（模拟 Relay 重启）
+	ca2, _ := LoadOrCreateCA(dir)
+
+	// P1-3 验证：撤销状态应保留
+	if err := ca2.VerifyClientCert(cert); err == nil {
+		t.Fatal("重启后撤销状态应保留，证书校验应失败")
+	}
+}
+
+// genTestCSR 生成测试用 CSR PEM。
+func genTestCSR(t *testing.T, agentID string) []byte {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	csrTmpl := &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: agentID},
+		DNSNames: []string{agentID},
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTmpl, key)
+	if err != nil {
+		t.Fatalf("创建 CSR 失败: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+}

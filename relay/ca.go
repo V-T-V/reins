@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -27,6 +28,9 @@ import (
 //
 // 根 CA 私钥落盘 data/ca-root.key（权限 0600），签发的 Agent 证书序列号记录在
 // revoked 列表（CRL）以支持撤销。
+//
+// D3 修复 P1-3：CRL（revoked/issued）持久化到 data/ca-state.json，
+// Relay 重启后撤销状态不丢失。
 type CA struct {
 	mu       sync.Mutex
 	rootCert *x509.Certificate
@@ -34,27 +38,31 @@ type CA struct {
 	caPEM    []byte
 	certPath string // 根证书落盘路径
 	keyPath  string // 根私钥落盘路径
+	statePath string // CRL 状态落盘路径（ca-state.json）
 
-	// 注册令牌：token → 绑定的 agentID（一次性，签发后删除）
+	// 注册令牌：token → 绑定的 agentID（一次性，签发后删除，不持久化）
 	tokens map[string]string
-	// 已签发证书：agentID → 序列号（用于撤销/查询）
+	// 已签发证书：agentID → 序列号（用于撤销/查询，持久化）
 	issued map[string]*big.Int
-	// 已撤销序列号
+	// 已撤销序列号（持久化）
 	revoked map[string]bool
 }
 
 // LoadOrCreateCA 加载现有 CA，不存在则自签创建。
 func LoadOrCreateCA(dataDir string) (*CA, error) {
 	ca := &CA{
-		certPath: filepath.Join(dataDir, "ca-root.crt"),
-		keyPath:  filepath.Join(dataDir, "ca-root.key"),
-		tokens:   make(map[string]string),
-		issued:   make(map[string]*big.Int),
-		revoked:  make(map[string]bool),
+		certPath:  filepath.Join(dataDir, "ca-root.crt"),
+		keyPath:   filepath.Join(dataDir, "ca-root.key"),
+		statePath: filepath.Join(dataDir, "ca-state.json"),
+		tokens:    make(map[string]string),
+		issued:    make(map[string]*big.Int),
+		revoked:   make(map[string]bool),
 	}
 
 	// 尝试加载现有 CA
 	if err := ca.load(); err == nil {
+		// 加载 CRL 状态（即使根证书加载成功，状态文件可能不存在——不致命）
+		_ = ca.loadState()
 		return ca, nil
 	}
 
@@ -215,6 +223,7 @@ func (c *CA) SignAgentCSR(csrPEM []byte, agentID string, ttl time.Duration) ([]b
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	c.issued[agentID] = serial
+	c.saveState() // D3：持久化签发记录
 	return certPEM, nil
 }
 
@@ -226,6 +235,7 @@ func (c *CA) RevokeAgent(agentID string) {
 		c.revoked[serial.String()] = true
 		delete(c.issued, agentID)
 	}
+	c.saveState() // D3：CRL 持久化，重启不丢
 }
 
 // IsRevoked 检查证书序列号是否已撤销。
@@ -254,3 +264,50 @@ func (c *CA) VerifyClientCert(cert *x509.Certificate) error {
 
 // readFileOS os.ReadFile 的薄封装（测试辅助）。
 func readFileOS(path string) ([]byte, error) { return os.ReadFile(path) }
+
+// caState 持久化的 CRL 状态（JSON）。
+type caState struct {
+	Issued  map[string]string `json:"issued"`  // agentID → serial hex
+	Revoked []string          `json:"revoked"` // serial hex 列表
+}
+
+// loadState 从 statePath 加载 issued/revoked。文件不存在视为空状态（不报错）。
+func (c *CA) loadState() error {
+	data, err := os.ReadFile(c.statePath)
+	if err != nil {
+		return nil // 文件不存在不报错
+	}
+	var st caState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return fmt.Errorf("CA 状态文件解析失败: %w", err)
+	}
+	for agentID, serialHex := range st.Issued {
+		serial := new(big.Int)
+		if _, ok := serial.SetString(serialHex, 16); ok {
+			c.issued[agentID] = serial
+		}
+	}
+	for _, serialHex := range st.Revoked {
+		c.revoked[serialHex] = true
+	}
+	return nil
+}
+
+// saveState 把 issued/revoked 持久化到 statePath。
+func (c *CA) saveState() {
+	st := caState{
+		Issued:  make(map[string]string, len(c.issued)),
+		Revoked: make([]string, 0, len(c.revoked)),
+	}
+	for aid, serial := range c.issued {
+		st.Issued[aid] = serial.Text(16)
+	}
+	for serial := range c.revoked {
+		st.Revoked = append(st.Revoked, serial)
+	}
+	data, err := json.Marshal(st)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(c.statePath, data, 0600)
+}
