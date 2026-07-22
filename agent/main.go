@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/QiuShichang/go-rmm/executors"
 )
 
 // usage 打印用法。
@@ -114,9 +116,9 @@ func runServiceFromConfig() {
 }
 
 // runForeground 前台调试模式。
-func runForeground(cfg Config, disp *dispatcher) {
+func runForeground(cfg Config, disp *executors.Dispatcher) {
 	log.Printf("[agent] 前台模式启动: agent_id=%s relay=%s caps=%v",
-		cfg.AgentID, cfg.RelayURL, disp.types())
+		cfg.AgentID, cfg.RelayURL, disp.Types())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	a := NewAgent(cfg, disp)
@@ -126,11 +128,6 @@ func runForeground(cfg Config, disp *dispatcher) {
 }
 
 // buildDispatcher 构造任务分发器，注册当前可用的执行器。
-//
-// 执行器在 Step 4 实现。此处先注册一个 echo 执行器用于联调，
-// 后续会替换为真实的 6 个执行器。
-func buildDispatcher(cfg Config) *dispatcher {
-	d := newDispatcher()
-	registerExecutors(d, cfg)
-	return d
+func buildDispatcher(cfg Config) *executors.Dispatcher {
+	return registerExecutors(cfg)
 }

@@ -9,12 +9,14 @@ import (
 	"syscall"
 
 	svc "github.com/kardianos/service"
+
+	"github.com/QiuShichang/go-rmm/executors"
 )
 
 // program 实现 svc.Interface，由 kardianos 在服务模式下驱动。
 type program struct {
 	cfg  Config
-	disp *dispatcher
+	disp *executors.Dispatcher
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -55,7 +57,7 @@ func serviceConfig(cfg Config) *svc.Config {
 }
 
 // runServiceMode 服务模式：由 SCM 调起，无子命令，从配置文件加载。
-func runServiceMode(cfg Config, disp *dispatcher) error {
+func runServiceMode(cfg Config, disp *executors.Dispatcher) error {
 	prog := &program{cfg: cfg, disp: disp}
 	s, err := svc.New(prog, serviceConfig(cfg))
 	if err != nil {

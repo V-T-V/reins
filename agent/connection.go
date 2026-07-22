@@ -9,16 +9,17 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/QiuShichang/go-rmm/executors"
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
 // Agent 主体：持有配置与 dispatcher，管理到 Relay 的反向连接。
 type Agent struct {
 	cfg     Config
-	disp    *dispatcher
+	disp    *executors.Dispatcher
 }
 
-func NewAgent(cfg Config, disp *dispatcher) *Agent {
+func NewAgent(cfg Config, disp *executors.Dispatcher) *Agent {
 	return &Agent{cfg: cfg, disp: disp}
 }
 
@@ -91,7 +92,7 @@ func (a *Agent) sendRegister(ctx context.Context, c *websocket.Conn) error {
 		Hostname:     hostname(),
 		OS:           runtimeGOOS() + "/" + runtimeGOARCH(),
 		Version:      version,
-		Capabilities: a.disp.types(),
+		Capabilities: a.disp.Types(),
 		Tags:         a.cfg.Tags,
 	}
 	env, err := proto.NewEnvelope(proto.TypeRegister, a.cfg.AgentID, "relay", reg)
@@ -177,7 +178,7 @@ func (a *Agent) handleTask(parent context.Context, c *websocket.Conn, env proto.
 			_ = c.Write(wctx, websocket.MessageText, pData)
 		}
 
-		result := a.disp.dispatch(ctx, task, progress)
+		result := a.disp.Dispatch(ctx, task, progress)
 		result.Duration = int(time.Since(start) / time.Millisecond)
 		result.TaskID = task.TaskID
 

@@ -1,4 +1,8 @@
-package main
+// Package executors 实现并注册 go-rmm 的 6 类任务执行器。
+//
+// 本包同时定义 Executor 接口与 Dispatcher（任务路由器），供 agent 包引用。
+// 依赖方向（单向）：agent → executors → {win32, vision, proto}。
+package executors
 
 import (
 	"context"
@@ -24,22 +28,23 @@ type Executor interface {
 // ProgressFunc 长任务上报进度。step 为当前步骤标识，percent 0-100。
 type ProgressFunc func(step, message string, percent int)
 
-// dispatcher 持有所有已注册的执行器，按任务类型路由。
-type dispatcher struct {
+// Dispatcher 持有所有已注册的执行器，按任务类型路由。
+type Dispatcher struct {
 	executors map[string]Executor
 }
 
-func newDispatcher() *dispatcher {
-	return &dispatcher{executors: make(map[string]Executor)}
+// New 构造空的 Dispatcher。
+func New() *Dispatcher {
+	return &Dispatcher{executors: make(map[string]Executor)}
 }
 
-// register 注册一个执行器。重复注册同一类型会覆盖（便于测试替换）。
-func (d *dispatcher) register(e Executor) {
+// Register 注册一个执行器。重复注册同一类型会覆盖（便于测试替换）。
+func (d *Dispatcher) Register(e Executor) {
 	d.executors[e.Type()] = e
 }
 
-// types 返回所有已注册的任务类型（用于注册时上报 capabilities）。
-func (d *dispatcher) types() []string {
+// Types 返回所有已注册的任务类型（用于注册时上报 capabilities）。
+func (d *Dispatcher) Types() []string {
 	out := make([]string, 0, len(d.executors))
 	for t := range d.executors {
 		out = append(out, t)
@@ -47,15 +52,25 @@ func (d *dispatcher) types() []string {
 	return out
 }
 
-// dispatch 路由并执行任务。未知类型返回失败结果。
-func (d *dispatcher) dispatch(ctx context.Context, task proto.TaskRequest, progress ProgressFunc) proto.TaskResult {
+// Dispatch 路由并执行任务。未知类型返回失败结果。
+func (d *Dispatcher) Dispatch(ctx context.Context, task proto.TaskRequest, progress ProgressFunc) proto.TaskResult {
 	e, ok := d.executors[task.Type]
 	if !ok {
 		return proto.TaskResult{
-			TaskID:  task.TaskID,
+			TaskID: task.TaskID,
 			Success: false,
 			Error:   "不支持的任务类型: " + task.Type,
 		}
 	}
 	return e.Exec(ctx, task.Payload, progress)
+}
+
+// --- 辅助：构造失败/成功结果 ---
+
+func fail(taskID, err string) proto.TaskResult {
+	return proto.TaskResult{TaskID: taskID, Success: false, Error: err}
+}
+
+func ok(taskID string) proto.TaskResult {
+	return proto.TaskResult{TaskID: taskID, Success: true, ExitCode: 0}
 }
