@@ -23,6 +23,7 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)    // C4 单任务详情+结果
 	mux.HandleFunc("POST /api/enroll-token", r.handleGenEnrollToken) // C7 生成注册令牌
 	mux.HandleFunc("POST /api/enroll", r.handleEnroll)               // C7 Agent 换证书
+	mux.HandleFunc("POST /api/agents/revoke", r.handleRevokeAgent)   // G2 撤销 Agent 证书
 	mux.HandleFunc("GET /api/events", r.handleSSE)
 	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
 	mux.HandleFunc("GET /healthz", r.handleHealthz) // D8 深度健康检查
@@ -632,4 +633,44 @@ func (r *Relay) handleEnroll(w http.ResponseWriter, req *http.Request) {
 	}
 	log.Printf("[ca] 签发证书 agent=%s (24h)", enroll.AgentID)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// POST /api/agents/revoke —— 撤销 Agent 证书（G2/A2 修复）。
+//
+// 请求体: {"agent_id": "agent-prod-01"}
+// 撤销后该 Agent 的 mTLS 握手会被 VerifyPeerCertificate 钩子拒绝（CRL 校验）。
+// 撤销状态持久化到 ca-state.json，Relay 重启不丢失。
+func (r *Relay) handleRevokeAgent(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	if r.ca == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("CA 未启用")))
+		return
+	}
+	var body struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.AgentID == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id 不能为空")))
+		return
+	}
+
+	r.ca.RevokeAgent(body.AgentID)
+	// 同时从在线注册表移除（若在线）
+	r.agents.Unregister(body.AgentID, r.agents.Conn(body.AgentID))
+	r.console.Broadcast(Event{
+		Kind:    proto.TypeAgentOffline,
+		AgentID: body.AgentID,
+		TS:      time.Now().UnixMilli(),
+	})
+	if r.audit != nil {
+		r.audit.Log(AuditEntry{Event: "agent_revoked", AgentID: body.AgentID, Detail: "证书撤销"})
+	}
+	log.Printf("[ca] 撤销 Agent %s 证书", body.AgentID)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agent_id": body.AgentID,
+		"status":   "revoked",
+	})
 }

@@ -187,3 +187,31 @@ func TestEnrollmentTokenExpires(t *testing.T) {
 		t.Fatal("过期的令牌应校验失败")
 	}
 }
+
+// TestRevokeAgentAPI 验证 G2/A2：撤销后 VerifyClientCert 拒绝。
+func TestRevokeAgentAPI(t *testing.T) {
+	dir := t.TempDir()
+	ca, _ := LoadOrCreateCA(dir)
+
+	// 签发证书
+	csrPEM := genTestCSR(t, "agent-revoke-api")
+	certPEM, err := ca.SignAgentCSR(csrPEM, "agent-revoke-api", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(certPEM)
+	cert, _ := x509.ParseCertificate(block.Bytes)
+
+	// 撤销前：校验通过
+	if err := ca.VerifyClientCert(cert); err != nil {
+		t.Fatalf("撤销前应通过: %v", err)
+	}
+
+	// 撤销
+	ca.RevokeAgent("agent-revoke-api")
+
+	// 撤销后：校验失败
+	if err := ca.VerifyClientCert(cert); err == nil {
+		t.Fatal("撤销后 VerifyClientCert 应失败")
+	}
+}

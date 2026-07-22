@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -68,15 +69,27 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// C8：mTLS 模式配置 TLSConfig（要求客户端证书）
+	// C8/G2：mTLS 模式配置 TLSConfig（要求客户端证书 + CRL 校验）
 	if cfg.MTLS && relay.ca != nil {
+		ca := relay.ca
 		srv.TLSConfig = &tls.Config{
-			// 要求并验证客户端证书：用内置 CA 校验
-			ClientCAs:  caCertPool(relay.ca),
+			ClientCAs:  caCertPool(ca),
 			ClientAuth: tls.RequireAndVerifyClientCert,
 			MinVersion: tls.VersionTLS12,
+			// G2 修复（A2）：标准库只验链与有效期，不查 CRL。
+			// 加 VerifyPeerCertificate 钩子，握手时调 CA.VerifyClientCert（含 IsRevoked）。
+			VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+				if len(rawCerts) == 0 {
+					return fmt.Errorf("无客户端证书")
+				}
+				cert, err := x509.ParseCertificate(rawCerts[0])
+				if err != nil {
+					return fmt.Errorf("客户端证书解析失败: %w", err)
+				}
+				return ca.VerifyClientCert(cert) // 含链校验 + CRL 撤销检查
+			},
 		}
-		log.Printf("[relay] mTLS 已启用：要求 Agent 客户端证书")
+		log.Printf("[relay] mTLS 已启用：要求 Agent 客户端证书 + CRL 撤销校验")
 	}
 
 	// 心跳超时清理 goroutine
