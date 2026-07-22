@@ -118,10 +118,10 @@ type Relay struct {
 
 func NewRelay(cfg Config) *Relay {
 	return &Relay{
-		cfg:    cfg,
-		agents: NewRegistry(),
-		// 命令策略默认启用（无配置即用 DefaultCommandPolicy）
-		policy: DefaultCommandPolicy(),
+		cfg:     cfg,
+		agents:  NewRegistry(),
+		console: NewEventBus(),
+		policy:  DefaultCommandPolicy(),
 	}
 }
 
