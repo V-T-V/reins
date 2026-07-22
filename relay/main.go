@@ -34,6 +34,17 @@ func main() {
 		log.Printf("[relay] 持久化已启用: %s", filepath.Join(dataDir(), "tasks.db"))
 	}
 
+	// C7：加载/创建内置 CA（启用 mTLS 时必需）
+	if cfg.MTLS {
+		ca, err := LoadOrCreateCA(dataDir())
+		if err != nil {
+			log.Printf("[relay] CA 初始化失败(mTLS 不可用): %v", err)
+		} else {
+			relay.WithCA(ca)
+			log.Printf("[relay] 内置 CA 已启用: %s", filepath.Join(dataDir(), "ca-root.crt"))
+		}
+	}
+
 	mux := http.NewServeMux()
 	relay.registerHTTP(mux)
 	mux.HandleFunc("/agent", relay.handleAgentWS)     // Agent 反向连接

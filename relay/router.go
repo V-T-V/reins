@@ -20,6 +20,8 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/tasks/cancel", r.handleCancelTask) // C6 取消任务
 	mux.HandleFunc("GET /api/tasks", r.handleListTasks)   // C4/F1 任务历史
 	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)    // C4 单任务详情+结果
+	mux.HandleFunc("POST /api/enroll-token", r.handleGenEnrollToken) // C7 生成注册令牌
+	mux.HandleFunc("POST /api/enroll", r.handleEnroll)               // C7 Agent 换证书
 	mux.HandleFunc("GET /api/events", r.handleSSE)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, "ok")
@@ -367,4 +369,83 @@ func errMap(err error) map[string]any {
 func writeSSE(w http.ResponseWriter, _ http.Flusher, event string, data any) {
 	payload, _ := json.Marshal(data)
 	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, payload)
+}
+
+// POST /api/enroll-token —— 管理员为指定 agentID 生成一次性注册令牌（C7）。
+//
+// 请求体: {"agent_id": "agent-host01"}
+// 响应: {"agent_id":"...", "token":"<32字节hex>", "expires_in":3600}
+func (r *Relay) handleGenEnrollToken(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	if r.ca == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("CA 未启用")))
+		return
+	}
+	var body struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.AgentID == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id 不能为空")))
+		return
+	}
+	token, err := r.ca.GenerateEnrollmentToken(body.AgentID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errMap(err))
+		return
+	}
+	log.Printf("[ca] 为 %s 生成注册令牌", body.AgentID)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agent_id":   body.AgentID,
+		"token":      token,
+		"expires_in": 3600,
+	})
+}
+
+// POST /api/enroll —— Agent 用一次性令牌 + CSR 换取客户端证书（C7）。
+//
+// 请求体: proto.Enroll
+// 响应: proto.EnrollResp
+func (r *Relay) handleEnroll(w http.ResponseWriter, req *http.Request) {
+	if r.ca == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("CA 未启用")))
+		return
+	}
+	var enroll proto.Enroll
+	if err := json.NewDecoder(req.Body).Decode(&enroll); err != nil {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("请求体解析失败: %w", err)))
+		return
+	}
+	if enroll.AgentID == "" || enroll.Token == "" || enroll.CSRPEM == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id/token/csr_pem 不能为空")))
+		return
+	}
+
+	// 校验令牌（一次性，校验后作废）
+	if !r.ca.ValidateEnrollmentToken(enroll.Token, enroll.AgentID) {
+		log.Printf("[ca] 注册拒绝: 无效令牌 agent=%s", enroll.AgentID)
+		writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("无效或已使用的注册令牌")))
+		return
+	}
+
+	// 签发证书（24h）
+	const certTTL = 24 * time.Hour
+	certPEM, err := r.ca.SignAgentCSR([]byte(enroll.CSRPEM), enroll.AgentID, certTTL)
+	if err != nil {
+		log.Printf("[ca] 签发失败 agent=%s: %v", enroll.AgentID, err)
+		writeJSON(w, http.StatusInternalServerError, errMap(err))
+		return
+	}
+
+	resp := proto.EnrollResp{
+		AgentID:   enroll.AgentID,
+		CertPEM:   string(certPEM),
+		CAPEM:     string(r.ca.CAPEM()),
+		ExpiresAt: time.Now().Add(certTTL).Unix(),
+		Success:   true,
+	}
+	log.Printf("[ca] 签发证书 agent=%s (24h)", enroll.AgentID)
+	writeJSON(w, http.StatusOK, resp)
 }

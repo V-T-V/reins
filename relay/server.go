@@ -110,6 +110,7 @@ type Relay struct {
 	agents  *Registry
 	console *EventBus
 	store   *Store // 任务持久化（R2/F1），可为 nil（关闭持久化）
+	ca      *CA    // 内置 CA（C7 身份认证），可为 nil（关闭 mTLS）
 }
 
 func NewRelay(cfg Config) *Relay {
@@ -123,6 +124,12 @@ func NewRelay(cfg Config) *Relay {
 // WithStore 注入持久化存储（C4）。
 func (r *Relay) WithStore(s *Store) *Relay {
 	r.store = s
+	return r
+}
+
+// WithCA 注入内置 CA（C7）。
+func (r *Relay) WithCA(ca *CA) *Relay {
+	r.ca = ca
 	return r
 }
 
