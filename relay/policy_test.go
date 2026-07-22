@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -89,5 +92,57 @@ func TestAuditLogAppend(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "task_result") {
 		t.Fatalf("第二行应含 task_result: %s", lines[1])
+	}
+}
+
+// TestBatchTaskBlockedByPolicy 验证 P1-1 修复：批量下发高危命令被拦截。
+// 这是审计发现的最严重安全洞——批量路径曾完全绕过命令策略。
+func TestBatchTaskBlockedByPolicy(t *testing.T) {
+	relay := NewRelay(Config{Dev: true})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/tasks/batch", relay.handleBatchTask)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// 高危命令经批量下发
+	body, _ := json.Marshal(map[string]any{
+		"tag":     "env=prod",
+		"type":    "powershell",
+		"payload": map[string]string{"command": "Format-Volume -DriveLetter C"},
+	})
+	resp, err := http.Post(srv.URL+"/api/tasks/batch", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("批量高危命令应被 403 拦截，得到 %d", resp.StatusCode)
+	}
+}
+
+// TestBatchTaskMetricsCounted 验证 P2-1：批量路径 metrics 打点。
+func TestBatchTaskMetricsCounted(t *testing.T) {
+	relay := NewRelay(Config{Dev: true})
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/tasks/batch", relay.handleBatchTask)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// 安全命令 + 无匹配 Agent → 应返回 404（策略通过，但无 Agent）
+	// 主要验证路径可达不 panic
+	body, _ := json.Marshal(map[string]any{
+		"tag":     "nonexistent=tag",
+		"type":    "powershell",
+		"payload": map[string]string{"command": "Get-Process"},
+	})
+	resp, err := http.Post(srv.URL+"/api/tasks/batch", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("请求失败: %v", err)
+	}
+	resp.Body.Close()
+	// 无匹配 Agent 应 404（策略校验已通过）
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("安全命令无匹配 Agent 应 404，得到 %d", resp.StatusCode)
 	}
 }

@@ -85,6 +85,17 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// P1-1 修复（致命安全洞）：批量下发必须经过命令策略校验，否则可绕过 S4 下发 Format-Volume
+	if err := r.policy.CheckPayload(body.Type, body.Payload); err != nil {
+		log.Printf("[policy] 批量任务被拦截 tag=%s type=%s: %v", body.Tag, body.Type, err)
+		metrics.Inc("blocked")
+		if r.audit != nil {
+			r.audit.Log(AuditEntry{Event: "task_blocked", Type: body.Type, Detail: "batch:" + body.Tag + " " + err.Error()})
+		}
+		writeJSON(w, http.StatusForbidden, errMap(err))
+		return
+	}
+
 	// 找匹配 Agent
 	agentIDs := r.agents.FindByTag(body.Tag)
 	if len(agentIDs) == 0 {
@@ -103,6 +114,8 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 			Payload: body.Payload,
 			Timeout: body.Timeout,
 		}
+		// P2-1 修复：批量路径补 metrics 打点
+		metrics.Inc("submitted")
 		// 持久化 + 投递（复用 handlePostTask 的逻辑）
 		if r.store != nil {
 			r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: time.Now().UnixMilli()})
