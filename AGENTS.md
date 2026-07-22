@@ -29,8 +29,8 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
 
 ## 当前情况（Status）
 
-- **完成度**：**P3 收尾加固完成**——状态机原子性 + maxAttempts 兜底 + enroll 过期 + 端到端护栏，可靠性声明无懈可击
-- **代码规模**：57 个 Go 文件，约 7500 行；13 个测试文件全绿；28 个 commit（P0×6 + P1×10 + P2×8 + P3×4）
+- **完成度**：**P4 全局一致性修复完成**——mTLS 接线 + CRL 校验 + 死代码清理，文档与实现对齐
+- **代码规模**：60 个 Go 文件，约 8100 行；16 个测试文件全绿；36 个 commit（P0×6 + P1×10 + P2×8 + P3×4 + Perf×4 + P4×4）
 - **P0 基础**（已稳定）：
   - **协议层**（`proto/`）：Envelope 信封 + 13 种消息类型 + 6 种任务载荷 + 幂等键 + type 校验
   - **Relay 中继**（`relay/`）：WS 连接池 + REST API + SSE 事件流 + 心跳超时清理（Sweep 主动关连接）
@@ -55,6 +55,15 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
   - **enroll token 过期**：加 createdAt + 1h TTL 校验（W4，对齐前端 expires_in:3600，修复"撒谎 bug"）
   - **reaper 周期**：30s→15s（W2，降低短任务回退延迟）
   - **端到端护栏**：3 条核心链路 E2E 测试——reaper 回退闭环 / NACK 链路 / 状态机 vs reaper 交互（W3）
+- **Perf 性能优化**（数据驱动）：
+  - **状态索引**：ListTasksByStatus 走 bucketTasksByStatus 索引（F1，55x 延迟提升）
+  - **命令策略预过滤**：PolicyCheck 用 strings.Contains 快速跳过正则（F2，28x 延迟提升）
+  - **bbolt fsync**：评估后不改（8ms 是可靠性保证，125 写/s 远超 RMM 需求）
+  - **性能基线**：BENCHMARK.md + 9 个 benchmark
+- **P4 全局一致性修复**（文档与实现对齐）：
+  - **mTLS 接线**：Agent 侧 enroll/mTLS 整条链接入（G1/A1，原为死代码）+ enroll URL 转换修复（G1/A3）
+  - **CRL 校验**：Relay mTLS 加 VerifyPeerCertificate 钩子 + 撤销 API（G2/A2，原撤销完全失效）
+  - **协议清理**：TypeEnrollResp/TypeError 标注为 HTTP/预留（G3/A4）
 - **已知限制**：
   - 文件任务限 10MB（WS 帧，P2 改分块流）
   - browse 执行器需 Chrome 环境（`-tags browse` 编译启用）

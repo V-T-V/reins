@@ -94,4 +94,4 @@ bin/go-rmm-console -addr :7781 -relay http://127.0.0.1:7780
 
 ## 状态
 
-P3 完成（4 轮优化：基础→安全可靠→漏洞修复→收尾加固）。详见 [`AGENTS.md` 当前情况](./AGENTS.md#当前情况status)。
+P4 完成（6 轮优化：基础→安全可靠→漏洞修复→收尾加固→性能→一致性修复）。详见 [`AGENTS.md` 当前情况](./AGENTS.md#当前情况status)。

@@ -42,10 +42,12 @@ const (
 	// TypeTaskNack —— Agent→Relay：任务无法执行（pool 满/连接断），Relay 应回退 pending。
 	TypeTaskNack = "task_nack"
 	// TypeEnroll —— Agent→Relay：用一次性注册令牌换取客户端证书（mTLS 引导）。
+	// 注：enroll 实际走 HTTP POST /api/enroll（非 WS 消息），此常量保留供协议文档一致性。
 	TypeEnroll = "enroll"
 	// TypeEnrollResp —— Relay→Agent：签发的证书 + CA 证书。
+	// 注：实际通过 HTTP 响应体返回（EnrollResp JSON），不走 WS。常量保留供文档引用。
 	TypeEnrollResp = "enroll_resp"
-	// TypeError —— 任意方→对方：协议级错误（未知类型、鉴权失败等）。
+	// TypeError —— 任意方→对方：协议级错误（预留，当前未使用，P4 可用于鉴权失败等场景）。
 	TypeError = "error"
 )
 
