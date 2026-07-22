@@ -131,3 +131,72 @@ func TestStoreListTasksLimit(t *testing.T) {
 		t.Fatalf("limit=3 应返回 3 个，有 %d", len(limited))
 	}
 }
+
+// TestStatusIndexConsistency 验证 C2/F1：多次状态翻动后索引与主表一致。
+// 这是 F1 状态索引优化的关键回归保护——确保 SaveTask/UpdateTaskStatus
+// 维护的 bucketTasksByStatus 索引在多次变更后不残留旧状态、不丢失新状态。
+func TestStatusIndexConsistency(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := OpenStore(filepath.Join(dir, "idx.db"))
+	defer s.Close()
+
+	task := proto.TaskRequest{TaskID: "idx-task", Type: proto.TaskPowerShell, AgentID: "a"}
+	s.SaveTask(StoredTask{Request: task, Status: StatusPending})
+
+	// 多次状态翻动
+	transitions := []string{
+		StatusDispatched, StatusAcknowledged, StatusCompleted,
+	}
+	for _, target := range transitions {
+		if err := s.UpdateTaskStatus("idx-task", target); err != nil {
+			t.Fatalf("转换到 %s 失败: %v", target, err)
+		}
+		// 每次翻动后验证：旧状态索引不含此任务，新状态索引含此任务
+		for _, st := range []string{StatusPending, StatusDispatched, StatusAcknowledged, StatusCompleted, StatusFailed} {
+			got, _ := s.ListTasksByStatus(st)
+			found := false
+			for _, g := range got {
+				if g.Request.TaskID == "idx-task" {
+					found = true
+				}
+			}
+			if st == target && !found {
+				t.Fatalf("状态 %s 索引应含 idx-task（当前态=%s）", st, target)
+			}
+			if st != target && found {
+				t.Fatalf("状态 %s 索引不应含 idx-task（当前态=%s，残留旧索引）", st, target)
+			}
+		}
+	}
+
+	// 最终态 completed 后，UpdateTaskStatus 应拒绝再变更（终态锁）
+	if err := s.UpdateTaskStatus("idx-task", StatusPending); err == nil {
+		t.Fatal("终态 completed 后不应允许变更")
+	}
+}
+
+// TestStatusIndexMultipleTasks 验证多任务场景下索引正确隔离。
+func TestStatusIndexMultipleTasks(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := OpenStore(filepath.Join(dir, "multi.db"))
+	defer s.Close()
+
+	// 3 个任务不同状态
+	s.SaveTask(StoredTask{Request: proto.TaskRequest{TaskID: "t1"}, Status: StatusPending})
+	s.SaveTask(StoredTask{Request: proto.TaskRequest{TaskID: "t2"}, Status: StatusDispatched})
+	s.SaveTask(StoredTask{Request: proto.TaskRequest{TaskID: "t3"}, Status: StatusCompleted})
+
+	pending, _ := s.ListTasksByStatus(StatusPending)
+	dispatched, _ := s.ListTasksByStatus(StatusDispatched)
+	completed, _ := s.ListTasksByStatus(StatusCompleted)
+
+	if len(pending) != 1 || pending[0].Request.TaskID != "t1" {
+		t.Fatalf("pending 应只有 t1，得到 %+v", pending)
+	}
+	if len(dispatched) != 1 || dispatched[0].Request.TaskID != "t2" {
+		t.Fatalf("dispatched 应只有 t2，得到 %+v", dispatched)
+	}
+	if len(completed) != 1 || completed[0].Request.TaskID != "t3" {
+		t.Fatalf("completed 应只有 t3，得到 %+v", completed)
+	}
+}
