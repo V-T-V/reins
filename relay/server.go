@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -62,14 +63,20 @@ type Event struct {
 }
 
 // EventBus 订阅/广播模型。
+//
+// D7：慢消费者丢弃计数（atomic），通过 Dropped() 暴露，metrics 反映。
 type EventBus struct {
 	mu          sync.RWMutex
 	subscribers map[string]chan Event // subID → channel
+	dropped     int64                // 累计丢弃事件数
 }
 
 func NewEventBus() *EventBus {
 	return &EventBus{subscribers: make(map[string]chan Event)}
 }
+
+// Dropped 返回累计丢弃的事件数。
+func (b *EventBus) Dropped() int64 { return atomic.LoadInt64(&b.dropped) }
 
 // Subscribe 创建一个订阅，返回 subID 与只读 channel。
 // buf 为 channel 缓冲大小；满则广播时丢弃该订阅的事件（避免慢消费者阻塞全局）。
@@ -91,7 +98,7 @@ func (b *EventBus) Unsubscribe(id string) {
 	b.mu.Unlock()
 }
 
-// Broadcast 向所有订阅者非阻塞投递。慢消费者丢事件并记录。
+// Broadcast 向所有订阅者非阻塞投递。慢消费者丢事件并计数（D7）。
 func (b *EventBus) Broadcast(ev Event) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -99,6 +106,7 @@ func (b *EventBus) Broadcast(ev Event) {
 		select {
 		case ch <- ev:
 		default:
+			atomic.AddInt64(&b.dropped, 1)
 			log.Printf("[eventbus] 订阅者队列满，丢弃事件 %s", ev.Kind)
 		}
 	}
@@ -258,6 +266,7 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			// C5：任务 ACK，更新状态
 			var ack proto.TaskAck
 			if err := env.Decode(&ack); err == nil && r.store != nil {
+				metrics.Inc("acked") // D7
 				if t, err := r.store.GetTask(ack.TaskID); err == nil && t != nil {
 					t.Status = StatusAcknowledged
 					_ = r.store.SaveTask(*t)
@@ -269,6 +278,7 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			// D5：UpdateTaskStatus 自带终态校验
 			var nack proto.TaskNack
 			if err := env.Decode(&nack); err == nil && r.store != nil {
+				metrics.Inc("nacked") // D7
 				if err := r.store.UpdateTaskStatus(nack.TaskID, StatusPending); err == nil {
 					log.Printf("[task] 收到 NACK task=%s reason=%s，回退 pending",
 						nack.TaskID, nack.Reason)

@@ -211,7 +211,9 @@ func (r *Relay) handleCancelTask(w http.ResponseWriter, req *http.Request) {
 
 	// 更新持久化状态（D5：状态机校验，终态不可变更）
 	if r.store != nil {
-		_ = r.store.UpdateTaskStatus(body.TaskID, StatusCancelled)
+		if err := r.store.UpdateTaskStatus(body.TaskID, StatusCancelled); err == nil {
+			metrics.Inc("cancelled") // D7
+		}
 	}
 	log.Printf("[task] 取消 task=%s → agent=%s", body.TaskID, agentID)
 	writeJSON(w, http.StatusAccepted, map[string]any{

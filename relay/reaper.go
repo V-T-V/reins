@@ -47,6 +47,7 @@ func (r *Relay) reapStaleTasks() {
 			t.Status = StatusPending
 			if err := r.store.SaveTask(t); err == nil {
 				reapedDispatched++
+				metrics.Inc("reaped") // D7
 				log.Printf("[reaper] 回退 dispatched→pending task=%s (超时 %ds)",
 					t.Request.TaskID, (now-t.UpdatedAt)/1000)
 				// 尝试立即补投（若 Agent 在线）
@@ -71,6 +72,7 @@ func (r *Relay) reapStaleTasks() {
 			t.Status = StatusPending
 			if err := r.store.SaveTask(t); err == nil {
 				reapedAck++
+				metrics.Inc("reaped") // D7
 				log.Printf("[reaper] 回退 acknowledged→pending task=%s (超时 %ds，Agent 可能崩溃)",
 					t.Request.TaskID, (now-t.UpdatedAt)/1000)
 				r.tryRedispatch(t)
