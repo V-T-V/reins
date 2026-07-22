@@ -1,0 +1,28 @@
+# 构建产物
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylog
+
+# 测试/运行时产物
+*.png
+*.jpg
+*.log
+testdata/out/
+
+# 本地配置（含 token/key，不入库）
+config.local.json
+*.local.json
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store

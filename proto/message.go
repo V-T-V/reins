@@ -1,0 +1,210 @@
+// Package proto 定义 go-rmm 三组件（Relay / Agent / Console）共享的通信协议。
+//
+// 所有 WebSocket 与 HTTP 消息都使用统一的 Envelope 信封包装，通过 Type 字段区分种类，
+// Payload 为原始 JSON，由收件方按 Type 反序列化为对应结构体。
+//
+// 消息流向：
+//
+//	Agent  ──register/heartbeat/task_result/task_progress──►  Relay
+//	Agent  ◄──────────────── task_request ──────────────────  Relay
+//	Console ──(HTTP POST /api/tasks) task_request────────────►  Relay
+//	Console ◄───(SSE) task_result/task_progress/agent_*──────  Relay
+package proto
+
+import (
+	"encoding/json"
+	"time"
+)
+
+// 协议版本
+const Version = 1
+
+// 消息类型常量。新增类型时务必同步更新 Is* 辅助函数与各组件的分发逻辑。
+const (
+	// TypeRegister —— Agent→Relay：连接建立后首条消息，登记身份与能力。
+	TypeRegister = "register"
+	// TypeHeartbeat —— Agent→Relay：周期心跳，维持连接与在线判定。
+	TypeHeartbeat = "heartbeat"
+	// TypeTaskRequest —— Console→Relay→Agent：下发任务。
+	TypeTaskRequest = "task_request"
+	// TypeTaskResult —— Agent→Relay→Console：任务终态结果。
+	TypeTaskResult = "task_result"
+	// TypeTaskProgress —— Agent→Relay→Console：长任务流式进度。
+	TypeTaskProgress = "task_progress"
+	// TypeAgentOnline —— Relay→Console：Agent 上线通知。
+	TypeAgentOnline = "agent_online"
+	// TypeAgentOffline —— Relay→Console：Agent 离线通知。
+	TypeAgentOffline = "agent_offline"
+	// TypeError —— 任意方→对方：协议级错误（未知类型、鉴权失败等）。
+	TypeError = "error"
+)
+
+// 任务类型常量，与 TaskRequest.Type 取值对应。
+const (
+	TaskPowerShell = "powershell" // 执行 PowerShell 命令
+	TaskScript     = "script"     // 执行下发的 .ps1/.bat 脚本
+	TaskFile       = "file"       // 文件上传/下载
+	TaskScreenshot = "screenshot" // 窗口/全屏截图
+	TaskBrowse     = "browse"     // headless 浏览器自动化
+	TaskGUIClick   = "guiclick"   // 视觉驱动的桌面 GUI 点击
+)
+
+// 默认任务超时（秒）。TaskRequest.Timeout 为 0 时使用此值。
+const DefaultTaskTimeout = 60
+
+// Envelope 是所有消息的统一信封。
+//
+// 设计要点：
+//   - Payload 用 json.RawMessage 延迟解码，允许 Relay 仅做路由而不关心具体载荷。
+//   - To 为 "*" 时表示广播（仅用于 agent_online/offline 等通知）。
+//   - ID 由发送方生成（UUIDv4），ReplyTo 用于结果/进度回填对应请求。
+type Envelope struct {
+	Version int             `json:"v"`                 // 协议版本，当前 1
+	Type    string          `json:"type"`              // 消息类型，取 Type* 常量
+	From    string          `json:"from"`              // 发送方 ID（agent-xxx / console-xxx / relay）
+	To      string          `json:"to,omitempty"`      // 接收方 ID；"*" 表示广播
+	ID      string          `json:"id"`                // 消息 ID（UUIDv4）
+	ReplyTo string          `json:"reply_to,omitempty"` // 对应请求的 ID（结果/进度回填）
+	Payload json.RawMessage `json:"payload,omitempty"` // 按 Type 反序列化
+	TS      int64           `json:"ts"`                // Unix 毫秒时间戳
+}
+
+// NewEnvelope 构造一个带默认字段的信封。payload 可为 nil。
+func NewEnvelope(typ, from, to string, payload any) (Envelope, error) {
+	env := Envelope{
+		Version: Version,
+		Type:    typ,
+		From:    from,
+		To:      to,
+		ID:      uuidString(),
+		TS:      time.Now().UnixMilli(),
+	}
+	if payload != nil {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return Envelope{}, err
+		}
+		env.Payload = raw
+	}
+	return env, nil
+}
+
+// Decode 把信封的 Payload 反序列化到 v。
+func (e Envelope) Decode(v any) error {
+	if len(e.Payload) == 0 {
+		return nil
+	}
+	return json.Unmarshal(e.Payload, v)
+}
+
+// --- Agent 注册与心跳 ---
+
+// Register 由 Agent 在连接建立后发送，登记身份与支持的任务类型。
+type Register struct {
+	AgentID      string            `json:"agent_id"`              // Agent 唯一 ID
+	Hostname     string            `json:"hostname"`              // 主机名
+	OS           string            `json:"os"`                    // runtime.GOOS/runtime.GOARCH
+	Version      string            `json:"version"`               // Agent 二进制版本
+	Capabilities []string          `json:"capabilities"`          // 支持的任务类型列表
+	Tags         map[string]string `json:"tags,omitempty"`        // 业务自定义标签
+}
+
+// Heartbeat 心跳载荷。Seq 为递增序号，用于检测丢包。
+type Heartbeat struct {
+	AgentID string `json:"agent_id"`
+	Seq     int64  `json:"seq"`
+}
+
+// --- 任务请求与结果 ---
+
+// TaskRequest 由控制台构造，经 Relay 路由到指定 Agent。
+type TaskRequest struct {
+	TaskID   string          `json:"task_id"`         // 任务唯一 ID（UUIDv4）
+	Type     string          `json:"type"`            // 任务类型，取 Task* 常量
+	AgentID  string          `json:"agent_id"`        // 目标 Agent ID
+	Payload  json.RawMessage `json:"payload"`         // 按 Type 反序列化
+	Timeout  int             `json:"timeout"`         // 秒，0 表示用 DefaultTaskTimeout
+	Priority int             `json:"priority,omitempty"` // 0-9，预留
+}
+
+// TaskResult 任务终态结果。
+type TaskResult struct {
+	TaskID   string          `json:"task_id"`
+	Success  bool            `json:"success"`
+	Stdout   string          `json:"stdout,omitempty"`
+	Stderr   string          `json:"stderr,omitempty"`
+	ExitCode int             `json:"exit_code"`
+	Data     json.RawMessage `json:"data,omitempty"` // 结构化结果（截图 base64、元素坐标等）
+	Duration int             `json:"duration_ms"`
+	Error    string          `json:"error,omitempty"`
+}
+
+// TaskProgress 长任务（browse/guiclick）的流式进度。
+type TaskProgress struct {
+	TaskID  string `json:"task_id"`
+	Step    string `json:"step"`    // 当前步骤标识
+	Message string `json:"message"` // 人类可读描述
+	Percent int    `json:"percent"` // 0-100
+}
+
+// --- 各任务类型的 Payload ---
+
+// PowerShellTask 执行内联 PowerShell 命令。
+type PowerShellTask struct {
+	Command        string `json:"command"`                 // PowerShell 命令文本
+	ExecutionPolicy string `json:"execution_policy,omitempty"` // 默认 Bypass
+}
+
+// ScriptTask 执行下发的脚本文件。
+type ScriptTask struct {
+	Lang    string `json:"lang"`    // "ps1" 或 "bat"
+	Content string `json:"content"` // 脚本文本（含中文需 UTF-8 BOM，Agent 负责）
+}
+
+// FileTask 文件上传/下载。
+type FileTask struct {
+	Op         string `json:"op"`          // "upload"（写文件）或 "download"（读文件）
+	Path       string `json:"path"`        // 目标机绝对路径
+	ContentB64 string `json:"content_b64"` // upload 时为 base64 编码的文件内容
+}
+
+// ScreenshotTask 截图任务。
+type ScreenshotTask struct {
+	Target   string `json:"target,omitempty"`   // 进程名或窗口标题（模糊匹配），空则全屏
+	Hwnd     int64  `json:"hwnd,omitempty"`     // 直接指定窗口句柄（优先级高于 Target）
+	Full     bool   `json:"full,omitempty"`     // 强制全屏 CopyFromScreen
+	Activate bool   `json:"activate,omitempty"` // 截图前激活窗口到前台
+}
+
+// BrowseTask headless 浏览器自动化。
+type BrowseTask struct {
+	URL     string          `json:"url"`     // 起始 URL
+	Actions []BrowseAction  `json:"actions"` // 有序动作序列
+}
+type BrowseAction struct {
+	Op    string `json:"op"`              // navigate/click/fill/wait/screenshot/eval
+	Value string `json:"value,omitempty"` // 选择器、文本、URL、JS 表达式
+	Wait  int    `json:"wait,omitempty"`  // 动作后等待毫秒数
+}
+
+// GUIClickTask 视觉驱动的桌面点击。
+type GUIClickTask struct {
+	Intent   string `json:"intent"`            // 自然语言意图描述（如"点击登录按钮"）
+	Target   string `json:"target,omitempty"`  // 目标窗口进程名/标题（限定截图范围）
+	MaxSteps int    `json:"max_steps,omitempty"` // 最大交互步数，默认 5
+}
+
+// --- 错误 ---
+
+// ErrorPayload 协议级错误载荷。
+type ErrorPayload struct {
+	Code    string `json:"code"`    // 机器可读错误码
+	Message string `json:"message"` // 人类可读描述
+}
+
+// --- 辅助 ---
+
+// uuidString 生成 UUIDv4 字符串。通过 google/uuid 实现。
+func uuidString() string {
+	return uuidNewString()
+}
