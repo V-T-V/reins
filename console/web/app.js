@@ -190,13 +190,15 @@
     }
   }
 
-  // --- SSE 订阅 ---
+  // --- SSE 订阅（D6: 加自动重连）---
   function subscribeSSE() {
     if (state.evtSource) state.evtSource.close();
     const es = new EventSource("/api/events");
     state.evtSource = es;
     es.addEventListener("hello", () => {
       document.getElementById("relay-info").textContent = "Relay: 已连接 ✓";
+      // 重连后补拉近期任务结果（防丢事件）
+      fetchRecentResults();
     });
     es.addEventListener("agent_online", (e) => {
       const data = JSON.parse(e.data).data;
@@ -219,9 +221,61 @@
       const data = JSON.parse(e.data).data;
       updatePending(data.task_id, { result: data });
     });
+    // D6 P2-4 修复：onerror 检测连接关闭后主动重连
     es.onerror = () => {
-      document.getElementById("relay-info").textContent = "Relay: 重连中...";
+      document.getElementById("relay-info").textContent = "Relay: 连接断开，3s 后重连...";
+      es.close();
+      setTimeout(subscribeSSE, 3000);
     };
+  }
+
+  // D6：重连后补拉近期任务结果（防 SSE 丢事件）
+  async function fetchRecentResults() {
+    try {
+      const r = await fetch("/api/tasks?limit=10");
+      const data = await r.json();
+      (data.tasks || []).forEach((t) => {
+        if (t.status === "completed" || t.status === "failed") {
+          updatePending(t.request.task_id, { result: { task_id: t.request.task_id, success: t.status === "completed" } });
+        }
+      });
+    } catch (e) {}
+  }
+
+  // D6：取消任务
+  window.__cancelTask = async function (taskId) {
+    if (!confirm("确认取消任务 " + taskId + "？")) return;
+    const agentID = state.selected || "";
+    try {
+      await fetch("/api/tasks/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task_id: taskId, agent_id: agentID, reason: "用户手动取消" }),
+      });
+    } catch (e) {
+      alert("取消失败: " + e.message);
+    }
+  };
+
+  // D6：metrics 面板轮询
+  async function refreshMetrics() {
+    try {
+      const r = await fetch("/api/metrics");
+      const m = await r.json();
+      const el = document.getElementById("metrics-panel");
+      if (el) {
+        el.innerHTML = `
+          <div class="metric"><span class="metric-label">在线 Agent</span><span class="metric-value">${m.agents_online}</span></div>
+          <div class="metric"><span class="metric-label">提交</span><span class="metric-value">${m.tasks_submitted}</span></div>
+          <div class="metric"><span class="metric-label">投递</span><span class="metric-value">${m.tasks_dispatched}</span></div>
+          <div class="metric"><span class="metric-label">完成</span><span class="metric-value ok">${m.tasks_completed}</span></div>
+          <div class="metric"><span class="metric-label">失败</span><span class="metric-value fail">${m.tasks_failed}</span></div>
+          <div class="metric"><span class="metric-label">拦截</span><span class="metric-value fail">${m.tasks_blocked}</span></div>
+          <div class="metric"><span class="metric-label">uptime</span><span class="metric-value">${m.uptime_seconds}s</span></div>
+          <div class="metric"><span class="metric-label">goroutines</span><span class="metric-value">${m.goroutines}</span></div>
+        `;
+      }
+    } catch (e) {}
   }
 
   // --- 结果流 ---
@@ -281,12 +335,16 @@
         ${r.duration_ms ? `<span class="ts">${r.duration_ms}ms</span>` : ""}${body}`;
     }
     if (item.pending) {
-      return `<span class="ts">[${ts}]</span> <strong>${esc(item.task_id)}</strong>
-        <span style="color:#d29922">⏳ 执行中 (${esc(item.type || "")})...</span>`;
+      const taskID = esc(item.task_id);
+      return `<span class="ts">[${ts}]</span> <strong>${taskID}</strong>
+        <span style="color:#d29922">⏳ 执行中 (${esc(item.type || "")})...</span>
+        <button class="cancel-btn" onclick="window.__cancelTask('${taskID}')">取消</button>`;
     }
     if (item.progress) {
-      return `<span class="ts">[${ts}]</span> <strong>${esc(item.progress.task_id)}</strong>
-        <span style="color:#58a6ff">${esc(item.progress.step)}: ${esc(item.progress.message)} (${item.progress.percent}%)</span>`;
+      const taskID = esc(item.progress.task_id);
+      return `<span class="ts">[${ts}]</span> <strong>${taskID}</strong>
+        <span style="color:#58a6ff">${esc(item.progress.step)}: ${esc(item.progress.message)} (${item.progress.percent}%)</span>
+        <button class="cancel-btn" onclick="window.__cancelTask('${taskID}')">取消</button>`;
     }
     return `<span class="ts">[${ts}]</span> ${esc(JSON.stringify(item))}`;
   }
@@ -305,5 +363,7 @@
   // --- 启动 ---
   refreshAgents();
   subscribeSSE();
+  refreshMetrics();
   setInterval(refreshAgents, 10000); // 兜底轮询
+  setInterval(refreshMetrics, 5000); // metrics 轮询
 })();

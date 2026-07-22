@@ -51,6 +51,15 @@
   .result-img { max-width: 100%; margin-top: 8px; border: 1px solid #30363d; border-radius: 4px; }
 
   .hint { color: #6e7681; font-size: 12px; margin-top: 8px; }
+  /* D6 metrics 面板 */
+  .metric { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 8px 12px; min-width: 90px; }
+  .metric-label { display: block; font-size: 11px; color: #8b949e; }
+  .metric-value { display: block; font-size: 18px; font-weight: 600; color: #e6edf3; margin-top: 2px; }
+  .metric-value.ok { color: #3fb950; }
+  .metric-value.fail { color: #f85149; }
+  /* D6 取消按钮 */
+  .cancel-btn { background: #da3633; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 11px; margin-left: 8px; }
+  .cancel-btn:hover { background: #f85149; }
 </style>
 </head>
 <body>
@@ -76,6 +85,11 @@
         <div class="panel-body" id="task-form-host">
           <div class="empty" id="no-agent-hint">请先在左侧选择一个 Agent</div>
         </div>
+      </div>
+      <!-- 运行指标 (D6) -->
+      <div class="panel">
+        <div class="panel-header">运行指标</div>
+        <div class="panel-body" id="metrics-panel" style="display:flex;flex-wrap:wrap;gap:16px"></div>
       </div>
       <!-- 实时结果 -->
       <div class="panel">
