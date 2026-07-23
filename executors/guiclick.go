@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/QiuShichang/go-rmm/proto"
@@ -150,6 +149,3 @@ func (e *GUIClickExecutor) Exec(ctx context.Context, payload []byte, progress Pr
 func dataURL(png []byte) string {
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 }
-
-// 确保 strings 被引用（未来扩展用）
-var _ = strings.Contains

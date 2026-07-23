@@ -988,8 +988,11 @@ func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	// Agent 会经 WS 发二进制帧（数据）和 JSON 帧（progress/complete）
-	// Relay 需要把二进制帧写入 HTTP response body
+	// B1 修复：不再直接 Read WS（会与 serveAgent 竞态），
+	// 改为注册 channel，serveAgent 的 Read 循环会路由二进制帧过来。
+	ch := conn.registerXferChannel(transferID)
+	defer conn.unregisterXferChannel(transferID)
+
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(path)))
 	w.WriteHeader(http.StatusOK)
@@ -997,30 +1000,23 @@ func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request)
 
 	totalWritten := int64(0)
 	for {
-		msgType, data, err := conn.conn.Read(ctx)
-		if err != nil {
-			break
-		}
-		if msgType == websocket.MessageBinary {
-			// 二进制帧 = 下载数据
-			_, isLast, payload, parseErr := parseRelayBinaryFrame(data)
-			if parseErr != nil {
-				continue
+		select {
+		case <-ctx.Done():
+			goto done
+		case data, ok := <-ch:
+			if !ok {
+				goto done // channel 关闭
 			}
-			if len(payload) > 0 {
-				w.Write(payload)
+			if len(data) > 0 {
+				w.Write(data)
 				if flusher != nil {
 					flusher.Flush()
 				}
-				totalWritten += int64(len(payload))
-			}
-			if isLast {
-				break
+				totalWritten += int64(len(data))
 			}
 		}
-		// JSON 帧 = progress/complete，忽略（Console 经 SSE 获取）
 	}
-
+done:
 	if r.audit != nil {
 		r.audit.Log(AuditEntry{Event: "file_download", AgentID: agentID, Detail: fmt.Sprintf("%s %d bytes", transferID, totalWritten)})
 	}

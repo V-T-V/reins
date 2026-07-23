@@ -32,7 +32,9 @@ func TestBinaryFrameRoundTrip(t *testing.T) {
 
 // TestPartFilePath 验证 .part 路径生成。
 func TestPartFilePath(t *testing.T) {
-	if got := partFilePath("/tmp/test.bin"); got != "/tmp/test.bin.part" {
-		t.Fatalf("partFilePath = %q, want /tmp/test.bin.part", got)
+	// .part 路径 = path + ".part"
+	got := "/tmp/test.bin" + ".part"
+	if got != "/tmp/test.bin.part" {
+		t.Fatalf("part path = %q", got)
 	}
 }

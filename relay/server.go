@@ -30,6 +30,47 @@ type wsConn struct {
 	biz  string // 业务身份：agentID 或 consoleID
 
 	writeMu sync.Mutex
+
+	// B1 修复：二进制帧路由——serveAgent 的 Read 循环拦截二进制帧，
+	// 按 transferID 路由到对应 channel，HTTP handler 从 channel 消费。
+	xferMu       sync.Mutex
+	xferChannels map[string]chan []byte // transferID → data channel
+}
+
+// registerXferChannel 注册一个传输数据通道，返回只读 channel。
+func (w *wsConn) registerXferChannel(transferID string) <-chan []byte {
+	w.xferMu.Lock()
+	defer w.xferMu.Unlock()
+	if w.xferChannels == nil {
+		w.xferChannels = make(map[string]chan []byte)
+	}
+	ch := make(chan []byte, 64)
+	w.xferChannels[transferID] = ch
+	return ch
+}
+
+// unregisterXferChannel 注销传输通道。
+func (w *wsConn) unregisterXferChannel(transferID string) {
+	w.xferMu.Lock()
+	defer w.xferMu.Unlock()
+	if ch, ok := w.xferChannels[transferID]; ok {
+		delete(w.xferChannels, transferID)
+		close(ch)
+	}
+}
+
+// routeXferData 把二进制帧路由到对应 transferID 的 channel。
+func (w *wsConn) routeXferData(transferID string, data []byte, isLast bool) {
+	w.xferMu.Lock()
+	ch, ok := w.xferChannels[transferID]
+	w.xferMu.Unlock()
+	if ok {
+		select {
+		case ch <- data:
+		default:
+			log.Printf("[xfer-relay] transferID %s channel 满，丢数据", transferID)
+		}
+	}
 }
 
 func (w *wsConn) writeJSON(ctx context.Context, v any) error {
@@ -235,7 +276,12 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			return
 		}
 		if msgType != websocket.MessageText {
-			continue // P0 仅处理文本（JSON）消息
+			// B1 修复：二进制帧 = 文件下载数据，路由到 transferID 的 channel
+			transferID, _, payload, parseErr := parseRelayBinaryFrame(data)
+			if parseErr == nil {
+				wc.routeXferData(transferID, payload, false)
+			}
+			continue
 		}
 		var env proto.Envelope
 		if err := json.Unmarshal(data, &env); err != nil {

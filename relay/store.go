@@ -308,6 +308,9 @@ func (s *Store) ListTasksByStatus(statuses ...string) ([]StoredTask, error) {
 
 // ListTasks 列出全部任务（最新在前），供审计/查询。
 func (s *Store) ListTasks(limit int) ([]StoredTask, error) {
+	if s.db == nil {
+		return nil, ErrStoreClosed
+	}
 	var out []StoredTask
 	err := s.db.View(func(tx *bolt.Tx) error {
 		c := tx.Bucket([]byte(bucketTasks)).Cursor()
@@ -327,6 +330,9 @@ func (s *Store) ListTasks(limit int) ([]StoredTask, error) {
 
 // DeleteTask 删除任务（通常不用，审计保留；测试可清）。同时清理状态索引。
 func (s *Store) DeleteTask(taskID string) error {
+	if s.db == nil {
+		return ErrStoreClosed
+	}
 	return s.db.Update(func(tx *bolt.Tx) error {
 		id := []byte(taskID)
 		// 先读当前状态以清理索引

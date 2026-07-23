@@ -125,8 +125,14 @@ func (s *Scheduler) schedule(rule CronRule) {
 	if s.cron == nil {
 		return
 	}
+	// M4 修复：闭包捕获 ruleID，每次触发重新加载最新规则（而非值拷贝）
+	ruleID := rule.ID
 	entryID, err := s.cron.AddFunc(rule.CronExpr, func() {
-		s.executeRule(rule)
+		latest := s.loadRuleByID(ruleID)
+		if latest == nil || !latest.Enabled {
+			return
+		}
+		s.executeRule(*latest)
 	})
 	if err != nil {
 		log.Printf("[scheduler] 规则 %s 调度失败: %v", rule.ID, err)
@@ -198,4 +204,18 @@ func (s *Scheduler) loadRules() []CronRule {
 		return nil
 	}
 	return s.store.LoadCronRules()
+}
+
+// loadRuleByID 按 ID 加载单条规则（M4 修复：闭包用此获取最新值）。
+func (s *Scheduler) loadRuleByID(ruleID string) *CronRule {
+	if s.store == nil {
+		return nil
+	}
+	rules := s.store.LoadCronRules()
+	for _, r := range rules {
+		if r.ID == ruleID {
+			return &r
+		}
+	}
+	return nil
 }

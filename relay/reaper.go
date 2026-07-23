@@ -46,12 +46,12 @@ func (r *Relay) reapStaleTasks() {
 		}
 		if now-t.UpdatedAt > int64(threshold) {
 			t.Status = StatusPending
+			t.UpdatedAt = now // m3 修复：刷新 UpdatedAt，否则下轮 reaper 立刻又判超时→无限循环
 			if err := r.store.SaveTask(t); err == nil {
 				reapedDispatched++
-				metrics.Inc("reaped") // D7
+				metrics.Inc("reaped")
 				log.Printf("[reaper] 回退 dispatched→pending task=%s (超时 %ds)",
 					t.Request.TaskID, (now-t.UpdatedAt)/1000)
-				// 尝试立即补投（若 Agent 在线）
 				r.tryRedispatch(t)
 			}
 		}
@@ -71,6 +71,7 @@ func (r *Relay) reapStaleTasks() {
 		}
 		if now-t.UpdatedAt > int64(threshold) {
 			t.Status = StatusPending
+			t.UpdatedAt = now // m3 修复：同上
 			if err := r.store.SaveTask(t); err == nil {
 				reapedAck++
 				metrics.Inc("reaped") // D7

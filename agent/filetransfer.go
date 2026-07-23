@@ -4,12 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -29,6 +27,27 @@ const TransferBufferSize = 256 * 1024
 type TransferEngine struct {
 	mu       sync.Mutex
 	sessions map[string]*transferSession
+	policy   *fileTransferPolicy // B3 修复：路径校验
+}
+
+// fileTransferPolicy 复用 executors.FilePolicy 的路径校验逻辑。
+// Agent 侧没有 executors 包依赖，这里用独立类型 + 注入校验函数。
+type fileTransferPolicy struct {
+	check func(string) error
+}
+
+// 全局实例。
+var transfers = &TransferEngine{
+	sessions: make(map[string]*transferSession),
+	policy:   &fileTransferPolicy{check: allowAllPaths}, // 默认放行，由 Agent 初始化时注入
+}
+
+// allowAllPaths 默认放行（向后兼容）。
+func allowAllPaths(string) error { return nil }
+
+// SetPolicy 注入路径校验函数（由 Agent 从 executors.FilePolicy 适配）。
+func (te *TransferEngine) SetPolicy(check func(string) error) {
+	te.policy = &fileTransferPolicy{check: check}
 }
 
 type transferSession struct {
@@ -47,12 +66,17 @@ type transferSession struct {
 // hashWriter 包装 sha256 使其实现 io.Writer。
 type hashWriter struct{ sum [32]byte; w io.Writer; h bool }
 
-// TransferEngine 全局实例。
-var transfers = &TransferEngine{sessions: make(map[string]*transferSession)}
-
 // HandleInit 处理 file_xfer_init：准备文件，返回 ready（含续传偏移）。
 func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTransferReady {
 	ready := proto.FileTransferReady{TransferID: init.TransferID}
+
+	// B3 修复：路径穿越校验（upload 和 download 都校验）
+	if te.policy != nil && te.policy.check != nil {
+		if err := te.policy.check(init.Path); err != nil {
+			ready.Reason = "路径策略拒绝: " + err.Error()
+			return ready
+		}
+	}
 
 	partPath := init.Path + ".part"
 	var resumeOffset int64 = 0
@@ -145,11 +169,20 @@ func (te *TransferEngine) ReceiveUploadData(transferID string, data []byte, isLa
 	}
 }
 
-// completeUpload 完成上传会话。
+// completeUpload 完成上传会话。失败时清理 .part 文件（M1 修复）。
 func (te *TransferEngine) completeUpload(id string, success bool, bytes int64, hashOrError string, cb func(proto.FileTransferComplete)) {
 	te.mu.Lock()
+	sess, hadSession := te.sessions[id]
 	delete(te.sessions, id)
 	te.mu.Unlock()
+	if !success && hadSession {
+		// M1 修复：上传失败删 .part 文件，防磁盘泄漏
+		partPath := sess.path + ".part"
+		os.Remove(partPath)
+		if sess.file != nil {
+			sess.file.Close()
+		}
+	}
 	if success {
 		cb(proto.FileTransferComplete{TransferID: id, Success: true, SHA256Actual: hashOrError, Bytes: bytes})
 		log.Printf("[xfer] 上传完成 %s: %d bytes sha256=%s", id, bytes, hashOrError[:16])
@@ -274,7 +307,9 @@ func (te *TransferEngine) computeFileHash(path string) string {
 	}
 	defer f.Close()
 	h := sha256.New()
-	io.Copy(h, f)
+	if _, err := io.Copy(h, f); err != nil { // M3 修复：不忽略错误
+		return ""
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -311,17 +346,3 @@ func parseBinaryFrame(frame []byte) (transferID string, isLast bool, data []byte
 	data = frame[2+idLen:]
 	return transferID, isLast, data, nil
 }
-
-// partFilePath 返回 .part 文件的完整路径。
-func partFilePath(finalPath string) string {
-	return finalPath + ".part"
-}
-
-// marshalJSON 辅助。
-func marshalJSON(v any) []byte {
-	b, _ := json.Marshal(v)
-	return b
-}
-
-// filePath 辅助（避免冲突）。
-func xferFilePath(p string) string { return filepath.Clean(p) }
