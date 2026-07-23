@@ -54,6 +54,12 @@ const (
 	TypeShellInput = "shell_input" // Console→Relay→Agent：发 stdin
 	TypeShellOutput = "shell_output" // Agent→Relay→Console：推 stdout/stderr
 	TypeShellClose = "shell_close" // 双向：关闭会话
+	// J1 大文件传输消息类型（控制信令走 JSON，数据走二进制 WS 帧）：
+	TypeFileTransferInit     = "file_xfer_init"      // Console→Relay→Agent：发起传输
+	TypeFileTransferReady    = "file_xfer_ready"     // Agent→Relay→Console：就绪 + 续传偏移
+	TypeFileTransferProgress = "file_xfer_progress"  // Agent→Relay→Console：周期进度
+	TypeFileTransferComplete = "file_xfer_complete"  // Agent→Relay→Console：终态 + SHA256
+	TypeFileTransferCancel   = "file_xfer_cancel"    // 双向：取消
 )
 
 // 任务类型常量，与 TaskRequest.Type 取值对应。
@@ -312,6 +318,50 @@ type ShellOutput struct {
 type ShellClose struct {
 	SessionID string `json:"session_id"`
 	Reason    string `json:"reason,omitempty"`
+}
+
+// --- J1 大文件传输 ---
+
+// FileTransferInit 发起传输（Console→Relay→Agent）。
+type FileTransferInit struct {
+	TransferID string `json:"transfer_id"`         // UUID，贯穿全生命周期
+	Direction  string `json:"direction"`           // "upload"(Console→Agent) / "download"(Agent→Console)
+	Path       string `json:"path"`                // Agent 侧绝对路径
+	Size       int64  `json:"size"`                // upload 时已知；download 时 Agent 回填
+	SHA256     string `json:"sha256,omitempty"`    // upload: Console 预算的摘要；download: Agent 算完回填
+}
+
+// FileTransferReady Agent 就绪（含续传偏移）。
+type FileTransferReady struct {
+	TransferID   string `json:"transfer_id"`
+	Accepted     bool   `json:"accepted"`
+	ResumeOffset int64  `json:"resume_offset"`    // 已落盘字节数，发送方 Seek 到此偏移
+	Size         int64  `json:"size,omitempty"`   // download 时 Agent 回填
+	Reason       string `json:"reason,omitempty"`
+}
+
+// FileTransferProgress 传输进度。
+type FileTransferProgress struct {
+	TransferID string `json:"transfer_id"`
+	BytesDone  int64  `json:"bytes_done"`
+	Total      int64  `json:"total"`
+	Percent    int    `json:"percent"`
+	SpeedBps   int64  `json:"speed_bps"`         // Agent 按 Δbytes/Δt 估算
+}
+
+// FileTransferComplete 传输终态。
+type FileTransferComplete struct {
+	TransferID   string `json:"transfer_id"`
+	Success      bool   `json:"success"`
+	SHA256Actual string `json:"sha256_actual,omitempty"`
+	Bytes        int64  `json:"bytes"`
+	Error        string `json:"error,omitempty"`
+}
+
+// FileTransferCancel 取消传输。
+type FileTransferCancel struct {
+	TransferID string `json:"transfer_id"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 // --- 辅助 ---

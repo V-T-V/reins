@@ -113,6 +113,8 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	defer connCancel()
 	// H3：连接断开时关闭所有 shell 会话（防资源泄漏）
 	defer sessions.CloseAll()
+	// J1：连接断开时关闭所有文件传输会话
+	defer transfers.CloseAll()
 
 	// 1. 发送 register
 	if err := a.sendRegister(connCtx, wc); err != nil {
@@ -172,13 +174,19 @@ func (a *Agent) heartbeatLoop(ctx context.Context, wc *wsConn) {
 	}
 }
 
-// recvLoop 接收并处理消息（task_request/task_cancel）。
+// recvLoop 接收并处理消息（task/shell/file_transfer 控制信令 + 二进制数据帧）。
 func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 	for {
-		_, data, err := wc.read(ctx)
+		msgType, data, err := wc.read(ctx)
 		if err != nil {
 			return err
 		}
+		// J1：二进制帧 = 文件上传数据
+		if msgType == websocket.MessageBinary {
+			a.handleUploadData(ctx, wc, data)
+			continue
+		}
+		// JSON 帧 = 控制信令
 		var env proto.Envelope
 		if err := json.Unmarshal(data, &env); err != nil {
 			log.Printf("[agent] 消息解析失败: %v", err)
@@ -195,6 +203,13 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 			a.handleShellInput(env)
 		case proto.TypeShellClose:
 			a.handleShellClose(env)
+		case proto.TypeFileTransferInit:
+			a.handleTransferInit(ctx, wc, env)
+		case proto.TypeFileTransferCancel:
+			var cancel proto.FileTransferCancel
+			if err := env.Decode(&cancel); err == nil {
+				transfers.Cancel(cancel.TransferID)
+			}
 		default:
 			log.Printf("[agent] 忽略消息类型 %s", env.Type)
 		}
@@ -346,6 +361,56 @@ func (a *Agent) handleShellClose(env proto.Envelope) {
 		return
 	}
 	sessions.CloseSession(close.SessionID, close.Reason)
+}
+
+// --- J1 大文件传输 handler ---
+
+// handleTransferInit 处理 file_xfer_init。
+func (a *Agent) handleTransferInit(ctx context.Context, wc *wsConn, env proto.Envelope) {
+	var init proto.FileTransferInit
+	if err := env.Decode(&init); err != nil {
+		return
+	}
+	ready := transfers.HandleInit(init)
+	// 发 ready 回 Relay
+	_ = wc.writeEnvelope(ctx, proto.TypeFileTransferReady, "relay", ready)
+
+	// 如果是下载，Agent 主动开始推数据
+	if ready.Accepted && init.Direction == "download" {
+		go func() {
+			progressCb := func(p proto.FileTransferProgress) {
+				pctx, pcancel := contextWithTimeout(5 * time.Second)
+				defer pcancel()
+				_ = wc.writeEnvelope(pctx, proto.TypeFileTransferProgress, "relay", p)
+			}
+			completeCb := func(c proto.FileTransferComplete) {
+				cctx, ccancel := contextWithTimeout(5 * time.Second)
+				defer ccancel()
+				_ = wc.writeEnvelope(cctx, proto.TypeFileTransferComplete, "relay", c)
+			}
+			transfers.SendDownloadData(ctx, wc, init.TransferID, progressCb, completeCb)
+		}()
+	}
+}
+
+// handleUploadData 处理上传二进制数据帧。
+func (a *Agent) handleUploadData(ctx context.Context, wc *wsConn, data []byte) {
+	transferID, isLast, payload, err := parseBinaryFrame(data)
+	if err != nil {
+		log.Printf("[xfer] 解析二进制帧失败: %v", err)
+		return
+	}
+	progressCb := func(p proto.FileTransferProgress) {
+		pctx, pcancel := contextWithTimeout(5 * time.Second)
+		defer pcancel()
+		_ = wc.writeEnvelope(pctx, proto.TypeFileTransferProgress, "relay", p)
+	}
+	completeCb := func(c proto.FileTransferComplete) {
+		cctx, ccancel := contextWithTimeout(5 * time.Second)
+		defer ccancel()
+		_ = wc.writeEnvelope(cctx, proto.TypeFileTransferComplete, "relay", c)
+	}
+	transfers.ReceiveUploadData(transferID, payload, isLast, progressCb, completeCb)
 }
 
 // 退避参数用 var（非 const），便于测试临时覆盖加速。
