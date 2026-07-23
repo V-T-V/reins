@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>go-rmm 部署使用手册</title>
+<style>
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d;
+  --text: #c9d1d9; --text-muted: #8b949e; --accent: #58a6ff;
+  --green: #3fb950; --red: #f85149; --yellow: #d29922;
+  --code-bg: #1c2128; --radius: 6px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font: 15px/1.7 -apple-system, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+  background: var(--bg); color: var(--text); padding: 0;
+}
+header {
+  background: linear-gradient(135deg, #161b22, #0d1117);
+  border-bottom: 1px solid var(--border);
+  padding: 48px 24px; text-align: center;
+}
+header h1 { font-size: 28px; color: var(--accent); margin-bottom: 8px; }
+header .subtitle { color: var(--text-muted); font-size: 16px; }
+header .badges { margin-top: 16px; display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+header .badge {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 20px; padding: 4px 14px; font-size: 13px; color: var(--text-muted);
+}
+header .badge strong { color: var(--green); }
+
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 0 24px; display: flex; gap: 4px; overflow-x: auto;
+}
+nav a {
+  color: var(--text-muted); text-decoration: none; padding: 12px 16px;
+  font-size: 14px; white-space: nowrap; border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+nav a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+.container { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
+section { margin-bottom: 48px; scroll-margin-top: 56px; }
+h2 {
+  font-size: 22px; color: var(--text); margin-bottom: 16px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+h3 { font-size: 17px; color: var(--accent); margin: 20px 0 10px; }
+p { margin-bottom: 12px; }
+ul, ol { margin: 8px 0 16px 24px; }
+li { margin-bottom: 6px; }
+code {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 3px; padding: 2px 6px; font-size: 13px;
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px; overflow-x: auto;
+  margin: 12px 0; font-size: 13px; line-height: 1.5;
+}
+pre code { background: none; border: none; padding: 0; }
+table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+th { background: var(--surface); font-weight: 600; }
+tr:nth-child(even) { background: rgba(22,27,34,0.5); }
+.callout {
+  border-left: 3px solid var(--accent); background: rgba(88,166,255,0.06);
+  padding: 12px 16px; margin: 12px 0; border-radius: 0 var(--radius) var(--radius) 0;
+}
+.callout.warn { border-color: var(--yellow); background: rgba(210,153,34,0.08); }
+.callout.danger { border-color: var(--red); background: rgba(248,81,73,0.08); }
+.callout-title { font-weight: 600; margin-bottom: 4px; }
+.callout.warn .callout-title { color: var(--yellow); }
+.callout.danger .callout-title { color: var(--red); }
+.callout .callout-title { color: var(--accent); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+}
+.card h4 { color: var(--accent); font-size: 15px; margin-bottom: 8px; }
+.card .stat { font-size: 28px; font-weight: 700; color: var(--green); }
+.card .label { color: var(--text-muted); font-size: 13px; }
+footer { text-align: center; padding: 32px; color: var(--text-muted); border-top: 1px solid var(--border); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🚀 go-rmm 部署使用手册</h1>
+  <div class="subtitle">Go 远程自动化执行操作平台 · 完整部署指南</div>
+  <div class="badges">
+    <span class="badge">66 Go 文件</span>
+    <span class="badge">10,000+ 行</span>
+    <span class="badge">48 commits</span>
+    <span class="badge"><strong>8 轮优化</strong></span>
+    <span class="badge">4 生产依赖</span>
+  </div>
+</header>
+
+<nav>
+  <a href="#overview">概览</a>
+  <a href="#quickstart">快速开始</a>
+  <a href="#intranet">内网部署</a>
+  <a href="#mtls">公网 mTLS</a>
+  <a href="#agent">Agent 管理</a>
+  <a href="#console">控制台</a>
+  <a href="#tasks">任务类型</a>
+  <a href="#transfer">大文件传输</a>
+  <a href="#cron">定时任务</a>
+  <a href="#terminal">终端</a>
+  <a href="#api">REST API</a>
+  <a href="#metrics">监控</a>
+  <a href="#troubleshoot">故障排查</a>
+  <a href="#security">安全清单</a>
+</nav>
+
+<div class="container">
+
+<!-- 概览 -->
+<section id="overview">
+<h2>📋 平台概览</h2>
+<p>go-rmm 是一个 Go 实现的远程自动化执行操作平台，通过反向 WebSocket 中继，让 Web 控制台远程驱动 Windows Agent 执行自动化任务。</p>
+
+<h3>三组件架构</h3>
+<pre><code>┌─────────────────┐    HTTPS/SSE     ┌──────────────────┐   反向WS长连接   ┌────────────────────┐
+│  Web 控制台      │ ────────────────►│  Relay 中继服务器  │◄─────────────────│  Windows Agent      │
+│  (浏览器)        │                  │  (公网/局域网)    │   主动外连+心跳   │  (kardianos 服务化) │
+│  原生JS+embed.FS │  ◄── 结果SSE推送 │  Go net/http     │                  │                     │
+└─────────────────┘                  └──────────────────┘                  └─────────────────────┘
+                                                                                 ├ powershell  执行命令
+                                                                                 ├ script      执行脚本
+                                                                                 ├ file        文件操作
+                                                                                 ├ screenshot 窗口截图
+                                                                                 ├ browse      浏览器自动化
+                                                                                 ├ guiclick    视觉点击
+                                                                                 ├ shell       交互终端
+                                                                                 └ transfer    大文件传输(5GB+)</code></pre>
+
+<h3>核心能力</h3>
+<div class="grid">
+  <div class="card"><h4>🔒 安全</h4><p>mTLS 双向证书 + 内置 CA（自签根 + 短期证书 + CRL 撤销）+ 命令策略拦截 + 文件路径穿越防护 + 审计日志</p></div>
+  <div class="card"><h4>🛡️ 可靠</h4><p>任务持久化(bbolt) + reaper 超时回退 + 状态机锁死 + ACK/NACK + 幂等执行 + maxAttempts 兜底</p></div>
+  <div class="card"><h4>⚡ 性能</h4><p>状态索引(55x) + 策略预过滤(28x) + 二进制WS帧传输 + stream-through中继</p></div>
+  <div class="card"><h4>📊 可观测</h4><p>13 项 metrics + 深度 healthz + 审计 JSONL + SSE 实时事件</p></div>
+</div>
+</section>
+
+<!-- 快速开始 -->
+<section id="quickstart">
+<h2>🚀 快速开始（本地三端联调）</h2>
+<p>三个终端，30 秒跑通完整系统：</p>
+
+<pre><code># 编译三组件
+make all
+
+# 终端 1：Relay（中继服务器）
+./bin/go-rmm-relay -addr :7780 -dev
+
+# 终端 2：Agent（前台调试）
+./bin/go-rmm-agent run -relay ws://127.0.0.1:7780/agent -id my-agent
+
+# 终端 3：Console（Web 控制台）
+./bin/go-rmm-console -addr :7781 -relay http://127.0.0.1:7780</code></pre>
+
+<p>浏览器打开 <code>http://localhost:7781</code>，左侧看到 Agent，下发 PowerShell 任务，实时查看结果。</p>
+
+<div class="callout">
+  <div class="callout-title">💡 一键脚本</div>
+  <pre><code>.\scripts\demo-local.ps1   # PowerShell 一键编译+启动</code></pre>
+</div>
+</section>
+
+<!-- 内网部署 -->
+<section id="intranet">
+<h2>🌐 场景一：内网部署（Tailscale + Token）</h2>
+<p>适合个人/小团队，几台机器在同一虚拟内网。零自建公网服务器。</p>
+
+<h3>步骤</h3>
+<ol>
+  <li><strong>所有机器安装 Tailscale</strong> 并登录同一账号</li>
+  <li><strong>选一台机器跑 Relay + Console</strong></li>
+</ol>
+
+<pre><code># Relay（绑定 Tailscale IP，设置 token）
+./go-rmm-relay -addr 100.x.x.relay:7780 -token "$(openssl rand -hex 16)"
+
+# Console
+./go-rmm-console -addr 100.x.x.relay:7781 -relay http://100.x.x.relay:7780</code></pre>
+
+<ol start="3">
+  <li><strong>被控机器安装 Agent</strong></li>
+</ol>
+
+<pre><code># Windows（管理员 PowerShell）
+.\go-rmm-agent.exe install `
+    -relay ws://100.x.x.relay:7780/agent `
+    -token <你的token>
+.\go-rmm-agent.exe start</code></pre>
+
+<div class="callout warn">
+  <div class="callout-title">⚠️ 安全提示</div>
+  Tailscale 自身加密，但 Relay 与 Agent 间流量在 Tailscale 隧道内仍是明文。若需端到端加密，用公网 mTLS 部署。
+</div>
+</section>
+
+<!-- 公网 mTLS -->
+<section id="mtls">
+<h2>🔐 场景二：公网部署（mTLS + CA）</h2>
+<p>适合跨公网控制，或对安全有严格要求。全链路 mTLS 加密。</p>
+
+<h3>1. 服务器准备 TLS 证书</h3>
+<pre><code># Let's Encrypt（有域名）
+certbot certonly --standalone -d relay.example.com
+
+# 或自签（无域名）
+openssl req -x509 -newkey rsa:4096 -keyout relay.key -out relay.crt -days 365 -nodes \
+    -subj "/CN=relay.example.com"</code></pre>
+
+<h3>2. 启动 Relay（mTLS 模式）</h3>
+<pre><code>./go-rmm-relay \
+    -addr :7780 \
+    -mtls \
+    -tls-cert /path/to/relay.crt \
+    -tls-key /path/to/relay.key</code></pre>
+
+<p>首次启动自动生成内置 CA：<code>data/ca-root.crt</code>（10年）+ <code>data/ca-root.key</code>（0600）+ <code>data/ca-state.json</code>（CRL 状态）。</p>
+
+<h3>3. 为 Agent 签发证书</h3>
+<pre><code># 生成一次性注册令牌（1小时有效）
+curl -X POST http://localhost:7780/api/enroll-token \
+    -H "Content-Type: application/json" \
+    -d '{"agent_id": "agent-prod-01"}'
+# 返回: {"token":"a1b2c3...","expires_in":3600}</code></pre>
+
+<h3>4. Agent 首次注册</h3>
+<pre><code>.\go-rmm-agent.exe run `
+    -relay wss://relay.example.com:7780/agent `
+    -id agent-prod-01 `
+    -mtls `
+    -token <enrollment-token>
+
+# 首次连接后自动 enroll，证书落盘 data/agent.crt + data/agent.key
+# 之后注册为服务
+.\go-rmm-agent.exe install -relay wss://relay.example.com:7780/agent -id agent-prod-01 -mtls</code></pre>
+
+<h3>5. 撤销 Agent（如有失陷）</h3>
+<pre><code>curl -X POST http://relay:7780/api/agents/revoke \
+    -d '{"agent_id": "agent-prod-01"}'
+# 撤销后 mTLS 握手被拒（CRL 校验），Agent 立即断开</code></pre>
+</section>
+
+<!-- Agent 管理 -->
+<section id="agent">
+<h2>⚙️ Agent 服务化管理</h2>
+
+<h3>Windows 服务</h3>
+<pre><code>.\go-rmm-agent.exe install -relay ws://relay:7780/agent -token <token>
+.\go-rmm-agent.exe start       # 启动
+.\go-rmm-agent.exe stop        # 停止
+.\go-rmm-agent.exe status      # 状态
+.\go-rmm-agent.exe uninstall   # 卸载
+.\go-rmm-agent.exe run         # 前台调试（不注册服务）</code></pre>
+
+<h3>Linux systemd</h3>
+<pre><code>./go-rmm-agent install -relay ws://relay:7780/agent -token <token>
+sudo systemctl start go-rmm-agent
+journalctl -u go-rmm-agent -f    # 看日志</code></pre>
+
+<h3>配置文件（config.json）</h3>
+<pre><code>{
+  "agent_id": "agent-prod-01",
+  "relay_url": "wss://relay.example.com:7780/agent",
+  "token": "your-token",
+  "mtls": true,
+  "heartbeat": 15000000000,
+  "max_concurrent_tasks": 4,
+  "tags": { "env": "prod", "role": "web" },
+  "glm": {
+    "api_key": "your-glm-key",
+    "model": "glm-5-turbo"
+  }
+}</code></pre>
+
+<div class="callout">
+  <div class="callout-title">💡 配置说明</div>
+  <ul>
+    <li><code>tags</code> 用于批量下发（如 <code>env=prod</code> 匹配所有 prod Agent）</li>
+    <li><code>max_concurrent_tasks</code> 默认 4，防止被并发任务打爆</li>
+    <li><code>glm.api_key</code> 配置后 guiclick（视觉点击）能力才启用</li>
+    <li><code>mtls: true</code> 时 token 作为 enrollment token（首次注册），之后用证书</li>
+    <li>权限自动 0600（含 token/glm key 等敏感信息）</li>
+  </ul>
+</div>
+</section>
+
+<!-- 控制台 -->
+<section id="console">
+<h2>🖥️ Web 控制台</h2>
+
+<table>
+  <tr><th>区域</th><th>功能</th></tr>
+  <tr><td>左侧 Agent 列表</td><td>在线状态、capabilities、tags 标签</td></tr>
+  <tr><td>下发任务面板</td><td>选 Agent → 选类型 → 填参数 → 下发</td></tr>
+  <tr><td>运行指标</td><td>13 项 metrics 实时刷新（5s）</td></tr>
+  <tr><td>实时结果流</td><td>SSE 推送，每条带取消按钮，截图内联预览</td></tr>
+  <tr><td>交互式终端</td><td>内联输入框，实时输出，Enter 发送</td></tr>
+  <tr><td>大文件传输</td><td>上传/下载面板，进度条，SHA256 校验</td></tr>
+</table>
+</section>
+
+<!-- 任务类型 -->
+<section id="tasks">
+<h2>📝 任务类型速查</h2>
+
+<table>
+  <tr><th>类型</th><th>必填参数</th><th>用途</th><th>备注</th></tr>
+  <tr><td><code>powershell</code></td><td>command</td><td>执行 PowerShell 命令</td><td>强制 UTF-8 输出</td></tr>
+  <tr><td><code>script</code></td><td>lang, content</td><td>下发 .ps1/.bat 脚本</td><td>自动加 BOM</td></tr>
+  <tr><td><code>file</code></td><td>op, path</td><td>上传/下载小文件（<10MB）</td><td>路径穿越防护</td></tr>
+  <tr><td><code>screenshot</code></td><td>target（可选）</td><td>窗口/全屏截图</td><td>PrintWindow 截 Chromium</td></tr>
+  <tr><td><code>browse</code></td><td>url, actions</td><td>headless 浏览器自动化</td><td>需 <code>-tags browse</code> 编译</td></tr>
+  <tr><td><code>guiclick</code></td><td>intent</td><td>视觉驱动桌面点击</td><td>需 GLM API key</td></tr>
+  <tr><td><code>shell</code></td><td>—</td><td>交互式远程终端</td><td>能力自动声明</td></tr>
+  <tr><td><code>transfer</code></td><td>path, direction</td><td>5GB+ 大文件传输</td><td>独立 REST 端点</td></tr>
+</table>
+
+<h3>批量下发</h3>
+<pre><code>curl -X POST http://relay:7780/api/tasks/batch \
+    -d '{"tag":"env=prod","type":"powershell","payload":{"command":"Get-Process"}}'</code></pre>
+
+<h3>任务取消</h3>
+<pre><code>curl -X POST http://relay:7780/api/tasks/cancel \
+    -d '{"task_id":"task-xxx","agent_id":"agent-prod-01"}'</code></pre>
+</section>
+
+<!-- 大文件传输 -->
+<section id="transfer">
+<h2>📦 大文件传输（5GB+）</h2>
+<p>专用二进制 WS 帧通道，支持 5GB+ 文件快速传输，stream-through 中继不落盘。</p>
+
+<h3>上传文件到 Agent</h3>
+<pre><code>curl -X POST "http://relay:7780/api/transfer/upload?agent_id=agent-01&path=C:\big.bin&transfer_id=xfer1" \
+    --data-binary @local-big-file.bin</code></pre>
+
+<h3>从 Agent 下载文件</h3>
+<pre><code>curl -X POST "http://relay:7780/api/transfer/download?agent_id=agent-01&path=C:\report.pdf&transfer_id=xfer2" \
+    -o downloaded.pdf</code></pre>
+
+<div class="grid">
+  <div class="card"><h4>二进制帧</h4><p>去掉 base64，省 33% 带宽</p></div>
+  <div class="card"><h4>流式传输</h4><p>256KB 缓冲，不全载入内存</p></div>
+  <div class="card"><h4>SHA256 校验</h4><p>增量哈希，完成时比对</p></div>
+  <div class="card"><h4>断点续传</h4><p>.part 文件 + resume_offset</p></div>
+  <div class="card"><h4>实时进度</h4><p>SSE 推送百分比 + 速度</p></div>
+  <div class="card"><h4>不落盘</h4><p>Relay 仅转发，不存 5GB</p></div>
+</div>
+</section>
+
+<!-- 定时任务 -->
+<section id="cron">
+<h2>⏰ 定时任务（Cron）</h2>
+<p>robfig/cron 调度引擎，规则持久化到 bbolt，到点自动生成任务投递。</p>
+
+<pre><code># 新建定时规则（每 5 分钟执行）
+curl -X POST http://relay:7780/api/crons \
+    -d '{
+        "cron_expr": "*/5 * * * *",
+        "task_type": "powershell",
+        "agent_id": "agent-prod-01",
+        "payload": {"command": "Get-Service | Where-Object {$_.Status -eq \"Running\"}"},
+        "timeout": 30
+    }'
+
+# 列出所有规则
+curl http://relay:7780/api/crons
+
+# 删除规则
+curl -X DELETE http://relay:7780/api/crons/cron-1234567890</code></pre>
+
+<div class="callout">
+  <div class="callout-title">💡 Cron 表达式</div>
+  5 字段：<code>分 时 日 月 周</code>。如 <code>0 */2 * * *</code> = 每 2 小时，<code>0 9 * * 1-5</code> = 工作日 9 点。
+</div>
+</section>
+
+<!-- 终端 -->
+<section id="terminal">
+<h2>💻 交互式终端</h2>
+<p>通过浏览器直接操作远程 Agent 的 PowerShell，实时输入输出。</p>
+
+<pre><code># 开启终端会话
+curl -X POST http://relay:7780/api/shell/open \
+    -d '{"agent_id":"agent-prod-01","cols":80,"rows":24}'
+# 返回: {"session_id":"shell-xxx"}
+
+# 发送命令
+curl -X POST http://relay:7780/api/shell/input \
+    -d '{"session_id":"shell-xxx","agent_id":"agent-prod-01","data_b64":"<base64>"}'
+
+# 关闭会话
+curl -X POST http://relay:7780/api/shell/close \
+    -d '{"session_id":"shell-xxx","agent_id":"agent-prod-01"}'</code></pre>
+
+<div class="callout warn">
+  <div class="callout-title">⚠️ 终端安全</div>
+  交互式终端等于完全 shell 访问，无法做静态命令拦截。终端能力在 capabilities 里单独声明，审计记录每次 open/close。
+</div>
+</section>
+
+<!-- REST API -->
+<section id="api">
+<h2>🔌 REST API 速查</h2>
+
+<table>
+  <tr><th>方法</th><th>路径</th><th>用途</th></tr>
+  <tr><td>GET</td><td><code>/healthz</code></td><td>深度健康检查（含 store 状态）</td></tr>
+  <tr><td>GET</td><td><code>/api/agents</code></td><td>在线 Agent 列表</td></tr>
+  <tr><td>GET</td><td><code>/api/tasks?limit=N</code></td><td>任务历史</td></tr>
+  <tr><td>GET</td><td><code>/api/tasks/{id}</code></td><td>单任务详情 + 结果</td></tr>
+  <tr><td>POST</td><td><code>/api/tasks</code></td><td>下发任务</td></tr>
+  <tr><td>POST</td><td><code>/api/tasks/batch</code></td><td>按标签批量下发</td></tr>
+  <tr><td>POST</td><td><code>/api/tasks/cancel</code></td><td>取消任务</td></tr>
+  <tr><td>GET</td><td><code>/api/metrics</code></td><td>13 项运行指标</td></tr>
+  <tr><td>GET</td><td><code>/api/events</code></td><td>SSE 实时事件流</td></tr>
+  <tr><td>POST</td><td><code>/api/transfer/upload</code></td><td>大文件上传（stream-through）</td></tr>
+  <tr><td>POST</td><td><code>/api/transfer/download</code></td><td>大文件下载</td></tr>
+  <tr><td>GET/POST/DELETE</td><td><code>/api/crons</code></td><td>定时任务管理</td></tr>
+  <tr><td>POST</td><td><code>/api/shell/open|input|close</code></td><td>交互式终端</td></tr>
+  <tr><td>POST</td><td><code>/api/enroll-token</code></td><td>生成注册令牌（mTLS）</td></tr>
+  <tr><td>POST</td><td><code>/api/enroll</code></td><td>Agent 换取证书（mTLS）</td></tr>
+  <tr><td>POST</td><td><code>/api/agents/revoke</code></td><td>撤销 Agent 证书</td></tr>
+</table>
+</section>
+
+<!-- 监控 -->
+<section id="metrics">
+<h2>📊 监控指标</h2>
+
+<pre><code>{
+  "agents_online": 3,
+  "tasks_submitted": 150,
+  "tasks_dispatched": 148,
+  "tasks_completed": 140,
+  "tasks_failed": 5,
+  "tasks_blocked": 2,
+  "tasks_cancelled": 1,
+  "tasks_acked": 146,
+  "tasks_nacked": 0,
+  "tasks_reaped": 3,
+  "events_dropped": 0,
+  "uptime_seconds": 86400,
+  "goroutines": 18
+}</code></pre>
+
+<table>
+  <tr><th>指标</th><th>告警建议</th></tr>
+  <tr><td><code>tasks_failed / completed</code></td><td>> 10%：检查任务载荷或 Agent 环境</td></tr>
+  <tr><td><code>tasks_reaped</code> 持续增长</td><td>Agent 频繁超时，检查网络/负载</td></tr>
+  <tr><td><code>events_dropped</code> > 0</td><td>Console 消费慢，考虑增加订阅缓冲</td></tr>
+  <tr><td><code>tasks_nacked</code> > 0</td><td>Agent pool 满，调大 max_concurrent_tasks</td></tr>
+</table>
+
+<h3>审计日志</h3>
+<pre><code># 查看最近 20 条审计
+tail -20 data/audit.log | jq .
+
+# 统计各类事件
+cat data/audit.log | jq -r .event | sort | uniq -c
+
+# 查找被拦截的任务
+grep task_blocked data/audit.log | jq .</code></pre>
+</section>
+
+<!-- 故障排查 -->
+<section id="troubleshoot">
+<h2>🔧 故障排查</h2>
+
+<h3>Agent 连不上 Relay</h3>
+<pre><code># 1. 前台模式看详细日志
+./go-rmm-agent run -relay ws://relay:7780/agent -token xxx
+
+# 常见错误：
+#   "connection refused" → Relay 未启动或防火墙
+#   "handshake error" → mTLS 证书问题
+#   "unauthorized" → token 错误
+
+# 2. 检查 Relay 健康
+curl http://relay:7780/healthz</code></pre>
+
+<h3>任务一直 pending</h3>
+<pre><code># Agent 离线 → 任务缓存 pending，等上线补投
+# Agent 在线但 pool 满 → 检查 metrics tasks_nacked
+# 长期 pending → 检查 metrics tasks_reaped（reaper 回退计数）</code></pre>
+
+<h3>mTLS 证书过期</h3>
+<pre><code># Agent 客户端证书 24h 有效，自动续签
+# 若续签失败（Relay 不可达超 24h）：
+del data\agent.crt data\agent.key
+.\go-rmm-agent.exe run -relay wss://relay:7780/agent -id <id> -mtls -token <new-token></code></pre>
+
+<h3>持久化重启不丢任务</h3>
+<pre><code># Relay 重启后 bbolt 数据自动恢复
+# 检查：重启后 GET /api/tasks 应仍有历史记录
+# reaper 自动恢复 dispatched 任务为 pending 重投</code></pre>
+</section>
+
+<!-- 安全清单 -->
+<section id="security">
+<h2>🔒 部署安全清单</h2>
+<p>部署前逐项确认：</p>
+
+<ol>
+  <li>☐ Relay 不直接暴露 3389(RDP)/22(SSH)/5985(WinRM) 到公网</li>
+  <li>☐ 使用 Tailscale 组网或 mTLS 加密</li>
+  <li>☐ token 已设置（非空），且未硬编码在脚本仓库</li>
+  <li>☐ config.json 权限 0600</li>
+  <li>☐ ca-root.key 已离线备份，服务器上权限 0600</li>
+  <li>☐ 命令策略已启用（检查 metrics tasks_blocked > 0）</li>
+  <li>☐ 审计日志已接入收集</li>
+  <li>☐ healthz 已接入监控告警</li>
+  <li>☐ Agent max_concurrent_tasks 已按机器负载调整（默认 4）</li>
+  <li>☐ guiclick 的 GLM key 仅在需要的 Agent 配置</li>
+</ol>
+
+<div class="callout danger">
+  <div class="callout-title">🚨 关键安全提示</div>
+  <ul>
+    <li><strong>命令策略是 best-effort</strong>：黑名单正则可被变形绕过，不应作为唯一安全依赖</li>
+    <li><strong>交互式终端 = 完全 shell 访问</strong>：无法做静态命令拦截，需通过权限管理控制</li>
+    <li><strong>ca-root.key 泄露 = 全系统失陷</strong>：离线冷备，定期轮换</li>
+  </ul>
+</div>
+</section>
+
+</div>
+
+<footer>
+  go-rmm 部署使用手册 · 66 Go 文件 / 10,000+ 行 / 48 commits / 8 轮优化<br>
+  生成日期：2026-07-23 · 基于 P6 + Code Review 修复版本
+</footer>
+
+</body>
+</html>
