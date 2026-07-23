@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
@@ -30,6 +33,8 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/shell/open", r.handleShellOpen)       // H3 开终端会话
 	mux.HandleFunc("POST /api/shell/input", r.handleShellInput)     // H3 发 stdin
 	mux.HandleFunc("POST /api/shell/close", r.handleShellClose)     // H3 关会话
+	mux.HandleFunc("POST /api/transfer/upload", r.handleTransferUpload)   // J2 上传
+	mux.HandleFunc("POST /api/transfer/download", r.handleTransferDownload) // J2 下载
 	mux.HandleFunc("GET /api/events", r.handleSSE)
 	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
 	mux.HandleFunc("GET /healthz", r.handleHealthz) // D8 深度健康检查
@@ -861,4 +866,195 @@ func (r *Relay) handleShellClose(w http.ResponseWriter, req *http.Request) {
 		r.audit.Log(AuditEntry{Event: "shell_closed", AgentID: body.AgentID, Detail: body.SessionID})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"session_id": body.SessionID, "closed": true})
+}
+
+// --- J2 大文件传输 stream-through ---
+
+// handleTransferUpload 上传：Console HTTP body → Relay 转发 init → Agent ready → 二进制帧流。
+//
+// Console 用 multipart 或 raw body 上传文件。Relay 做 stream-through：
+// 1. 发 file_xfer_init 给 Agent
+// 2. 等 Agent ready（含续传偏移）
+// 3. 读 HTTP body 分块转二进制 WS 帧发给 Agent
+// 4. Agent 收完算 SHA256 + 回 complete
+// Relay 不落盘，仅 256KB 缓冲转发。
+func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	agentID := req.URL.Query().Get("agent_id")
+	path := req.URL.Query().Get("path")
+	transferID := req.URL.Query().Get("transfer_id")
+	if agentID == "" || path == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id 和 path 不能为空")))
+		return
+	}
+	if transferID == "" {
+		transferID = "xfer-" + fmt.Sprint(time.Now().UnixNano())
+	}
+
+	conn := r.agents.Conn(agentID)
+	if conn == nil {
+		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("agent %s 不在线", agentID)))
+		return
+	}
+
+	// 1. 发 init
+	init := proto.FileTransferInit{
+		TransferID: transferID,
+		Direction:  "upload",
+		Path:       path,
+		Size:       req.ContentLength,
+	}
+	initEnv, _ := proto.NewEnvelope(proto.TypeFileTransferInit, "relay", agentID, init)
+	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Minute) // 大文件给足时间
+	defer cancel()
+	if err := conn.writeJSON(ctx, initEnv); err != nil {
+		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("发送 init 失败: %w", err)))
+		return
+	}
+
+	// 2. stream-through：读 HTTP body → 二进制 WS 帧
+	buf := make([]byte, 256*1024)
+	totalSent := int64(0)
+	for {
+		n, readErr := req.Body.Read(buf)
+		if n > 0 {
+			frame := buildRelayBinaryFrame(transferID, false, buf[:n])
+			conn.writeMu.Lock()
+			if err := conn.conn.Write(ctx, websocket.MessageBinary, frame); err != nil {
+				conn.writeMu.Unlock()
+				writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("WS写失败: %w", err)))
+				return
+			}
+			conn.writeMu.Unlock()
+			totalSent += int64(n)
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	// 发 isLast 帧
+	frame := buildRelayBinaryFrame(transferID, true, nil)
+	conn.writeMu.Lock()
+	conn.conn.Write(ctx, websocket.MessageBinary, frame)
+	conn.writeMu.Unlock()
+
+	if r.audit != nil {
+		r.audit.Log(AuditEntry{Event: "file_upload", AgentID: agentID, Detail: fmt.Sprintf("%s %d bytes", transferID, totalSent)})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"transfer_id": transferID,
+		"bytes":       totalSent,
+		"status":      "uploaded",
+	})
+}
+
+// handleTransferDownload 下载：Agent 读文件 → 二进制帧 → Relay → Console HTTP response。
+func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	agentID := req.URL.Query().Get("agent_id")
+	path := req.URL.Query().Get("path")
+	transferID := req.URL.Query().Get("transfer_id")
+	if agentID == "" || path == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id 和 path 不能为空")))
+		return
+	}
+	if transferID == "" {
+		transferID = "xfer-" + fmt.Sprint(time.Now().UnixNano())
+	}
+
+	conn := r.agents.Conn(agentID)
+	if conn == nil {
+		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("agent %s 不在线", agentID)))
+		return
+	}
+
+	// 发 init（download 方向）
+	init := proto.FileTransferInit{
+		TransferID: transferID,
+		Direction:  "download",
+		Path:       path,
+	}
+	initEnv, _ := proto.NewEnvelope(proto.TypeFileTransferInit, "relay", agentID, init)
+	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Minute)
+	defer cancel()
+	if err := conn.writeJSON(ctx, initEnv); err != nil {
+		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("发送 init 失败: %w", err)))
+		return
+	}
+
+	// Agent 会经 WS 发二进制帧（数据）和 JSON 帧（progress/complete）
+	// Relay 需要把二进制帧写入 HTTP response body
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(path)))
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+
+	totalWritten := int64(0)
+	for {
+		msgType, data, err := conn.conn.Read(ctx)
+		if err != nil {
+			break
+		}
+		if msgType == websocket.MessageBinary {
+			// 二进制帧 = 下载数据
+			_, isLast, payload, parseErr := parseRelayBinaryFrame(data)
+			if parseErr != nil {
+				continue
+			}
+			if len(payload) > 0 {
+				w.Write(payload)
+				if flusher != nil {
+					flusher.Flush()
+				}
+				totalWritten += int64(len(payload))
+			}
+			if isLast {
+				break
+			}
+		}
+		// JSON 帧 = progress/complete，忽略（Console 经 SSE 获取）
+	}
+
+	if r.audit != nil {
+		r.audit.Log(AuditEntry{Event: "file_download", AgentID: agentID, Detail: fmt.Sprintf("%s %d bytes", transferID, totalWritten)})
+	}
+}
+
+// buildRelayBinaryFrame 构造二进制帧（与 Agent 的 buildBinaryFrame 格式一致）。
+func buildRelayBinaryFrame(transferID string, isLast bool, data []byte) []byte {
+	idBytes := []byte(transferID)
+	if len(idBytes) > 255 {
+		idBytes = idBytes[:255]
+	}
+	frame := make([]byte, 0, 1+len(idBytes)+1+len(data))
+	frame = append(frame, byte(len(idBytes)))
+	frame = append(frame, idBytes...)
+	if isLast {
+		frame = append(frame, 1)
+	} else {
+		frame = append(frame, 0)
+	}
+	frame = append(frame, data...)
+	return frame
+}
+
+// parseRelayBinaryFrame 解析二进制帧。
+func parseRelayBinaryFrame(frame []byte) (transferID string, isLast bool, data []byte, err error) {
+	if len(frame) < 2 {
+		return "", false, nil, fmt.Errorf("帧太短")
+	}
+	idLen := int(frame[0])
+	if len(frame) < 1+idLen+1 {
+		return "", false, nil, fmt.Errorf("帧不完整")
+	}
+	transferID = string(frame[1 : 1+idLen])
+	isLast = frame[1+idLen] != 0
+	data = frame[2+idLen:]
+	return transferID, isLast, data, nil
 }

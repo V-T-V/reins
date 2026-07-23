@@ -361,6 +361,15 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 				})
 			}
 
+		case proto.TypeFileTransferReady, proto.TypeFileTransferProgress, proto.TypeFileTransferComplete:
+			// J2：文件传输控制消息转发给 Console
+			r.console.Broadcast(Event{
+				Kind:    env.Type,
+				AgentID: agentID,
+				Payload: env.Payload,
+				TS:      time.Now().UnixMilli(),
+			})
+
 		default:
 			log.Printf("[agent-read] 未知消息类型 %s from %s", env.Type, agentID)
 		}
