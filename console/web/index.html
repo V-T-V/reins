@@ -105,6 +105,37 @@
           <div id="terminal" style="background:#0d1117;padding:8px;min-height:300px;font-family:monospace;font-size:13px;color:#c9d1d9"></div>
         </div>
       </div>
+      <!-- J3 大文件传输 -->
+      <div class="panel">
+        <div class="panel-header">大文件传输</div>
+        <div class="panel-body">
+          <div class="row">
+            <div>
+              <label>上传到 Agent（绝对路径）</label>
+              <input id="xfer-upload-path" placeholder="C:\Users\test\big.bin">
+            </div>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <div>
+              <label>选择文件</label>
+              <input type="file" id="xfer-file-input">
+            </div>
+            <div>
+              <button onclick="window.__uploadFile()" style="margin-top:24px">上传</button>
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <div>
+              <label>从 Agent 下载（绝对路径）</label>
+              <input id="xfer-download-path" placeholder="C:\Users\test\report.pdf">
+            </div>
+            <div>
+              <button onclick="window.__downloadFile()" style="margin-top:24px">下载</button>
+            </div>
+          </div>
+          <div id="xfer-progress" style="margin-top:12px"></div>
+        </div>
+      </div>
     </div>
   </main>
 </div>

@@ -443,6 +443,86 @@
   };
 
   // SSE 已订阅 shell_output 事件（在 subscribeSSE 里加监听）
+
+  // J3：大文件传输进度（SSE）
+  if (state.evtSource) {
+    state.evtSource.addEventListener("file_xfer_progress", (e) => {
+      const data = JSON.parse(e.data).data;
+      const el = document.getElementById("xfer-progress");
+      if (el) {
+        const mb = (data.bytes_done / 1048576).toFixed(1);
+        const totalMB = data.total > 0 ? (data.total / 1048576).toFixed(1) : "?";
+        const speedMB = data.speed_bps > 0 ? (data.speed_bps / 1048576).toFixed(1) : "0";
+        el.innerHTML = '<div style="background:#21262d;border-radius:4px;padding:8px">' +
+          '<div style="display:flex;justify-content:between">' +
+          '<span>' + data.percent + '% (' + mb + '/' + totalMB + ' MB)</span>' +
+          '<span style="color:#8b949e">' + speedMB + ' MB/s</span></div>' +
+          '<div style="background:#0d1117;border-radius:2px;height:20px;margin-top:4px">' +
+          '<div style="background:#238636;height:100%;width:' + data.percent + '%;border-radius:2px"></div>' +
+          '</div></div>';
+      }
+    });
+    state.evtSource.addEventListener("file_xfer_complete", (e) => {
+      const data = JSON.parse(e.data).data;
+      const el = document.getElementById("xfer-progress");
+      if (el && data.success) {
+        el.innerHTML += '<div style="color:#3fb950;margin-top:4px">✓ 传输完成 sha256=' + (data.sha256_actual || "").substring(0, 16) + '...</div>';
+      } else if (el) {
+        el.innerHTML += '<div style="color:#f85149;margin-top:4px">✗ 传输失败: ' + esc(data.error || "") + '</div>';
+      }
+    });
+  }
+
+  // J3：上传文件
+  window.__uploadFile = async function () {
+    if (!state.selected) { alert("请先选择 Agent"); return; }
+    var path = document.getElementById("xfer-upload-path").value;
+    var fileInput = document.getElementById("xfer-file-input");
+    if (!path || !fileInput.files[0]) { alert("请填写路径并选择文件"); return; }
+    var file = fileInput.files[0];
+    var transferID = "xfer-" + Date.now();
+    document.getElementById("xfer-progress").innerHTML = '<span style="color:#d29922">⏳ 上传中...</span>';
+    try {
+      var resp = await fetch("/api/transfer/upload?agent_id=" + encodeURIComponent(state.selected) +
+        "&path=" + encodeURIComponent(path) + "&transfer_id=" + transferID, {
+        method: "POST",
+        body: file,
+      });
+      var result = await resp.json();
+      if (!resp.ok) {
+        document.getElementById("xfer-progress").innerHTML = '<span style="color:#f85149">上传失败: ' + esc(result.error || "") + '</span>';
+      }
+    } catch (e) {
+      document.getElementById("xfer-progress").innerHTML = '<span style="color:#f85149">错误: ' + esc(e.message) + '</span>';
+    }
+  };
+
+  // J3：下载文件
+  window.__downloadFile = async function () {
+    if (!state.selected) { alert("请先选择 Agent"); return; }
+    var path = document.getElementById("xfer-download-path").value;
+    if (!path) { alert("请填写路径"); return; }
+    var transferID = "xfer-" + Date.now();
+    document.getElementById("xfer-progress").innerHTML = '<span style="color:#d29922">⏳ 下载中...</span>';
+    try {
+      var resp = await fetch("/api/transfer/download?agent_id=" + encodeURIComponent(state.selected) +
+        "&path=" + encodeURIComponent(path) + "&transfer_id=" + transferID);
+      if (!resp.ok) {
+        var err = await resp.json();
+        document.getElementById("xfer-progress").innerHTML = '<span style="color:#f85149">下载失败: ' + esc(err.error || "") + '</span>';
+        return;
+      }
+      // 触发浏览器下载
+      var blob = await resp.blob();
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = path.split("\\").pop().split("/").pop();
+      a.click();
+    } catch (e) {
+      document.getElementById("xfer-progress").innerHTML = '<span style="color:#f85149">错误: ' + esc(e.message) + '</span>';
+    }
+  };
+
   // shell_output 事件处理
   if (state.evtSource) {
     state.evtSource.addEventListener("shell_output", (e) => {
