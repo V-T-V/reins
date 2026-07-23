@@ -196,6 +196,12 @@ type FileTask struct {
 	Op         string `json:"op"`          // "upload"（写文件）或 "download"（读文件）
 	Path       string `json:"path"`        // 目标机绝对路径
 	ContentB64 string `json:"content_b64"` // upload 时为 base64 编码的文件内容
+	// H1 分块传输（突破 10MB 限制）：
+	// chunk_upload: 按 ChunkIndex 写临时分片，TotalChunks 到齐后合并到 Path
+	// chunk_download: 按 ChunkIndex 读取对应分片返回
+	ChunkIndex  int    `json:"chunk_index,omitempty"`  // 当前分块序号（从 0 开始）
+	TotalChunks int    `json:"total_chunks,omitempty"` // 总分块数
+	UploadID    string `json:"upload_id,omitempty"`    // 分块会话 ID（同一文件的分块共享）
 }
 
 // ScreenshotTask 截图任务。

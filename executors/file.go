@@ -3,7 +3,9 @@ package executors
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
@@ -53,10 +55,15 @@ func (e *FileExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFunc)
 		return fail("", "path 不能为空")
 	}
 
-	// S5 修复：路径穿越校验
-	if err := e.policy.Check(task.Path); err != nil {
-		r := fail("", err.Error())
-		return r
+	// S5 修复：路径穿越校验（分块上传的目标路径也要校验）
+	if task.Op == "upload" || task.Op == "write" || task.Op == "chunk_upload" {
+		if err := e.policy.Check(task.Path); err != nil {
+			return fail("", err.Error())
+		}
+	} else if task.Op == "download" || task.Op == "read" || task.Op == "chunk_download" {
+		if err := e.policy.Check(task.Path); err != nil {
+			return fail("", err.Error())
+		}
 	}
 
 	switch task.Op {
@@ -64,6 +71,10 @@ func (e *FileExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFunc)
 		return e.upload(task)
 	case "download", "read":
 		return e.download(task)
+	case "chunk_upload":
+		return e.chunkUpload(task)
+	case "chunk_download":
+		return e.chunkDownload(task)
 	default:
 		return fail("", "不支持的 op: "+task.Op)
 	}
@@ -103,6 +114,108 @@ func (e *FileExecutor) download(task proto.FileTask) proto.TaskResult {
 		"path":        task.Path,
 		"bytes":       len(data),
 		"content_b64": base64.StdEncoding.EncodeToString(data),
+	})
+	return r
+}
+
+// chunkChunkSize 单个分块大小（1MB，base64 后约 1.3MB，远低于 WS 帧限制）。
+const chunkChunkSize = 1024 * 1024
+
+// chunkUpload 处理分块上传：按 UploadID 写临时分片，最后一块（ChunkIndex==TotalChunks-1）合并。
+func (e *FileExecutor) chunkUpload(task proto.FileTask) proto.TaskResult {
+	if task.UploadID == "" || task.TotalChunks == 0 {
+		return fail("", "upload_id 和 total_chunks 不能为空")
+	}
+	// 临时目录存放分片
+	tmpDir := filepath.Join(os.TempDir(), "go-rmm-chunks-"+task.UploadID)
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return fail("", "创建临时目录失败: " + err.Error())
+	}
+	// 写当前分片
+	chunkPath := filepath.Join(tmpDir, fmt.Sprintf("chunk-%06d", task.ChunkIndex))
+	data, err := base64.StdEncoding.DecodeString(task.ContentB64)
+	if err != nil {
+		return fail("", "base64 解码失败: " + err.Error())
+	}
+	if err := os.WriteFile(chunkPath, data, 0644); err != nil {
+		return fail("", "写分片失败: " + err.Error())
+	}
+
+	// 检查是否所有分片到齐
+	entries, _ := os.ReadDir(tmpDir)
+	if len(entries) < task.TotalChunks {
+		r := ok("")
+		r.Stdout = fmt.Sprintf("chunk %d/%d received", task.ChunkIndex+1, task.TotalChunks)
+		r.Data, _ = jsonMarshal(map[string]any{"chunk_index": task.ChunkIndex, "received": len(entries), "total": task.TotalChunks})
+		return r
+	}
+
+	// 所有分片到齐，合并到目标路径
+	out, err := os.Create(task.Path)
+	if err != nil {
+		return fail("", "创建目标文件失败: " + err.Error())
+	}
+	defer out.Close()
+	totalBytes := 0
+	for i := 0; i < task.TotalChunks; i++ {
+		cp := filepath.Join(tmpDir, fmt.Sprintf("chunk-%06d", i))
+		chunkData, err := os.ReadFile(cp)
+		if err != nil {
+			return fail("", fmt.Sprintf("读分片 %d 失败: %s", i, err.Error()))
+		}
+		n, _ := out.Write(chunkData)
+		totalBytes += n
+	}
+	// 清理临时分片
+	os.RemoveAll(tmpDir)
+
+	r := ok("")
+	r.Stdout = fmt.Sprintf("merged %d chunks, %d bytes", task.TotalChunks, totalBytes)
+	r.Data, _ = jsonMarshal(map[string]any{"path": task.Path, "bytes": totalBytes, "chunks": task.TotalChunks})
+	return r
+}
+
+// chunkDownload 处理分块下载：按 ChunkIndex 读取文件对应段返回。
+func (e *FileExecutor) chunkDownload(task proto.FileTask) proto.TaskResult {
+	info, err := os.Stat(task.Path)
+	if err != nil {
+		return fail("", "文件不存在: " + err.Error())
+	}
+	fileSize := int(info.Size())
+	offset := task.ChunkIndex * chunkChunkSize
+	if offset >= fileSize {
+		// 超出文件范围，返回空（表示分块结束）
+		r := ok("")
+		r.Stdout = "eof"
+		r.Data, _ = jsonMarshal(map[string]any{"chunk_index": task.ChunkIndex, "bytes": 0, "eof": true})
+		return r
+	}
+	end := offset + chunkChunkSize
+	if end > fileSize {
+		end = fileSize
+	}
+	// 读取指定段
+	f, err := os.Open(task.Path)
+	if err != nil {
+		return fail("", "打开文件失败: " + err.Error())
+	}
+	defer f.Close()
+	if _, err := f.Seek(int64(offset), 0); err != nil {
+		return fail("", "Seek 失败: " + err.Error())
+	}
+	buf := make([]byte, end-offset)
+	n, err := f.Read(buf)
+	if err != nil && n == 0 {
+		return fail("", "读文件失败: " + err.Error())
+	}
+	totalChunks := (fileSize + chunkChunkSize - 1) / chunkChunkSize
+	r := ok("")
+	r.Data, _ = jsonMarshal(map[string]any{
+		"chunk_index":  task.ChunkIndex,
+		"total_chunks": totalChunks,
+		"bytes":        n,
+		"content_b64":  base64.StdEncoding.EncodeToString(buf[:n]),
+		"eof":          task.ChunkIndex+1 >= totalChunks,
 	})
 	return r
 }
