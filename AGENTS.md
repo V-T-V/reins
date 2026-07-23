@@ -29,8 +29,8 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
 
 ## 当前情况（Status）
 
-- **完成度**：**P5 功能扩展完成**——文件分块 + 定时任务 + 交互式终端，从"能执行"到"好用"
-- **代码规模**：64 个 Go 文件，约 9300 行；17 个测试文件全绿；41 个 commit
+- **完成度**：**P6 大文件传输完成**——5GB 级二进制流式传输，stream-through 中继，SHA256 校验
+- **代码规模**：66 个 Go 文件，约 10000 行；18 个测试文件全绿；46 个 commit
 - **P0 基础**（已稳定）：
   - **协议层**（`proto/`）：Envelope 信封 + 13 种消息类型 + 6 种任务载荷 + 幂等键 + type 校验
   - **Relay 中继**（`relay/`）：WS 连接池 + REST API + SSE 事件流 + 心跳超时清理（Sweep 主动关连接）
@@ -70,6 +70,13 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
   - **交互式终端**（H3/H5）：方案C 协议（shell_open/input/output/close）+ SessionManager + REST + 前端
     - Agent 持久 shell 进程，stdout/stderr 经 WS 流式推送
     - 会话独立于任务状态机，连接断开自动清理
+- **P6 大文件传输**（5GB 级 stream-through）：
+  - **二进制 WS 帧**：去掉 base64 膨胀，直接传原始字节（省 33% 带宽 + CPU）
+  - **stream-through 中继**：Console→Relay→Agent 管道直连，Relay 仅 256KB 缓冲不落盘
+  - **SHA256 增量校验**：io.MultiWriter 流过即算，完成时比对
+  - **断点续传**：.part 临时文件 + resume_offset，同 transfer_id 重协商
+  - **进度推送**：Agent 周期 progress → SSE → Console（500ms 限流 + 速度估算）
+  - **绕过 bbolt**：不经 handlePostTask/SaveTask，独立 REST 端点直接 WS 转发
 - **已知限制**：
   - 文件任务限 10MB（WS 帧，P2 改分块流）
   - browse 执行器需 Chrome 环境（`-tags browse` 编译启用）
