@@ -29,8 +29,8 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
 
 ## 当前情况（Status）
 
-- **完成度**：**P4 全局一致性修复完成**——mTLS 接线 + CRL 校验 + 死代码清理，文档与实现对齐
-- **代码规模**：60 个 Go 文件，约 8100 行；16 个测试文件全绿；36 个 commit（P0×6 + P1×10 + P2×8 + P3×4 + Perf×4 + P4×4）
+- **完成度**：**P5 功能扩展完成**——文件分块 + 定时任务 + 交互式终端，从"能执行"到"好用"
+- **代码规模**：64 个 Go 文件，约 9300 行；17 个测试文件全绿；41 个 commit
 - **P0 基础**（已稳定）：
   - **协议层**（`proto/`）：Envelope 信封 + 13 种消息类型 + 6 种任务载荷 + 幂等键 + type 校验
   - **Relay 中继**（`relay/`）：WS 连接池 + REST API + SSE 事件流 + 心跳超时清理（Sweep 主动关连接）
@@ -64,6 +64,12 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
   - **mTLS 接线**：Agent 侧 enroll/mTLS 整条链接入（G1/A1，原为死代码）+ enroll URL 转换修复（G1/A3）
   - **CRL 校验**：Relay mTLS 加 VerifyPeerCertificate 钩子 + 撤销 API（G2/A2，原撤销完全失效）
   - **协议清理**：TypeEnrollResp/TypeError 标注为 HTTP/预留（G3/A4）
+- **P5 功能扩展**（从"能执行"到"好用"）：
+  - **文件分块传输**（H1）：chunk_upload/chunk_download，突破 10MB 限制（1MB/块）
+  - **定时任务**（H2）：robfig/cron 调度引擎，规则持久化到 bbolt，REST API 管理
+  - **交互式终端**（H3/H5）：方案C 协议（shell_open/input/output/close）+ SessionManager + REST + 前端
+    - Agent 持久 shell 进程，stdout/stderr 经 WS 流式推送
+    - 会话独立于任务状态机，连接断开自动清理
 - **已知限制**：
   - 文件任务限 10MB（WS 帧，P2 改分块流）
   - browse 执行器需 Chrome 环境（`-tags browse` 编译启用）

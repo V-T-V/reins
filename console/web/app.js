@@ -366,4 +366,82 @@
   refreshMetrics();
   setInterval(refreshAgents, 10000); // 兜底轮询
   setInterval(refreshMetrics, 5000); // metrics 轮询
+
+  // H5：交互式终端（零依赖原生实现，不用 xterm.js 保持单文件部署）
+  state.shellSession = null;
+  state.shellOutput = "";
+
+  window.__openShell = async function () {
+    if (!state.selected) { alert("请先选择一个 Agent"); return; }
+    const panel = document.getElementById("shell-panel");
+    const term = document.getElementById("terminal");
+    panel.style.display = "block";
+    term.innerHTML = '<span style="color:#8b949e">正在开启终端...</span>';
+
+    try {
+      const r = await fetch("/api/shell/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: state.selected, cols: 80, rows: 24 }),
+      });
+      const data = await r.json();
+      if (!r.ok) { term.innerHTML = '<span style="color:#f85149">开启失败: ' + esc(data.error || "") + "</span>"; return; }
+      state.shellSession = data.session_id;
+      state.shellOutput = "";
+      term.innerHTML = '<span style="color:#3fb950">终端已连接 (session=' + esc(data.session_id) + ')</span>\n<div id="shell-content"></div>';
+
+      // 监听输入（简单行模式，Enter 发送）
+      term.onclick = function() {
+        const input = prompt("输入命令（Enter 发送）:");
+        if (input !== null) { window.__shellSend(input + "\n"); }
+      };
+    } catch (e) {
+      term.innerHTML = '<span style="color:#f85149">错误: ' + esc(e.message) + "</span>";
+    }
+  };
+
+  window.__shellSend = async function (text) {
+    if (!state.shellSession) return;
+    try {
+      await fetch("/api/shell/input", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: state.shellSession,
+          agent_id: state.selected,
+          data_b64: btoa(unescape(encodeURIComponent(text))),
+        }),
+      });
+    } catch (e) {}
+  };
+
+  // SSE 已订阅 shell_output 事件（在 subscribeSSE 里加监听）
+  // shell_output 事件处理
+  if (state.evtSource) {
+    state.evtSource.addEventListener("shell_output", (e) => {
+      const data = JSON.parse(e.data).data;
+      if (data.exit) {
+        const content = document.getElementById("shell-content");
+        if (content) { content.innerHTML += '<span style="color:#8b949e">\n[进程退出 code=' + (data.exit_code !== undefined ? data.exit_code : "?") + "]</span>\n"; }
+        state.shellSession = null;
+        return;
+      }
+      if (data.data_b64) {
+        const decoded = decodeURIComponent(escape(atob(data.data_b64)));
+        state.shellOutput += decoded;
+        const content = document.getElementById("shell-content");
+        if (content) {
+          content.textContent += decoded;
+          // 自动滚动到底
+          const term = document.getElementById("terminal");
+          if (term) { term.scrollTop = term.scrollHeight; }
+        }
+      }
+    });
+    state.evtSource.addEventListener("shell_close", (e) => {
+      const content = document.getElementById("shell-content");
+      if (content) { content.innerHTML += '<span style="color:#8b949e">\n[会话已关闭]</span>\n'; }
+      state.shellSession = null;
+    });
+  }
 })();
