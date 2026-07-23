@@ -388,19 +388,31 @@
       if (!r.ok) { term.innerHTML = '<span style="color:#f85149">开启失败: ' + esc(data.error || "") + "</span>"; return; }
       state.shellSession = data.session_id;
       state.shellOutput = "";
-      term.innerHTML = '<span style="color:#3fb950">终端已连接 (session=' + esc(data.session_id) + ')</span>\n<div id="shell-content"></div>';
-
-      // 监听输入（简单行模式，Enter 发送）
-      term.onclick = function() {
-        const input = prompt("输入命令（Enter 发送）:");
-        if (input !== null) { window.__shellSend(input + "\n"); }
-      };
+      // I1：内联终端 UI（输出区 + 输入框 + 关闭按钮）
+      term.innerHTML =
+        '<div style="margin-bottom:8px"><span style="color:#3fb950">● 终端已连接</span> ' +
+        '<span style="color:#8b949e;font-size:12px">session=' + esc(data.session_id) + '</span>' +
+        ' <button class="cancel-btn" onclick="window.__closeShell()">关闭</button></div>' +
+        '<pre id="shell-content" style="white-space:pre-wrap;word-break:break-all;max-height:400px;overflow-y:auto;margin:0"></pre>' +
+        '<div style="margin-top:8px;display:flex;gap:8px">' +
+        '<input id="shell-input" placeholder="输入命令，Enter 发送..." ' +
+        'style="flex:1;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:6px;border-radius:4px;font-family:monospace" ' +
+        'onkeydown="if(event.key===\'Enter\'){window.__sendInput(this.value);this.value=\'\';}">' +
+        '<button onclick="window.__sendInput(document.getElementById(\'shell-input\').value+\'\\n\');document.getElementById(\'shell-input\').value=\'\'">发送</button>' +
+        '</div>';
+      // 自动聚焦输入框
+      setTimeout(function() { var i = document.getElementById("shell-input"); if (i) i.focus(); }, 100);
     } catch (e) {
       term.innerHTML = '<span style="color:#f85149">错误: ' + esc(e.message) + "</span>";
     }
   };
 
   window.__shellSend = async function (text) {
+    if (!state.shellSession) return;
+    await window.__sendInput(text);
+  };
+
+  window.__sendInput = async function (text) {
     if (!state.shellSession) return;
     try {
       await fetch("/api/shell/input", {
@@ -413,6 +425,21 @@
         }),
       });
     } catch (e) {}
+  };
+
+  window.__closeShell = async function () {
+    if (!state.shellSession) return;
+    var sid = state.shellSession;
+    state.shellSession = null;
+    try {
+      await fetch("/api/shell/close", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sid, agent_id: state.selected }),
+      });
+    } catch (e) {}
+    var content = document.getElementById("shell-content");
+    if (content) { content.innerHTML += '\n<span style="color:#8b949e">[会话已关闭]</span>'; }
   };
 
   // SSE 已订阅 shell_output 事件（在 subscribeSSE 里加监听）

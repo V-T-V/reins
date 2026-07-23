@@ -133,12 +133,17 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 
 // sendRegister 发送注册消息。
 func (a *Agent) sendRegister(ctx context.Context, wc *wsConn) error {
+	caps := a.disp.Types()
+	// I1：终端能力声明（shell 不是 executor，但 Agent 支持交互式终端）
+	if sessions.available() {
+		caps = append(caps, "shell")
+	}
 	reg := proto.Register{
 		AgentID:      a.cfg.AgentID,
 		Hostname:     hostname(),
 		OS:           runtimeGOOS() + "/" + runtimeGOARCH(),
 		Version:      version,
-		Capabilities: a.disp.Types(),
+		Capabilities: caps,
 		Tags:         a.cfg.Tags,
 	}
 	return wc.writeEnvelope(ctx, proto.TypeRegister, "relay", reg)
