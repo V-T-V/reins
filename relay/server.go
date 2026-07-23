@@ -122,6 +122,7 @@ type Relay struct {
 	ca      *CA           // 内置 CA（C7 身份认证），可为 nil（关闭 mTLS）
 	policy  *CommandPolicy // 命令安全策略（S4）
 	audit   *AuditLog     // 审计日志（F1）
+	scheduler *Scheduler  // H2 定时任务调度器，可为 nil
 }
 
 func NewRelay(cfg Config) *Relay {
@@ -148,6 +149,12 @@ func (r *Relay) WithCA(ca *CA) *Relay {
 // WithAudit 注入审计日志（C9）。
 func (r *Relay) WithAudit(a *AuditLog) *Relay {
 	r.audit = a
+	return r
+}
+
+// WithScheduler 注入定时任务调度器（H2）。
+func (r *Relay) WithScheduler(s *Scheduler) *Relay {
+	r.scheduler = s
 	return r
 }
 

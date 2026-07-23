@@ -1,0 +1,201 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/robfig/cron/v3"
+
+	"github.com/QiuShichang/go-rmm/proto"
+)
+
+// bucketCrons 存 cron 规则的 bbolt bucket。
+const bucketCrons = "crons"
+
+// CronRule 定时任务规则。
+type CronRule struct {
+	ID        string            `json:"id"`         // 规则 ID
+	CronExpr  string            `json:"cron_expr"`  // cron 表达式（5 字段：分 时 日 月 周）
+	TaskType  string            `json:"task_type"`  // 任务类型（powershell/script/...）
+	AgentID   string            `json:"agent_id"`   // 目标 Agent
+	Payload   json.RawMessage   `json:"payload"`    // 任务载荷
+	Timeout   int               `json:"timeout"`    // 超时秒
+	Enabled   bool              `json:"enabled"`    // 是否启用
+	CreatedAt int64             `json:"created_at"` // 创建时间
+	LastRun   int64             `json:"last_run"`   // 上次执行时间
+	NextRun   int64             `json:"next_run"`   // 下次执行时间
+	Tags      map[string]string `json:"tags,omitempty"`
+}
+
+// Scheduler 定时任务调度器。
+//
+// 用 robfig/cron/v3 做调度引擎，规则持久化到 bbolt。
+// 到点时生成 TaskRequest 经 dispatchTask 投递（复用现有任务链路）。
+type Scheduler struct {
+	mu       sync.Mutex
+	store    *Store
+	relay    *Relay
+	cron     *cron.Cron
+	entryMap map[string]cron.EntryID // ruleID → cron entry
+}
+
+// NewScheduler 构造调度器。
+func NewScheduler(store *Store, relay *Relay) *Scheduler {
+	s := &Scheduler{
+		store:    store,
+		relay:    relay,
+		entryMap: make(map[string]cron.EntryID),
+	}
+	return s
+}
+
+// Start 启动调度器，加载持久化规则。
+func (s *Scheduler) Start() error {
+	s.cron = cron.New()
+	s.cron.Start()
+
+	// 加载持久化规则
+	rules := s.loadRules()
+	for _, rule := range rules {
+		if rule.Enabled {
+			s.schedule(rule)
+		}
+	}
+	log.Printf("[scheduler] 启动，已加载 %d 条规则", len(rules))
+	return nil
+}
+
+// Stop 停止调度器。
+func (s *Scheduler) Stop() {
+	if s.cron != nil {
+		s.cron.Stop()
+	}
+}
+
+// AddRule 新增定时规则并持久化 + 调度。
+func (s *Scheduler) AddRule(rule CronRule) error {
+	if rule.ID == "" {
+		return fmt.Errorf("规则 ID 不能为空")
+	}
+	if rule.CronExpr == "" {
+		return fmt.Errorf("cron 表达式不能为空")
+	}
+	rule.CreatedAt = time.Now().UnixMilli()
+	rule.Enabled = true
+
+	// 持久化
+	if err := s.saveRule(rule); err != nil {
+		return fmt.Errorf("持久化失败: %w", err)
+	}
+	// 调度
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.schedule(rule)
+	log.Printf("[scheduler] 新增规则 %s: %s → agent=%s type=%s",
+		rule.ID, rule.CronExpr, rule.AgentID, rule.TaskType)
+	return nil
+}
+
+// RemoveRule 删除规则。
+func (s *Scheduler) RemoveRule(ruleID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// 从 cron 引擎移除
+	if entryID, ok := s.entryMap[ruleID]; ok && s.cron != nil {
+		s.cron.Remove(entryID)
+		delete(s.entryMap, ruleID)
+	}
+	// 从 bbolt 删除
+	if s.store != nil {
+		return s.store.DeleteCronRule(ruleID)
+	}
+	return nil
+}
+
+// ListRules 列出所有规则。
+func (s *Scheduler) ListRules() []CronRule {
+	return s.loadRules()
+}
+
+// schedule 把规则加入 cron 引擎。
+func (s *Scheduler) schedule(rule CronRule) {
+	if s.cron == nil {
+		return
+	}
+	entryID, err := s.cron.AddFunc(rule.CronExpr, func() {
+		s.executeRule(rule)
+	})
+	if err != nil {
+		log.Printf("[scheduler] 规则 %s 调度失败: %v", rule.ID, err)
+		return
+	}
+	s.entryMap[rule.ID] = entryID
+}
+
+// executeRule 到点执行：生成 TaskRequest 投递。
+func (s *Scheduler) executeRule(rule CronRule) {
+	log.Printf("[scheduler] 触发规则 %s → agent=%s type=%s", rule.ID, rule.AgentID, rule.TaskType)
+
+	// 生成任务请求
+	task := proto.TaskRequest{
+		TaskID:  "cron-" + rule.ID + "-" + time.Now().Format("150405"),
+		Type:    rule.TaskType,
+		AgentID: rule.AgentID,
+		Payload: rule.Payload,
+		Timeout: rule.Timeout,
+	}
+
+	// 持久化任务（复用 store）
+	if s.store != nil {
+		s.store.SaveTask(StoredTask{
+			Request: task,
+			Status:  StatusPending,
+		})
+	}
+
+	// 审计
+	if s.relay != nil && s.relay.audit != nil {
+		s.relay.audit.Log(AuditEntry{
+			Event:   "cron_triggered",
+			TaskID:  task.TaskID,
+			AgentID: rule.AgentID,
+			Type:    rule.TaskType,
+			Detail:  "cron:" + rule.CronExpr,
+		})
+	}
+
+	// 投递（复用 dispatchTask）
+	if s.relay != nil {
+		conn := s.relay.agents.Conn(rule.AgentID)
+		if conn == nil {
+			log.Printf("[scheduler] Agent %s 离线，任务 %s 缓存 pending", rule.AgentID, task.TaskID)
+			return
+		}
+		if err := s.relay.dispatchTask(conn, task); err != nil {
+			log.Printf("[scheduler] 投递失败: %v", err)
+		}
+	}
+
+	// 更新 LastRun
+	rule.LastRun = time.Now().UnixMilli()
+	s.saveRule(rule)
+}
+
+// saveRule 持久化规则。
+func (s *Scheduler) saveRule(rule CronRule) error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.SaveCronRule(rule)
+}
+
+// loadRules 从 bbolt 加载所有规则。
+func (s *Scheduler) loadRules() []CronRule {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.LoadCronRules()
+}

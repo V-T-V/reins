@@ -24,6 +24,9 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/enroll-token", r.handleGenEnrollToken) // C7 生成注册令牌
 	mux.HandleFunc("POST /api/enroll", r.handleEnroll)               // C7 Agent 换证书
 	mux.HandleFunc("POST /api/agents/revoke", r.handleRevokeAgent)   // G2 撤销 Agent 证书
+	mux.HandleFunc("GET /api/crons", r.handleListCrons)             // H2 cron 列表
+	mux.HandleFunc("POST /api/crons", r.handleAddCron)              // H2 新建 cron
+	mux.HandleFunc("DELETE /api/crons/", r.handleDeleteCron)        // H2 删除 cron
 	mux.HandleFunc("GET /api/events", r.handleSSE)
 	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
 	mux.HandleFunc("GET /healthz", r.handleHealthz) // D8 深度健康检查
@@ -673,4 +676,82 @@ func (r *Relay) handleRevokeAgent(w http.ResponseWriter, req *http.Request) {
 		"agent_id": body.AgentID,
 		"status":   "revoked",
 	})
+}
+
+// --- H2 定时任务 ---
+
+// GET /api/crons —— 列出所有定时规则。
+func (r *Relay) handleListCrons(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	if r.scheduler == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"crons": []any{}, "enabled": false})
+		return
+	}
+	rules := r.scheduler.ListRules()
+	writeJSON(w, http.StatusOK, map[string]any{"crons": rules, "count": len(rules), "enabled": true})
+}
+
+// POST /api/crons —— 新建定时规则。
+func (r *Relay) handleAddCron(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	if r.scheduler == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("调度器未启用")))
+		return
+	}
+	var rule CronRule
+	if err := json.NewDecoder(req.Body).Decode(&rule); err != nil {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("请求体解析失败: %w", err)))
+		return
+	}
+	if rule.CronExpr == "" || rule.AgentID == "" || rule.TaskType == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("cron_expr/agent_id/task_type 不能为空")))
+		return
+	}
+	if !proto.IsValidTaskType(rule.TaskType) {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("未知的任务类型: %s", rule.TaskType)))
+		return
+	}
+	// 生成 ID
+	if rule.ID == "" {
+		rule.ID = "cron-" + fmt.Sprint(time.Now().UnixMilli())
+	}
+	if err := r.scheduler.AddRule(rule); err != nil {
+		writeJSON(w, http.StatusBadRequest, errMap(err))
+		return
+	}
+	if r.audit != nil {
+		r.audit.Log(AuditEntry{Event: "cron_added", AgentID: rule.AgentID, Detail: rule.CronExpr})
+	}
+	writeJSON(w, http.StatusCreated, rule)
+}
+
+// DELETE /api/crons/{id} —— 删除定时规则。
+func (r *Relay) handleDeleteCron(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	ruleID := strings.TrimPrefix(req.URL.Path, "/api/crons/")
+	if ruleID == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("缺少规则 ID")))
+		return
+	}
+	if r.scheduler == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("调度器未启用")))
+		return
+	}
+	if err := r.scheduler.RemoveRule(ruleID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errMap(err))
+		return
+	}
+	if r.audit != nil {
+		r.audit.Log(AuditEntry{Event: "cron_deleted", Detail: ruleID})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": ruleID, "deleted": true})
 }

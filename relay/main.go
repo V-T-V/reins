@@ -58,6 +58,16 @@ func main() {
 		log.Printf("[relay] 审计日志已启用: %s", filepath.Join(dataDir(), "audit.log"))
 	}
 
+	// H2：启动定时任务调度器
+	scheduler := NewScheduler(store, relay)
+	if err := scheduler.Start(); err != nil {
+		log.Printf("[relay] 调度器启动失败: %v", err)
+	} else {
+		relay.WithScheduler(scheduler)
+		defer scheduler.Stop()
+		log.Printf("[relay] 定时任务调度器已启用")
+	}
+
 	mux := http.NewServeMux()
 	relay.registerHTTP(mux)
 	mux.HandleFunc("/agent", relay.handleAgentWS)     // Agent 反向连接

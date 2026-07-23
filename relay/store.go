@@ -342,3 +342,60 @@ func (s *Store) DeleteTask(taskID string) error {
 
 // ErrStoreClosed 存储已关闭。
 var ErrStoreClosed = errors.New("store closed")
+
+// --- H2 Cron 规则持久化 ---
+
+// SaveCronRule 保存定时任务规则。
+func (s *Store) SaveCronRule(rule CronRule) error {
+	if s.db == nil {
+		return ErrStoreClosed
+	}
+	data, err := json.Marshal(rule)
+	if err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte(bucketCrons))
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(rule.ID), data)
+	})
+}
+
+// DeleteCronRule 删除定时任务规则。
+func (s *Store) DeleteCronRule(ruleID string) error {
+	if s.db == nil {
+		return ErrStoreClosed
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketCrons))
+		if bucket == nil {
+			return nil
+		}
+		return bucket.Delete([]byte(ruleID))
+	})
+}
+
+// LoadCronRules 加载所有定时任务规则。
+func (s *Store) LoadCronRules() []CronRule {
+	if s.db == nil {
+		return nil
+	}
+	var out []CronRule
+	s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketCrons))
+		if bucket == nil {
+			return nil
+		}
+		c := bucket.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var rule CronRule
+			if json.Unmarshal(v, &rule) == nil {
+				out = append(out, rule)
+			}
+		}
+		return nil
+	})
+	return out
+}
