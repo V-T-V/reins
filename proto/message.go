@@ -49,6 +49,11 @@ const (
 	TypeEnrollResp = "enroll_resp"
 	// TypeError —— 任意方→对方：协议级错误（预留，当前未使用，P4 可用于鉴权失败等场景）。
 	TypeError = "error"
+	// H3 交互式终端消息类型：
+	TypeShellOpen  = "shell_open"  // Console→Relay→Agent：开会话
+	TypeShellInput = "shell_input" // Console→Relay→Agent：发 stdin
+	TypeShellOutput = "shell_output" // Agent→Relay→Console：推 stdout/stderr
+	TypeShellClose = "shell_close" // 双向：关闭会话
 )
 
 // 任务类型常量，与 TaskRequest.Type 取值对应。
@@ -276,6 +281,37 @@ type EnrollResp struct {
 	ExpiresAt  int64  `json:"expires_at"`  // 证书过期 Unix 时间戳
 	Success    bool   `json:"success"`
 	Error      string `json:"error,omitempty"`
+}
+
+// --- H3 交互式终端 ---
+
+// ShellOpen 开会话（Console→Relay→Agent）。
+type ShellOpen struct {
+	SessionID string `json:"session_id"` // 会话 ID（Console 生成）
+	Cols      int    `json:"cols,omitempty"`
+	Rows      int    `json:"rows,omitempty"`
+	Shell     string `json:"shell,omitempty"` // 指定 shell（默认 powershell/cmd/bash）
+}
+
+// ShellInput 发送 stdin（Console→Relay→Agent）。
+type ShellInput struct {
+	SessionID string `json:"session_id"`
+	DataB64   string `json:"data_b64"` // base64 编码的 stdin 字节
+}
+
+// ShellOutput 推送 stdout/stderr（Agent→Relay→Console）。
+type ShellOutput struct {
+	SessionID string `json:"session_id"`
+	DataB64   string `json:"data_b64"`   // base64 编码的输出字节
+	Stream    string `json:"stream,omitempty"` // stdout/stderr
+	Exit      bool   `json:"exit,omitempty"`   // 进程退出标记
+	ExitCode  int    `json:"exit_code,omitempty"`
+}
+
+// ShellClose 关闭会话（双向）。
+type ShellClose struct {
+	SessionID string `json:"session_id"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 // --- 辅助 ---

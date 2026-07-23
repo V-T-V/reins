@@ -338,6 +338,29 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 				})
 			}
 
+		case proto.TypeShellOutput:
+			// H3：终端输出转发给 Console（复用 EventBus 广播）
+			var out proto.ShellOutput
+			if err := env.Decode(&out); err == nil {
+				r.console.Broadcast(Event{
+					Kind:    proto.TypeShellOutput,
+					AgentID: agentID,
+					Payload: mustMarshal(out),
+					TS:      time.Now().UnixMilli(),
+				})
+			}
+
+		case proto.TypeShellClose:
+			var sc proto.ShellClose
+			if err := env.Decode(&sc); err == nil {
+				r.console.Broadcast(Event{
+					Kind:    proto.TypeShellClose,
+					AgentID: agentID,
+					Payload: mustMarshal(sc),
+					TS:      time.Now().UnixMilli(),
+				})
+			}
+
 		default:
 			log.Printf("[agent-read] 未知消息类型 %s from %s", env.Type, agentID)
 		}

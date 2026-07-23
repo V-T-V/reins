@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -110,6 +111,8 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	// 子 ctx：连接级取消（断线时让心跳 goroutine 退出）
 	connCtx, connCancel := context.WithCancel(ctx)
 	defer connCancel()
+	// H3：连接断开时关闭所有 shell 会话（防资源泄漏）
+	defer sessions.CloseAll()
 
 	// 1. 发送 register
 	if err := a.sendRegister(connCtx, wc); err != nil {
@@ -181,6 +184,12 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 			a.handleTaskWithPool(ctx, wc, env, a.pool)
 		case proto.TypeTaskCancel:
 			a.handleCancel(env)
+		case proto.TypeShellOpen:
+			a.handleShellOpen(ctx, wc, env)
+		case proto.TypeShellInput:
+			a.handleShellInput(env)
+		case proto.TypeShellClose:
+			a.handleShellClose(env)
 		default:
 			log.Printf("[agent] 忽略消息类型 %s", env.Type)
 		}
@@ -286,6 +295,52 @@ func (a *Agent) handleCancel(env proto.Envelope) {
 		cancelFn()
 		log.Printf("[agent] 任务 %s 已取消", cancel.TaskID)
 	}
+}
+
+// --- H3 交互式终端 handler ---
+
+// handleShellOpen 开启 shell 会话。
+func (a *Agent) handleShellOpen(ctx context.Context, wc *wsConn, env proto.Envelope) {
+	var open proto.ShellOpen
+	if err := env.Decode(&open); err != nil {
+		return
+	}
+	// output 回调：经 WS 发 shell_output
+	outputCb := func(out proto.ShellOutput) {
+		wctx, wcancel := contextWithTimeout(5 * time.Second)
+		defer wcancel()
+		_ = wc.writeEnvelope(wctx, proto.TypeShellOutput, "relay", out)
+	}
+	if err := sessions.OpenSession(open.SessionID, open.Cols, open.Rows, open.Shell, outputCb); err != nil {
+		log.Printf("[shell] 开启会话 %s 失败: %v", open.SessionID, err)
+		_ = wc.writeEnvelope(ctx, proto.TypeShellOutput, "relay", proto.ShellOutput{
+			SessionID: open.SessionID, Exit: true, ExitCode: -1,
+		})
+	}
+}
+
+// handleShellInput 向会话写入 stdin。
+func (a *Agent) handleShellInput(env proto.Envelope) {
+	var input proto.ShellInput
+	if err := env.Decode(&input); err != nil {
+		return
+	}
+	data, err := base64.StdEncoding.DecodeString(input.DataB64)
+	if err != nil {
+		return
+	}
+	if err := sessions.WriteInput(input.SessionID, data); err != nil {
+		log.Printf("[shell] 写入会话 %s 失败: %v", input.SessionID, err)
+	}
+}
+
+// handleShellClose 关闭会话。
+func (a *Agent) handleShellClose(env proto.Envelope) {
+	var close proto.ShellClose
+	if err := env.Decode(&close); err != nil {
+		return
+	}
+	sessions.CloseSession(close.SessionID, close.Reason)
 }
 
 // 退避参数用 var（非 const），便于测试临时覆盖加速。

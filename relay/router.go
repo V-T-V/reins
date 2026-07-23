@@ -27,6 +27,9 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/crons", r.handleListCrons)             // H2 cron 列表
 	mux.HandleFunc("POST /api/crons", r.handleAddCron)              // H2 新建 cron
 	mux.HandleFunc("DELETE /api/crons/", r.handleDeleteCron)        // H2 删除 cron
+	mux.HandleFunc("POST /api/shell/open", r.handleShellOpen)       // H3 开终端会话
+	mux.HandleFunc("POST /api/shell/input", r.handleShellInput)     // H3 发 stdin
+	mux.HandleFunc("POST /api/shell/close", r.handleShellClose)     // H3 关会话
 	mux.HandleFunc("GET /api/events", r.handleSSE)
 	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
 	mux.HandleFunc("GET /healthz", r.handleHealthz) // D8 深度健康检查
@@ -754,4 +757,108 @@ func (r *Relay) handleDeleteCron(w http.ResponseWriter, req *http.Request) {
 		r.audit.Log(AuditEntry{Event: "cron_deleted", Detail: ruleID})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": ruleID, "deleted": true})
+}
+
+// --- H3 交互式终端 REST ---
+
+// POST /api/shell/open —— 开启终端会话。
+// 请求体: {"agent_id":"...", "cols":80, "rows":24, "shell":"powershell"}
+func (r *Relay) handleShellOpen(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	var body struct {
+		AgentID string `json:"agent_id"`
+		Cols    int    `json:"cols"`
+		Rows    int    `json:"rows"`
+		Shell   string `json:"shell"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.AgentID == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id 不能为空")))
+		return
+	}
+	conn := r.agents.Conn(body.AgentID)
+	if conn == nil {
+		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("agent %s 不在线", body.AgentID)))
+		return
+	}
+	sessionID := "shell-" + fmt.Sprint(time.Now().UnixNano())
+	open := proto.ShellOpen{
+		SessionID: sessionID, Cols: body.Cols, Rows: body.Rows, Shell: body.Shell,
+	}
+	env, _ := proto.NewEnvelope(proto.TypeShellOpen, "relay", body.AgentID, open)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := conn.writeJSON(ctx, env); err != nil {
+		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("转发 shell_open 失败: %w", err)))
+		return
+	}
+	if r.audit != nil {
+		r.audit.Log(AuditEntry{Event: "shell_opened", AgentID: body.AgentID, Detail: sessionID})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": sessionID,
+		"agent_id":   body.AgentID,
+	})
+}
+
+// POST /api/shell/input —— 向会话发送 stdin。
+// 请求体: {"session_id":"...", "agent_id":"...", "data_b64":"..."}
+func (r *Relay) handleShellInput(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	var body struct {
+		SessionID string `json:"session_id"`
+		AgentID   string `json:"agent_id"`
+		DataB64   string `json:"data_b64"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.SessionID == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("session_id 不能为空")))
+		return
+	}
+	conn := r.agents.Conn(body.AgentID)
+	if conn == nil {
+		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("agent 不在线")))
+		return
+	}
+	input := proto.ShellInput{SessionID: body.SessionID, DataB64: body.DataB64}
+	env, _ := proto.NewEnvelope(proto.TypeShellInput, "relay", body.AgentID, input)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := conn.writeJSON(ctx, env); err != nil {
+		writeJSON(w, http.StatusBadGateway, errMap(err))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"session_id": body.SessionID})
+}
+
+// POST /api/shell/close —— 关闭会话。
+func (r *Relay) handleShellClose(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	var body struct {
+		SessionID string `json:"session_id"`
+		AgentID   string `json:"agent_id"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.SessionID == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("session_id 不能为空")))
+		return
+	}
+	conn := r.agents.Conn(body.AgentID)
+	if conn != nil {
+		sc := proto.ShellClose{SessionID: body.SessionID, Reason: "console closed"}
+		env, _ := proto.NewEnvelope(proto.TypeShellClose, "relay", body.AgentID, sc)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = conn.writeJSON(ctx, env)
+	}
+	if r.audit != nil {
+		r.audit.Log(AuditEntry{Event: "shell_closed", AgentID: body.AgentID, Detail: body.SessionID})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session_id": body.SessionID, "closed": true})
 }
