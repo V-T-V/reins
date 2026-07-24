@@ -7,12 +7,19 @@
 (function () {
   "use strict";
 
+  // 自动检测 base path（支持反向代理子路径如 /rmm/）
+  // 页面 URL 为 https://IP/rmm/ → basePath = "/rmm"
+  // 页面 URL 为 https://IP/ → basePath = ""
+  var basePath = location.pathname.replace(/\/[^/]*$/, ""); // 剥掉文件名
+  if (basePath === "/" || basePath === ".") basePath = "";
+  function api(path) { return basePath + path; }
+
   const state = { agents: new Map(), selected: null, evtSource: null };
 
   // --- Agent 列表 ---
   async function refreshAgents() {
     try {
-      const r = await fetch("/api/agents");
+      const r = await fetch(api("/api/agents"));
       const data = await r.json();
       // 标记：列表里没有的视为离线
       const onlineIds = new Set();
@@ -154,7 +161,7 @@
     const taskId = "t-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
     const body = { task_id: taskId, type, agent_id: state.selected, payload, timeout };
     try {
-      const r = await fetch("/api/tasks", {
+      const r = await fetch(api("/api/tasks"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -203,7 +210,7 @@
   // --- SSE 订阅（D6: 加自动重连）---
   function subscribeSSE() {
     if (state.evtSource) state.evtSource.close();
-    const es = new EventSource("/api/events");
+    const es = new EventSource(api("/api/events"));
     state.evtSource = es;
     es.addEventListener("hello", () => {
       document.getElementById("relay-info").textContent = "Relay: 已连接 ✓";
@@ -242,7 +249,7 @@
   // D6：重连后补拉近期任务结果（防 SSE 丢事件）
   async function fetchRecentResults() {
     try {
-      const r = await fetch("/api/tasks?limit=10");
+      const r = await fetch(api("/api/tasks?limit=10"));
       const data = await r.json();
       (data.tasks || []).forEach((t) => {
         if (t.status === "completed" || t.status === "failed") {
@@ -257,7 +264,7 @@
     if (!confirm("确认取消任务 " + taskId + "？")) return;
     const agentID = state.selected || "";
     try {
-      await fetch("/api/tasks/cancel", {
+      await fetch(api("/api/tasks/cancel"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ task_id: taskId, agent_id: agentID, reason: "用户手动取消" }),
@@ -270,7 +277,7 @@
   // D6：metrics 面板轮询
   async function refreshMetrics() {
     try {
-      const r = await fetch("/api/metrics");
+      const r = await fetch(api("/api/metrics"));
       const m = await r.json();
       const el = document.getElementById("metrics-panel");
       if (el) {
@@ -389,7 +396,7 @@
     term.innerHTML = '<span style="color:#8b949e">正在开启终端...</span>';
 
     try {
-      const r = await fetch("/api/shell/open", {
+      const r = await fetch(api("/api/shell/open"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agent_id: state.selected, cols: 80, rows: 24 }),
@@ -425,7 +432,7 @@
   window.__sendInput = async function (text) {
     if (!state.shellSession) return;
     try {
-      await fetch("/api/shell/input", {
+      await fetch(api("/api/shell/input"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -442,7 +449,7 @@
     var sid = state.shellSession;
     state.shellSession = null;
     try {
-      await fetch("/api/shell/close", {
+      await fetch(api("/api/shell/close"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sid, agent_id: state.selected }),
@@ -493,8 +500,8 @@
     var transferID = "xfer-" + Date.now();
     document.getElementById("xfer-progress").innerHTML = '<span style="color:#d29922">⏳ 上传中...</span>';
     try {
-      var resp = await fetch("/api/transfer/upload?agent_id=" + encodeURIComponent(state.selected) +
-        "&path=" + encodeURIComponent(path) + "&transfer_id=" + transferID, {
+      var resp = await fetch(api("/api/transfer/upload?agent_id=" + encodeURIComponent(state.selected) +
+        "&path=" + encodeURIComponent(path) + "&transfer_id=" + transferID), {
         method: "POST",
         body: file,
       });
@@ -515,8 +522,8 @@
     var transferID = "xfer-" + Date.now();
     document.getElementById("xfer-progress").innerHTML = '<span style="color:#d29922">⏳ 下载中...</span>';
     try {
-      var resp = await fetch("/api/transfer/download?agent_id=" + encodeURIComponent(state.selected) +
-        "&path=" + encodeURIComponent(path) + "&transfer_id=" + transferID);
+      var resp = await fetch(api("/api/transfer/download?agent_id=" + encodeURIComponent(state.selected) +
+        "&path=" + encodeURIComponent(path) + "&transfer_id=" + transferID));
       if (!resp.ok) {
         var err = await resp.json();
         document.getElementById("xfer-progress").innerHTML = '<span style="color:#f85149">下载失败: ' + esc(err.error || "") + '</span>';
