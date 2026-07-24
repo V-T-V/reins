@@ -21,6 +21,16 @@
         onlineIds.add(a.agent_id);
       });
       renderAgentList();
+      // P2：0 Agent 时显示安装引导
+      var overlay = document.getElementById("setup-overlay");
+      if (state.agents.size === 0 && overlay && !overlay.dataset.dismissed) {
+        overlay.style.display = "flex";
+        // 自动检测 Relay IP（用当前页面的 hostname）
+        var relayIP = location.hostname + (location.port ? ":" + location.port : "");
+        document.getElementById("relay-ip").textContent = relayIP;
+      } else if (overlay && state.agents.size > 0) {
+        overlay.style.display = "none";
+      }
     } catch (e) {
       console.error("刷新 Agent 失败", e);
     }

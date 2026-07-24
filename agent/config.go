@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -109,7 +110,7 @@ func loadConfig(args []string) (cmd string, cfg Config, err error) {
 	if e := fs.Parse(args[1:]); e != nil {
 		return cmd, cfg, e
 	}
-	cfg.RelayURL = *relayURL
+	cfg.RelayURL = normalizeRelayURL(*relayURL) // P1：裸 IP 自动补全
 	cfg.Token = *token
 	cfg.AgentID = *agentID
 	cfg.MTLS = *mtls
@@ -126,7 +127,27 @@ func saveConfig(cfg Config) error {
 	return os.WriteFile(configPath(), b, 0600)
 }
 
-// generateAgentID 生成形如 agent-<hostname>-<shortuuid> 的 ID。
+// normalizeRelayURL 把用户输入的简写地址补全为完整 WS URL。
+// 支持以下输入格式：
+//   "192.168.1.100"        → ws://192.168.1.100:7780/agent
+//   "192.168.1.100:9999"   → ws://192.168.1.100:9999/agent
+//   "relay.example.com"    → ws://relay.example.com:7780/agent
+//   "ws://host:7780/agent" → 不变（已是完整 URL）
+//   "wss://host/agent"     → 不变
+func normalizeRelayURL(input string) string {
+	if input == "" {
+		return ""
+	}
+	// 已含 scheme，直接返回
+	if strings.HasPrefix(input, "ws://") || strings.HasPrefix(input, "wss://") {
+		return input
+	}
+	// 裸地址：自动补全
+	if !strings.Contains(input, ":") {
+		return "ws://" + input + ":7780/agent"
+	}
+	return "ws://" + input + "/agent"
+}
 func generateAgentID() string {
 	host, _ := os.Hostname()
 	if host == "" {

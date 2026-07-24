@@ -60,9 +60,49 @@
   /* D6 取消按钮 */
   .cancel-btn { background: #da3633; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 11px; margin-left: 8px; }
   .cancel-btn:hover { background: #f85149; }
+  /* P2 安装引导覆盖层 */
+  .setup-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(13,17,23,0.95); z-index: 9999;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .setup-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 40px; max-width: 600px; text-align: center;
+  }
+  .setup-card h2 { color: var(--accent); border: none; padding: 0; margin-bottom: 8px; }
+  .setup-card .step { text-align: left; margin: 20px 0; padding: 16px; background: var(--bg); border-radius: 8px; }
+  .setup-card .step-num { display: inline-block; width: 28px; height: 28px; line-height: 28px; border-radius: 50%; background: var(--accent); color: #fff; text-align: center; font-weight: 700; margin-right: 12px; }
+  .setup-card .cmd { background: #1c2128; border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin: 12px 0; font-family: monospace; font-size: 13px; color: #3fb950; text-align: left; word-break: break-all; cursor: pointer; position: relative; }
+  .setup-card .cmd:hover { border-color: var(--accent); }
+  .setup-card .copy-hint { position: absolute; right: 12px; top: 12px; color: var(--text-muted); font-size: 11px; }
 </style>
 </head>
 <body>
+<!-- P2 安装引导（0 Agent 时显示） -->
+<div class="setup-overlay" id="setup-overlay" style="display:none">
+  <div class="setup-card">
+    <h2>🚀 go-rmm 部署向导</h2>
+    <p style="color:#8b949e">还没有 Agent 连接。按以下步骤部署：</p>
+
+    <div class="step">
+      <span class="step-num">1</span><strong>在 Windows 被控机器上，管理员 PowerShell 运行：</strong>
+      <div class="cmd" onclick="navigator.clipboard.writeText(this.querySelector('code').textContent);this.querySelector('.copy-hint').textContent='已复制!'">
+        <code id="install-cmd">go-rmm-agent.exe install -relay <span id="relay-ip">IP</span></code>
+        <span class="copy-hint">点击复制</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <span class="step-num">2</span><strong>安装完成后自动启动，刷新本页面即可看到 Agent。</strong>
+    </div>
+
+    <div style="margin-top:24px">
+      <button onclick="var o=document.getElementById('setup-overlay');o.style.display='none';o.dataset.dismissed='1'">进入控制台</button>
+    </div>
+  </div>
+</div>
+
 <div class="app">
   <!-- 侧栏：Agent 列表 -->
   <aside class="sidebar">
