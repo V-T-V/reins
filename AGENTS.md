@@ -30,7 +30,7 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
 ## 当前情况（Status）
 
 - **完成度**：**P6 大文件传输完成**——5GB 级二进制流式传输，stream-through 中继，SHA256 校验
-- **代码规模**：66 个 Go 文件，约 10168 行；19 个测试文件全绿；50 个 commit
+- **代码规模**：67 个 Go 文件，约 10206 行；19 个测试文件全绿；52 个 commit
 - **P0 基础**（已稳定）：
   - **协议层**（`proto/`）：Envelope 信封 + 13 种消息类型 + 6 种任务载荷 + 幂等键 + type 校验
   - **Relay 中继**（`relay/`）：WS 连接池 + REST API + SSE 事件流 + 心跳超时清理（Sweep 主动关连接）
@@ -82,6 +82,11 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
   - browse 执行器需 Chrome 环境（`-tags browse` 编译启用）
   - mTLS 需手动配置（`-mtls` + TLS 证书），默认向后兼容 ws+token
   - race detector 需 CGO（CI 环境装 gcc 后 `make test-race`）
+- **架构假设**（必须理解的设计约束）：
+  - **单 Relay 是硬假设**：不支持水平扩展。Agent 连固定 Relay，任务状态在本地 bbolt，Registry 内存态。多 Relay 需引入消息总线（NATS/Redis）重构。当前定位：单机房/百级 Agent。
+  - **Console 自身不鉴权**：Console 是无状态反向代理，鉴权完全委托 Relay。Console 必须部署在 Relay 信任的网络内（或加前置网关鉴权）。
+  - **文件传输/终端是 best-effort**：不经 at-least-once 任务管线（无 ACK/持久化/重投）。断了靠断点续传（.part）或重开会话恢复。任务（powershell/script 等）才是 at-least-once 保证。
+  - **命令策略是 best-effort**：黑名单正则可被变形绕过，不是安全边界。终端（交互 shell）完全无法做静态拦截。
 
 ## 技术栈与架构
 
