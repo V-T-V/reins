@@ -9,17 +9,28 @@
 | 组件 | 产出 | 职责 |
 |------|------|------|
 | **Relay** | `go-rmm-relay` | 公网/局域网中继服务器，管理 Agent 连接池，路由任务与结果 |
-| **Agent** | `go-rmm-agent.exe` | Windows 常驻服务，反向连接 Relay，执行下发的 6 类任务 |
-| **Console** | `go-rmm-console` | Web 控制台，浏览器下发任务、查看实时结果 |
+| **Agent** | `go-rmm-agent.exe` | Windows 常驻服务，反向连接 Relay，执行任务 |
+| **Console** | ~~独立进程~~ | 已合并进 Relay（N1），浏览器直接访问 Relay 端口 |
 
 ```
-浏览器控制台 ──HTTP/SSE──► Relay ◄──反向WS── Windows Agent(服务化)
-                                      ├─ powershell  执行 PowerShell 命令
-                                      ├─ script      执行下发脚本
-                                      ├─ file        文件上传/下载
-                                      ├─ screenshot  窗口/全屏截图
-                                      ├─ browse      chromedp 浏览器自动化
-                                      └─ guiclick    视觉模型+SendInput 桌面点击
+浏览器 ──HTTP/SSE──► Relay(内嵌Web UI) ◄──反向WS── Windows Agent(服务化)
+                                          ├─ powershell/script/file/screenshot
+                                          ├─ browse/guiclick
+                                          ├─ shell（交互终端）
+                                          └─ transfer（5GB大文件传输）
+```
+
+## 快速部署（零配置）
+
+```bash
+# Linux 服务端（1行，零参数零token）
+./go-rmm-relay-linux
+
+# Windows 被控端（管理员，1行，只填IP）
+go-rmm-agent.exe install -relay 192.168.1.100
+
+# 浏览器打开
+http://192.168.1.100:7780
 ```
 
 ## 为什么用 Go
@@ -34,28 +45,43 @@ Go 做**控制平面**（通信/调度/服务化），数据平面（具体点�
 ## 快速开始
 
 ```bash
-# 编译全部三组件
-make all
+# Linux 服务端（零参数零token）
+./go-rmm-relay-linux
 
-# 终端1：启动中继服务器
-bin/go-rmm-relay -addr :7780
+# Windows 被控端（管理员，只填IP）
+go-rmm-agent.exe install -relay 192.168.1.100
 
-# 终端2：Agent 前台调试模式（自动连本地 Relay）
-bin/go-rmm-agent.exe run -relay ws://127.0.0.1:7780/agent
-
-# 终端3：Web 控制台
-bin/go-rmm-console -addr :7781 -relay http://127.0.0.1:7780
-# 浏览器打开 http://localhost:7781
+# 浏览器打开
+http://192.168.1.100:7780
 ```
 
-## 生产部署
+## 生产部署（Linux 服务端 + Windows Agent）
+
+```bash
+# ① Linux 服务器
+scp go-rmm-relay-linux user@server:/opt/
+ssh user@server "chmod +x /opt/go-rmm-relay-linux && /opt/go-rmm-relay-linux"
+
+# 可选：注册 systemd 开机自启
+cat > /etc/systemd/system/go-rmm-relay.service << 'EOF'
+[Unit]
+Description=go-rmm Relay
+After=network.target
+[Service]
+ExecStart=/opt/go-rmm-relay-linux
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable --now go-rmm-relay
+```
 
 ```powershell
-# 被控 Windows：安装 Agent 为服务
-.\go-rmm-agent.exe install -relay wss://relay.example.com/agent -token <your-token>
-.\go-rmm-agent.exe start
+# ② Windows 被控机器（管理员 PowerShell）
+.\go-rmm-agent.exe install -relay 服务器IP
+# 自动安装为服务 + 启动 + 连接
 
-# 查看状态/卸载
+# 管理
 .\go-rmm-agent.exe status
 .\go-rmm-agent.exe stop
 .\go-rmm-agent.exe uninstall
@@ -94,4 +120,6 @@ bin/go-rmm-console -addr :7781 -relay http://127.0.0.1:7780
 
 ## 状态
 
-P6 完成（8 轮：基础→安全可靠→漏洞修复→收尾加固→性能→一致性修复→功能扩展→大文件传输）。详见 [`AGENTS.md` 当前情况](./AGENTS.md#当前情况status)。
+## 状态
+
+P7 完成（零配置部署：Relay 内嵌 Web UI + 裸 IP 自动补全 + 安装引导页）。详见 [`AGENTS.md` 当前情况](./AGENTS.md#当前情况status)。

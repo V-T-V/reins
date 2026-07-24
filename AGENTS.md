@@ -30,7 +30,7 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
 ## 当前情况（Status）
 
 - **完成度**：**P6 大文件传输完成**——5GB 级二进制流式传输，stream-through 中继，SHA256 校验
-- **代码规模**：67 个 Go 文件，约 10206 行；19 个测试文件全绿；52 个 commit
+- **代码规模**：68 个 Go 文件，约 10254 行；19 个测试文件全绿；55 个 commit
 - **P0 基础**（已稳定）：
   - **协议层**（`proto/`）：Envelope 信封 + 13 种消息类型 + 6 种任务载荷 + 幂等键 + type 校验
   - **Relay 中继**（`relay/`）：WS 连接池 + REST API + SSE 事件流 + 心跳超时清理（Sweep 主动关连接）
@@ -87,6 +87,11 @@ Web 控制台(浏览器) ──HTTP/SSE──► Relay 中继服务器 ◄──
   - **Console 自身不鉴权**：Console 是无状态反向代理，鉴权完全委托 Relay。Console 必须部署在 Relay 信任的网络内（或加前置网关鉴权）。
   - **文件传输/终端是 best-effort**：不经 at-least-once 任务管线（无 ACK/持久化/重投）。断了靠断点续传（.part）或重开会话恢复。任务（powershell/script 等）才是 at-least-once 保证。
   - **命令策略是 best-effort**：黑名单正则可被变形绕过，不是安全边界。终端（交互 shell）完全无法做静态拦截。
+- **零配置部署**（P7）：
+  - **Relay 内嵌 Web UI**：不再需要独立 Console 进程，服务端单二进制（N1）
+  - **裸 IP 自动补全**：Agent `-relay 192.168.1.100` 自动补全为 `ws://192.168.1.100:7780/agent`（P1）
+  - **默认无 token**：Relay 启动不设 token 即不校验，Agent 也不需要 token（零交互）
+  - **安装引导页**：Web UI 首页检测 0 Agent 时自动显示部署向导（含可复制的安装命令）（P2）
 
 ## 技术栈与架构
 

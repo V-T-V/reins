@@ -1,71 +1,55 @@
-go-rmm 远端部署包（Linux 服务端 + Windows Agent）
-====================================================
+go-rmm 部署指南（零配置版）
+============================
 
-【架构】
-  Linux 服务器：go-rmm-relay（内嵌 Web UI + API + WS 中继）
-  Windows 被控机：go-rmm-agent（反向连接 Relay）
+【部署架构】
+  Linux 服务器：go-rmm-relay（内嵌 Web UI + API + WS 中继，单文件）
+  Windows 被控机：go-rmm-agent（反向连接 Relay，服务化）
 
-【服务端部署（Linux）】
+【零配置部署（2 行命令）】
 
-1. 上传 go-rmm-relay 到 Linux 服务器：
-   scp go-rmm-relay user@server:/opt/
+① Linux 服务端（无需任何参数）：
+   ./go-rmm-relay-linux
+   → 自动启动 :7780，Web UI 内嵌，无 token 校验
 
-2. 赋予执行权限并启动：
-   chmod +x /opt/go-rmm-relay
-   /opt/go-rmm-relay -addr :7780 -token 你的密钥
+② Windows 被控端（管理员 PowerShell，只填 IP）：
+   .\go-rmm-agent.exe install -relay 服务器IP
+   → 自动补全为 ws://IP:7780/agent
+   → 自动安装为服务 + 启动 + 连接
 
-3. 浏览器打开：
+③ 浏览器打开：
    http://服务器IP:7780
+   → 首次打开显示安装引导（含可复制的命令）
+   → Agent 上线后自动进入控制台
 
-   完成！Web 控制台已就绪。
+【可选：token 鉴权（公网部署建议）】
 
-【被控机器部署（Windows）】
+   ./go-rmm-relay-linux -token 你的密钥
+   .\go-rmm-agent.exe install -relay 服务器IP -token 你的密钥
 
-1. 将 go-rmm-agent.exe 复制到被控机器
+【可选：systemd 开机自启（Linux）】
 
-2. 管理员 PowerShell 安装为服务：
-   .\go-rmm-agent.exe install -relay ws://服务器IP:7780/agent -token 你的密钥
-   .\go-rmm-agent.exe start
+   cat > /etc/systemd/system/go-rmm-relay.service << 'EOF'
+   [Unit]
+   Description=go-rmm Relay
+   After=network.target
+   [Service]
+   ExecStart=/opt/go-rmm-relay-linux
+   Restart=always
+   [Install]
+   WantedBy=multi-user.target
+   EOF
+   systemctl enable --now go-rmm-relay
 
-3. 回到浏览器刷新，Agent 已上线
+【Agent 管理】
+   install   注册为 Windows 服务
+   start     启动
+   stop      停止
+   status    状态
+   uninstall 卸载
+   run       前台调试
 
-【可选：注册 systemd 服务（Linux）】
-
-cat > /etc/systemd/system/go-rmm-relay.service << 'EOF'
-[Unit]
-Description=go-rmm Relay
-After=network.target
-
-[Service]
-ExecStart=/opt/go-rmm-relay -addr :7780 -token 你的密钥
-Restart=always
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable go-rmm-relay
-systemctl start go-rmm-relay
-
-【参数说明】
-
-Relay:
-  -addr      监听地址（默认 :7780）
-  -token     鉴权密钥（强烈建议设置）
-  -mtls      启用 mTLS（需 TLS 证书）
-  -dev       开发模式（详细日志）
-
-Agent:
-  install    注册为 Windows 服务
-  start/stop 启动/停止服务
-  run        前台调试运行
-  -relay     Relay 的 WS 地址
-  -token     与 Relay 一致的密钥
-  -id        Agent ID（留空自动生成）
-
-【注意】
-- 只需 2 个文件：服务端 1 个 Linux 二进制 + 被控端 1 个 Windows exe
-- token 两端必须一致
-- 公网部署建议用 -mtls 或前置 Nginx TLS / Tailscale
+【-relay 参数支持的格式】
+   192.168.1.100         → 自动补全 ws://192.168.1.100:7780/agent
+   192.168.1.100:9999    → ws://192.168.1.100:9999/agent
+   relay.example.com     → ws://relay.example.com:7780/agent
+   ws://host:7780/agent  → 原样使用
