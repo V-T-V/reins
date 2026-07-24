@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"os"
@@ -55,7 +56,7 @@ type transferSession struct {
 	direction string // upload / download
 	path      string
 	file      *os.File
-	hash      hashWriter // SHA256 增量
+	hash      hash.Hash // C2：增量 SHA256（每次 Write 时更新，isLast 时直接 Sum）
 	bytesDone int64
 	total     int64
 	expectedSHA256 string // M8: Console 预算的摘要，完成时比对
@@ -99,6 +100,7 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 			id: init.TransferID, direction: "upload", path: init.Path,
 			file: f, total: init.Size, startTime: time.Now(),
 			expectedSHA256: init.SHA256,
+			hash: sha256.New(), // C2：增量 hash
 		}
 		te.mu.Unlock()
 		ready.Accepted = true
@@ -141,11 +143,19 @@ func (te *TransferEngine) ReceiveUploadData(transferID string, data []byte, isLa
 		return
 	}
 
-	// 写入文件
+	// A7 修复：写入前检查累计大小不超限
+	if sess.total > 0 && sess.bytesDone+int64(len(data)) > sess.total*2 {
+		te.completeUpload(transferID, false, sess.bytesDone, "上传数据超过声明大小的 2 倍，拒绝", completeCb)
+		return
+	}
+	// 写入文件 + C2 增量 hash
 	n, err := sess.file.Write(data)
 	if err != nil {
 		te.completeUpload(transferID, false, 0, "写文件失败: "+err.Error(), completeCb)
 		return
+	}
+	if sess.hash != nil {
+		sess.hash.Write(data[:n]) // C2：流过即算，不再重读
 	}
 	sess.bytesDone += int64(n)
 
@@ -158,27 +168,32 @@ func (te *TransferEngine) ReceiveUploadData(transferID string, data []byte, isLa
 	}
 
 	if isLast {
-		// 计算完整文件 SHA256（重新读 .part 文件）
+		// C2：直接用增量 hash 的结果（不再重读文件）
 		sess.file.Close()
 		partPath := sess.path + ".part"
-		hash := te.computeFileHash(partPath)
-		if hash == "" {
+		var hashHex string
+		if sess.hash != nil {
+			hashHex = hex.EncodeToString(sess.hash.Sum(nil))
+		} else {
+			// 降级：重读文件算 hash
+			hashHex = te.computeFileHash(partPath)
+		}
+		if hashHex == "" {
 			te.completeUpload(transferID, false, sess.bytesDone, "SHA256 计算失败", completeCb)
 			return
 		}
-		// M8 修复：双边校验——比对 Console 预算的摘要
-		if sess.expectedSHA256 != "" && hash != sess.expectedSHA256 {
-			os.Remove(partPath) // 校验失败删 .part
+		// M8：双边校验——比对 Console 预算的摘要
+		if sess.expectedSHA256 != "" && hashHex != sess.expectedSHA256 {
+			os.Remove(partPath)
 			te.completeUpload(transferID, false, sess.bytesDone,
-				fmt.Sprintf("SHA256 校验失败: 期望 %s 实际 %s", sess.expectedSHA256[:16], hash[:16]), completeCb)
+				fmt.Sprintf("SHA256 校验失败: 期望 %s 实际 %s", sess.expectedSHA256[:16], hashHex[:16]), completeCb)
 			return
 		}
-		// 重命名为最终文件
 		if err := os.Rename(partPath, sess.path); err != nil {
 			te.completeUpload(transferID, false, sess.bytesDone, "重命名失败: "+err.Error(), completeCb)
 			return
 		}
-		te.completeUpload(transferID, true, sess.bytesDone, hash, completeCb)
+		te.completeUpload(transferID, true, sess.bytesDone, hashHex, completeCb)
 	}
 }
 

@@ -154,6 +154,10 @@ func (e *FileExecutor) chunkUpload(task proto.FileTask) proto.TaskResult {
 	if err != nil {
 		return fail("", "base64 解码失败: " + err.Error())
 	}
+	// A8 修复：单块大小校验
+	if len(data) > chunkChunkSize*2 {
+		return fail("", fmt.Sprintf("分块 %d 超过上限 %d", len(data), chunkChunkSize*2))
+	}
 	if err := os.WriteFile(chunkPath, data, 0644); err != nil {
 		return fail("", "写分片失败: " + err.Error())
 	}
@@ -188,8 +192,9 @@ func (e *FileExecutor) chunkUpload(task proto.FileTask) proto.TaskResult {
 		n, _ := out.Write(chunkData)
 		totalBytes += n
 	}
-	// 清理临时分片
+	// 清理临时分片 + A8 修复：清理 merge 锁 map 防内存泄漏
 	os.RemoveAll(tmpDir)
+	delete(chunkMergeLocks, task.UploadID)
 
 	r := ok("")
 	r.Stdout = fmt.Sprintf("merged %d chunks, %d bytes", task.TotalChunks, totalBytes)
