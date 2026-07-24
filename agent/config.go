@@ -27,6 +27,9 @@ type Config struct {
 	// MTLS 启用 mTLS 模式（wss:// + 客户端证书）。为 true 时 Token 作为 enrollment token（首次），
 	// 证书获取后用 mTLS 连接，不再用 token。为 false 时走 ws://+token 明文模式（向后兼容）。
 	MTLS      bool              `json:"mtls,omitempty"`
+	// AllowedRoots 文件操作允许的根目录（file 任务 + 大文件传输共用）。
+	// 留空时用 DefaultFilePolicy（拒绝系统目录/敏感文件，需显式配置允许的工作目录）。
+	AllowedRoots []string          `json:"allowed_roots,omitempty"`
 	// MaxConcurrentTasks 最大并发执行任务数（C6 并发限流）。0 或负数表示不限。
 	// 默认 4，防止被并发任务打爆。
 	MaxConcurrentTasks int `json:"max_concurrent_tasks,omitempty"`

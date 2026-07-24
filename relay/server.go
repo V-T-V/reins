@@ -28,6 +28,9 @@ type wsConn struct {
 	id   string // 连接 ID（UUID，非业务身份）
 	role string // "agent" / "console"
 	biz  string // 业务身份：agentID 或 consoleID
+	// M2：mTLS 客户端证书身份（非 mTLS 模式为空）
+	certCN  string
+	certDNS []string
 
 	writeMu sync.Mutex
 
@@ -60,15 +63,26 @@ func (w *wsConn) unregisterXferChannel(transferID string) {
 }
 
 // routeXferData 把二进制帧路由到对应 transferID 的 channel。
+// M3 修复：isLast=true 时关闭 channel，让消费端（handleTransferDownload）正确退出。
 func (w *wsConn) routeXferData(transferID string, data []byte, isLast bool) {
 	w.xferMu.Lock()
 	ch, ok := w.xferChannels[transferID]
 	w.xferMu.Unlock()
-	if ok {
+	if !ok {
+		return
+	}
+	if len(data) > 0 {
 		select {
 		case ch <- data:
 		default:
 			log.Printf("[xfer-relay] transferID %s channel 满，丢数据", transferID)
+		}
+	}
+	if isLast {
+		// 发送完成标记（nil 表示 EOF）
+		select {
+		case ch <- nil:
+		default:
 		}
 	}
 }
@@ -246,6 +260,11 @@ func (r *Relay) handleAgentWS(w http.ResponseWriter, req *http.Request) {
 	c.SetReadLimit(32 << 20)
 
 	wc := &wsConn{conn: c, id: uuid.NewString(), role: "agent"}
+	// M2：提取 mTLS 客户端证书身份（CN + DNSNames），供 serveAgent 校验
+	if req.TLS != nil && len(req.TLS.PeerCertificates) > 0 {
+		wc.certCN = req.TLS.PeerCertificates[0].Subject.CommonName
+		wc.certDNS = req.TLS.PeerCertificates[0].DNSNames
+	}
 	r.serveAgent(req.Context(), wc)
 }
 
@@ -277,9 +296,10 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 		}
 		if msgType != websocket.MessageText {
 			// B1 修复：二进制帧 = 文件下载数据，路由到 transferID 的 channel
-			transferID, _, payload, parseErr := parseRelayBinaryFrame(data)
+			// M3 修复：保留 isLast 语义，不再硬编码 false
+			transferID, isLast, payload, parseErr := proto.ParseBinaryFrame(data)
 			if parseErr == nil {
-				wc.routeXferData(transferID, payload, false)
+				wc.routeXferData(transferID, payload, isLast)
 			}
 			continue
 		}
@@ -295,6 +315,15 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			if err := env.Decode(&reg); err != nil {
 				log.Printf("[agent-read] register 解析失败: %v", err)
 				continue
+			}
+			// M2 修复：mTLS 模式下校验 AgentID 与证书身份绑定
+			if r.cfg.MTLS && wc.certCN != "" {
+				if !certMatchesAgent(reg.AgentID, wc.certCN, wc.certDNS) {
+					log.Printf("[agent-read] 拒绝注册：AgentID=%s 与证书身份(CN=%s DNS=%v)不匹配",
+						reg.AgentID, wc.certCN, wc.certDNS)
+					wc.close(websocket.StatusPolicyViolation, "agentID does not match certificate")
+					return
+				}
 			}
 			agentID = reg.AgentID
 			wc.biz = agentID
@@ -442,4 +471,18 @@ func mustMarshal(v any) json.RawMessage {
 		return nil
 	}
 	return b
+}
+
+// certMatchesAgent 校验 AgentID 是否与证书身份匹配（M2 修复）。
+// 检查 CN 和 DNSNames 是否包含 agentID。
+func certMatchesAgent(agentID, certCN string, dnsNames []string) bool {
+	if agentID == certCN {
+		return true
+	}
+	for _, name := range dnsNames {
+		if name == agentID {
+			return true
+		}
+	}
+	return false
 }

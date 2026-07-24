@@ -225,7 +225,7 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 		if n > 0 {
 			h.Write(buf[:n])
 			// 构造二进制帧：[transferID_len u8][transferID][isLast u8][data]
-			frame := buildBinaryFrame(transferID, false, buf[:n])
+			frame := proto.BuildBinaryFrame(transferID, false, buf[:n])
 			wc.writeMu.Lock()
 			wErr := wc.conn.Write(ctx, websocket.MessageBinary, frame)
 			wc.writeMu.Unlock()
@@ -251,7 +251,7 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 	}
 
 	// 发送 isLast 标记帧（空数据）
-	frame := buildBinaryFrame(transferID, true, nil)
+	frame := proto.BuildBinaryFrame(transferID, true, nil)
 	wc.writeMu.Lock()
 	wc.conn.Write(ctx, websocket.MessageBinary, frame)
 	wc.writeMu.Unlock()
@@ -324,38 +324,4 @@ func (te *TransferEngine) computeFileHash(path string) string {
 		return ""
 	}
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// buildBinaryFrame 构造二进制 WS 帧。
-// 格式：[transferID_len u8][transferID][isLast u8][data]
-func buildBinaryFrame(transferID string, isLast bool, data []byte) []byte {
-	idBytes := []byte(transferID)
-	if len(idBytes) > 255 {
-		idBytes = idBytes[:255]
-	}
-	frame := make([]byte, 0, 1+len(idBytes)+1+len(data))
-	frame = append(frame, byte(len(idBytes)))
-	frame = append(frame, idBytes...)
-	if isLast {
-		frame = append(frame, 1)
-	} else {
-		frame = append(frame, 0)
-	}
-	frame = append(frame, data...)
-	return frame
-}
-
-// parseBinaryFrame 解析二进制 WS 帧，返回 transferID + isLast + data。
-func parseBinaryFrame(frame []byte) (transferID string, isLast bool, data []byte, err error) {
-	if len(frame) < 2 {
-		return "", false, nil, fmt.Errorf("帧太短")
-	}
-	idLen := int(frame[0])
-	if len(frame) < 1+idLen+1 {
-		return "", false, nil, fmt.Errorf("帧不完整")
-	}
-	transferID = string(frame[1 : 1+idLen])
-	isLast = frame[1+idLen] != 0
-	data = frame[2+idLen:]
-	return transferID, isLast, data, nil
 }

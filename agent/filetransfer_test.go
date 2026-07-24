@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"testing"
+
+	"github.com/QiuShichang/go-rmm/proto"
 )
 
 // TestBinaryFrameRoundTrip 验证 J1：二进制帧构造与解析往返。
@@ -17,8 +19,8 @@ func TestBinaryFrameRoundTrip(t *testing.T) {
 		{"xfer-long-id-1234567890", false, bytes.Repeat([]byte{0xAB}, 4096)},
 	}
 	for _, c := range cases {
-		frame := buildBinaryFrame(c.id, c.isLast, c.data)
-		gotID, gotLast, gotData, err := parseBinaryFrame(frame)
+		frame := proto.BuildBinaryFrame(c.id, c.isLast, c.data)
+		gotID, gotLast, gotData, err := proto.ParseBinaryFrame(frame)
 		if err != nil {
 			t.Errorf("解析失败: %v (id=%s)", err, c.id)
 			continue

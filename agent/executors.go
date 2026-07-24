@@ -12,6 +12,8 @@ import (
 //   - guiclick：Windows + GLM API key
 //   - file：跨平台
 //   - browse：默认 stub（-tags browse 编译为真实 chromedp）
+//
+// M1 修复：同时为 transfers（大文件传输引擎）注入与 FileExecutor 一致的路径策略。
 func registerExecutors(cfg Config) *executors.Dispatcher {
 	d := executors.New()
 
@@ -28,5 +30,16 @@ func registerExecutors(cfg Config) *executors.Dispatcher {
 	}
 
 	executors.RegisterAll(d, executors.Options{VisionClient: visionClient})
+
+	// M1 修复：大文件传输引擎复用与 FileExecutor 一致的路径校验策略。
+	// 创建共享的 FilePolicy 实例，同时用于 file 任务和大文件传输。
+	sharedPolicy := executors.DefaultFilePolicy()
+	if len(cfg.AllowedRoots) > 0 {
+		sharedPolicy.AllowedRoots = cfg.AllowedRoots
+	}
+	transfers.SetPolicy(func(path string) error {
+		return sharedPolicy.Check(path)
+	})
+
 	return d
 }

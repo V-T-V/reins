@@ -398,7 +398,7 @@ func (a *Agent) handleTransferInit(ctx context.Context, wc *wsConn, env proto.En
 
 // handleUploadData 处理上传二进制数据帧。
 func (a *Agent) handleUploadData(ctx context.Context, wc *wsConn, data []byte) {
-	transferID, isLast, payload, err := parseBinaryFrame(data)
+	transferID, isLast, payload, err := proto.ParseBinaryFrame(data)
 	if err != nil {
 		log.Printf("[xfer] 解析二进制帧失败: %v", err)
 		return
