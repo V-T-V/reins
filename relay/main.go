@@ -72,6 +72,7 @@ func main() {
 	relay.registerHTTP(mux)
 	mux.HandleFunc("/agent", relay.handleAgentWS)     // Agent 反向连接
 	mux.HandleFunc("/console", relay.handleConsoleWS) // 控制台 WS（预留）
+	relay.registerWebUI(mux)                           // N1：内嵌 Web 控制台
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
