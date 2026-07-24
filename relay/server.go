@@ -37,7 +37,45 @@ type wsConn struct {
 	// B1 修复：二进制帧路由——serveAgent 的 Read 循环拦截二进制帧，
 	// 按 transferID 路由到对应 channel，HTTP handler 从 channel 消费。
 	xferMu       sync.Mutex
-	xferChannels map[string]chan []byte // transferID → data channel
+	xferChannels map[string]chan []byte // transferID → data channel（二进制帧）
+	xferReady    map[string]chan *proto.FileTransferReady    // transferID → ready 信号
+	xferComplete map[string]chan *proto.FileTransferComplete // transferID → 完成信号
+}
+
+// registerReadyChannel 注册等待 Agent 的 FileTransferReady（A4 修复）。
+func (w *wsConn) registerReadyChannel(transferID string) chan *proto.FileTransferReady {
+	w.xferMu.Lock()
+	defer w.xferMu.Unlock()
+	if w.xferReady == nil {
+		w.xferReady = make(map[string]chan *proto.FileTransferReady)
+	}
+	ch := make(chan *proto.FileTransferReady, 1)
+	w.xferReady[transferID] = ch
+	return ch
+}
+
+// registerCompleteChannel 注册等待 Agent 的 FileTransferComplete（A5 修复）。
+func (w *wsConn) registerCompleteChannel(transferID string) chan *proto.FileTransferComplete {
+	w.xferMu.Lock()
+	defer w.xferMu.Unlock()
+	if w.xferComplete == nil {
+		w.xferComplete = make(map[string]chan *proto.FileTransferComplete)
+	}
+	ch := make(chan *proto.FileTransferComplete, 1)
+	w.xferComplete[transferID] = ch
+	return ch
+}
+
+// unregisterXferChannels 清理所有传输通道。
+func (w *wsConn) unregisterXferChannels(transferID string) {
+	w.xferMu.Lock()
+	defer w.xferMu.Unlock()
+	if ch, ok := w.xferChannels[transferID]; ok {
+		delete(w.xferChannels, transferID)
+		close(ch)
+	}
+	delete(w.xferReady, transferID)
+	delete(w.xferComplete, transferID)
 }
 
 // registerXferChannel 注册一个传输数据通道，返回只读 channel。
@@ -63,7 +101,8 @@ func (w *wsConn) unregisterXferChannel(transferID string) {
 }
 
 // routeXferData 把二进制帧路由到对应 transferID 的 channel。
-// M3 修复：isLast=true 时关闭 channel，让消费端（handleTransferDownload）正确退出。
+// A2 修复：删除 default 分支改为阻塞式，让生产者（Agent WS 读）自然背压。
+// 满了会阻塞 serveAgent 的 Read 循环 → Agent 侧 WS 写阻塞 → TCP 背压 → 全链路自协调。
 func (w *wsConn) routeXferData(transferID string, data []byte, isLast bool) {
 	w.xferMu.Lock()
 	ch, ok := w.xferChannels[transferID]
@@ -72,18 +111,10 @@ func (w *wsConn) routeXferData(transferID string, data []byte, isLast bool) {
 		return
 	}
 	if len(data) > 0 {
-		select {
-		case ch <- data:
-		default:
-			log.Printf("[xfer-relay] transferID %s channel 满，丢数据", transferID)
-		}
+		ch <- data // 阻塞直到消费端读取（背压）
 	}
 	if isLast {
-		// 发送完成标记（nil 表示 EOF）
-		select {
-		case ch <- nil:
-		default:
-		}
+		ch <- nil // 阻塞发送 EOF 标记
 	}
 }
 
@@ -436,8 +467,43 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 				})
 			}
 
-		case proto.TypeFileTransferReady, proto.TypeFileTransferProgress, proto.TypeFileTransferComplete:
-			// J2：文件传输控制消息转发给 Console
+		case proto.TypeFileTransferReady:
+			// A4：路由到 ready channel（让 upload handler 等待）
+			var ready proto.FileTransferReady
+			if err := env.Decode(&ready); err == nil {
+				wc.xferMu.Lock()
+				ch, ok := wc.xferReady[ready.TransferID]
+				wc.xferMu.Unlock()
+				if ok {
+					select {
+					case ch <- &ready:
+					default:
+					}
+				}
+			}
+			r.console.Broadcast(Event{
+				Kind: env.Type, AgentID: agentID, Payload: env.Payload, TS: time.Now().UnixMilli(),
+			})
+
+		case proto.TypeFileTransferComplete:
+			// A5：路由到 complete channel（让 upload handler 等待完成）
+			var complete proto.FileTransferComplete
+			if err := env.Decode(&complete); err == nil {
+				wc.xferMu.Lock()
+				ch, ok := wc.xferComplete[complete.TransferID]
+				wc.xferMu.Unlock()
+				if ok {
+					select {
+					case ch <- &complete:
+					default:
+					}
+				}
+			}
+			r.console.Broadcast(Event{
+				Kind: env.Type, AgentID: agentID, Payload: env.Payload, TS: time.Now().UnixMilli(),
+			})
+
+		case proto.TypeFileTransferProgress:
 			r.console.Broadcast(Event{
 				Kind:    env.Type,
 				AgentID: agentID,

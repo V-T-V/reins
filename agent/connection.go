@@ -184,9 +184,9 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 		if err != nil {
 			return err
 		}
-		// J1：二进制帧 = 文件上传数据
+		// J1/A9：二进制帧 = 文件上传数据，异步处理避免阻塞 recvLoop（心跳/任务不被卡）
 		if msgType == websocket.MessageBinary {
-			a.handleUploadData(ctx, wc, data)
+			go a.handleUploadData(ctx, wc, data)
 			continue
 		}
 		// JSON 帧 = 控制信令

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -913,22 +914,49 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// 1. 发 init
+	// 1. 注册 ready + complete channel（A4/A5 修复）
+	readyCh := conn.registerReadyChannel(transferID)
+	completeCh := conn.registerCompleteChannel(transferID)
+	defer conn.unregisterXferChannels(transferID)
+
+	// 2. 发 init
+	sha256sum := req.URL.Query().Get("sha256")
 	init := proto.FileTransferInit{
 		TransferID: transferID,
 		Direction:  "upload",
 		Path:       path,
 		Size:       req.ContentLength,
+		SHA256:     sha256sum,
 	}
 	initEnv, _ := proto.NewEnvelope(proto.TypeFileTransferInit, "relay", agentID, init)
-	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Minute) // 大文件给足时间
+	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Minute)
 	defer cancel()
 	if err := conn.writeJSON(ctx, initEnv); err != nil {
 		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("发送 init 失败: %w", err)))
 		return
 	}
 
-	// 2. stream-through：读 HTTP body → 二进制 WS 帧
+	// A4 修复：等 Agent ready（检查路径校验是否通过 + 获取续传偏移）
+	select {
+	case ready := <-readyCh:
+		if !ready.Accepted {
+			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("Agent 拒绝: %s", ready.Reason)))
+			return
+		}
+		// A6 修复：续传偏移——丢弃 HTTP body 前 N 字节
+		if ready.ResumeOffset > 0 {
+			if _, err := io.CopyN(io.Discard, req.Body, ready.ResumeOffset); err != nil {
+				writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("续传 seek 失败: %w", err)))
+				return
+			}
+			log.Printf("[xfer] 续传 %s: 跳过 %d 字节", transferID, ready.ResumeOffset)
+		}
+	case <-time.After(10 * time.Second):
+		writeJSON(w, http.StatusGatewayTimeout, errMap(fmt.Errorf("等待 Agent ready 超时")))
+		return
+	}
+
+	// 3. stream-through：读 HTTP body → 二进制 WS 帧
 	buf := make([]byte, 256*1024)
 	totalSent := int64(0)
 	for {
@@ -954,14 +982,30 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 	conn.conn.Write(ctx, websocket.MessageBinary, frame)
 	conn.writeMu.Unlock()
 
-	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "file_upload", AgentID: agentID, Detail: fmt.Sprintf("%s %d bytes", transferID, totalSent)})
+	// A5 修复：等 Agent 完成校验后再返回（而非发完就 200）
+	select {
+	case complete := <-completeCh:
+		if complete.Success {
+			if r.audit != nil {
+				r.audit.Log(AuditEntry{Event: "file_upload", AgentID: agentID, Detail: fmt.Sprintf("%s %d bytes sha=%s", transferID, complete.Bytes, complete.SHA256Actual)})
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"transfer_id": transferID,
+				"bytes":       complete.Bytes,
+				"sha256":      complete.SHA256Actual,
+				"status":      "uploaded",
+			})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, errMap(fmt.Errorf("Agent 校验失败: %s", complete.Error)))
+		}
+	case <-time.After(5 * time.Minute):
+		// 超时：已发送但 Agent 校验未完成
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"transfer_id": transferID,
+			"bytes":       totalSent,
+			"status":      "uploaded_pending_verification",
+		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"transfer_id": transferID,
-		"bytes":       totalSent,
-		"status":      "uploaded",
-	})
 }
 
 // handleTransferDownload 下载：Agent 读文件 → 二进制帧 → Relay → Console HTTP response。
