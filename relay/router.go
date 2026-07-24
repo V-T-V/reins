@@ -466,8 +466,10 @@ func (r *Relay) dispatchPendingTasks(agentID string) {
 			continue
 		}
 		if err := r.dispatchTask(conn, t.Request); err != nil {
-			log.Printf("[task] 补投 task=%s 失败: %v", t.Request.TaskID, err)
-			break // 连接可能断了，停止补投
+			// M5 修复：补投失败用 continue 而非 break，
+			// 避免尾部任务在 Agent 频繁闪断时长期饥饿
+			log.Printf("[task] 补投 task=%s 失败(跳过，继续下一个): %v", t.Request.TaskID, err)
+			continue
 		}
 	}
 }
@@ -521,6 +523,11 @@ func (r *Relay) handleSSE(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // Nginx 关闭缓冲
+
+	// M7 修复：SSE 写超时，防止慢 Console 挂住 goroutine
+	rc := http.NewResponseController(w)
+	rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	defer rc.SetWriteDeadline(time.Time{}) // 清除 deadline
 
 	subID, ch := r.console.Subscribe(64)
 	defer r.console.Unsubscribe(subID)
@@ -669,8 +676,14 @@ func (r *Relay) handleRevokeAgent(w http.ResponseWriter, req *http.Request) {
 	}
 
 	r.ca.RevokeAgent(body.AgentID)
-	// 同时从在线注册表移除（若在线）
-	r.agents.Unregister(body.AgentID, r.agents.Conn(body.AgentID))
+	// C3 修复：撤销后主动关闭 WS 连接（踢下线）。
+	// 已建立的 mTLS 连接不会被 CRL 中断（握手已过），必须主动断开。
+	// Agent 重连时在握手阶段被 CRL 拒绝。
+	conn := r.agents.Conn(body.AgentID)
+	if conn != nil {
+		conn.close(websocket.StatusPolicyViolation, "certificate revoked")
+	}
+	r.agents.Unregister(body.AgentID, conn)
 	r.console.Broadcast(Event{
 		Kind:    proto.TypeAgentOffline,
 		AgentID: body.AgentID,

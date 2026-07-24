@@ -167,7 +167,10 @@ func (a *Agent) heartbeatLoop(ctx context.Context, wc *wsConn) {
 			if err := wc.writeEnvelope(wctx, proto.TypeHeartbeat, "relay", hb); err != nil {
 				log.Printf("[agent] 心跳发送失败: %v", err)
 				wcancel()
-				return // 心跳失败视为断线，退出触发重连
+				// C2 修复：主动关闭连接，强制打断 recvLoop 的 Read，
+				// 否则 TCP 半开时 recvLoop 可能阻塞数分钟才超时
+				wc.closeNow()
+				return
 			}
 			wcancel()
 		}

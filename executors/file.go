@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
@@ -121,6 +122,22 @@ func (e *FileExecutor) download(task proto.FileTask) proto.TaskResult {
 // chunkChunkSize 单个分块大小（1MB，base64 后约 1.3MB，远低于 WS 帧限制）。
 const chunkChunkSize = 1024 * 1024
 
+// M2 修复：per-UploadID 合并锁，防并发合并竞态。
+var chunkMergeMu sync.Mutex           // 保护 chunkMergeLocks map
+var chunkMergeLocks = make(map[string]*sync.Mutex) // UploadID → 互斥锁
+
+// getChunkMergeLock 获取（或创建）指定 UploadID 的互斥锁。
+func getChunkMergeLock(uploadID string) *sync.Mutex {
+	chunkMergeMu.Lock()
+	defer chunkMergeMu.Unlock()
+	mu, ok := chunkMergeLocks[uploadID]
+	if !ok {
+		mu = &sync.Mutex{}
+		chunkMergeLocks[uploadID] = mu
+	}
+	return mu
+}
+
 // chunkUpload 处理分块上传：按 UploadID 写临时分片，最后一块（ChunkIndex==TotalChunks-1）合并。
 func (e *FileExecutor) chunkUpload(task proto.FileTask) proto.TaskResult {
 	if task.UploadID == "" || task.TotalChunks == 0 {
@@ -140,6 +157,11 @@ func (e *FileExecutor) chunkUpload(task proto.FileTask) proto.TaskResult {
 	if err := os.WriteFile(chunkPath, data, 0644); err != nil {
 		return fail("", "写分片失败: " + err.Error())
 	}
+
+	// M2 修复：per-UploadID 互斥锁保护合并临界区，防并发合并
+	mergeMu := getChunkMergeLock(task.UploadID)
+	mergeMu.Lock()
+	defer mergeMu.Unlock()
 
 	// 检查是否所有分片到齐
 	entries, _ := os.ReadDir(tmpDir)

@@ -58,6 +58,7 @@ type transferSession struct {
 	hash      hashWriter // SHA256 增量
 	bytesDone int64
 	total     int64
+	expectedSHA256 string // M8: Console 预算的摘要，完成时比对
 	startTime time.Time
 	lastProg  time.Time // 进度限流
 	cancel    context.CancelFunc
@@ -97,6 +98,7 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 		te.sessions[init.TransferID] = &transferSession{
 			id: init.TransferID, direction: "upload", path: init.Path,
 			file: f, total: init.Size, startTime: time.Now(),
+			expectedSHA256: init.SHA256,
 		}
 		te.mu.Unlock()
 		ready.Accepted = true
@@ -160,6 +162,17 @@ func (te *TransferEngine) ReceiveUploadData(transferID string, data []byte, isLa
 		sess.file.Close()
 		partPath := sess.path + ".part"
 		hash := te.computeFileHash(partPath)
+		if hash == "" {
+			te.completeUpload(transferID, false, sess.bytesDone, "SHA256 计算失败", completeCb)
+			return
+		}
+		// M8 修复：双边校验——比对 Console 预算的摘要
+		if sess.expectedSHA256 != "" && hash != sess.expectedSHA256 {
+			os.Remove(partPath) // 校验失败删 .part
+			te.completeUpload(transferID, false, sess.bytesDone,
+				fmt.Sprintf("SHA256 校验失败: 期望 %s 实际 %s", sess.expectedSHA256[:16], hash[:16]), completeCb)
+			return
+		}
 		// 重命名为最终文件
 		if err := os.Rename(partPath, sess.path); err != nil {
 			te.completeUpload(transferID, false, sess.bytesDone, "重命名失败: "+err.Error(), completeCb)
