@@ -1,0 +1,12 @@
+apiVersion: v2
+name: go-rmm
+description: go-rmm 远程自动化执行平台(Helm chart)
+type: application
+version: 2.2.0
+appVersion: "2.2.0"
+home: https://github.com/QiuShichang/go-rmm
+keywords:
+  - rmm
+  - remote-management
+  - automation
+  - infrastructure

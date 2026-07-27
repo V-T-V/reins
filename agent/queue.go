@@ -21,6 +21,9 @@ var resultQueue = &rQueue{}
 type rQueue struct {
 	mu      sync.Mutex
 	results []pendingResult
+	// flushMu 串行化 flushTo 调用(P2 修复)。
+	// 防止 sendResult 和 connectAndServe 补发并发 flush 时,两者 peek 到同一 head 重复发送。
+	flushMu sync.Mutex
 }
 
 type pendingResult struct {
@@ -73,10 +76,15 @@ func (q *rQueue) len() int {
 
 // flushTo 把队列中结果尝试发送到 wc。
 //
-// P1-4 修复：改为"逐条发送成功才出队"（peek+commit），不再先 drain 再 requeue。
-// 原实现先 drain（取出全部），若 wc 在半开连接上 writeBytes 未立即报错，
-// 已 drain 的结果会永久丢失。现在逐条发送，失败立即停止，结果留在队列等下次重连补发。
+// P1-4 修复:改为"逐条发送成功才出队"(peek+commit),不再先 drain 再 requeue。
+// 原实现先 drain(取出全部),若 wc 在半开连接上 writeBytes 未立即报错,
+// 已 drain 的结果会永久丢失。现在逐条发送,失败立即停止,结果留在队列等下次重连补发。
+//
+// P2 修复:整个 flush 用 flushMu 串行化,防止 sendResult 和 connectAndServe
+// 并发调用时两者 peek 到同一 head 重复发送(SSE 收到重复 result)。
 func (q *rQueue) flushTo(wc *wsConn) {
+	q.flushMu.Lock()
+	defer q.flushMu.Unlock()
 	for {
 		item, ok := q.peekHead()
 		if !ok {
@@ -86,13 +94,13 @@ func (q *rQueue) flushTo(wc *wsConn) {
 		data, err := marshalEnvelopeBytes(item.env)
 		if err != nil {
 			cancel()
-			q.popHead() // 序列化失败的无可救药，丢弃
+			q.popHead() // 序列化失败的无可救药,丢弃
 			continue
 		}
 		writeErr := wc.writeBytes(ctx, data)
 		cancel()
 		if writeErr != nil {
-			// 发送失败：留在队列，停止本次 flush（连接可能已断）
+			// 发送失败:留在队列,停止本次 flush(连接可能已断)
 			item.attempt++
 			if item.attempt >= 10 {
 				log.Printf("[queue] 结果 %s 放弃发送(超10次)", item.env.ID)
@@ -100,7 +108,7 @@ func (q *rQueue) flushTo(wc *wsConn) {
 			}
 			return
 		}
-		// 发送成功：出队
+		// 发送成功:出队
 		q.popHead()
 	}
 }

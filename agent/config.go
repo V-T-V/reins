@@ -22,17 +22,31 @@ var version = "dev"
 type Config struct {
 	AgentID   string            `json:"agent_id"`            // Agent 唯一 ID（空则自动生成并持久化）
 	RelayURL  string            `json:"relay_url"`           // Relay 的 Agent WS 端点，如 ws://host:7780/agent
+	// RelayURLs 备用 Relay 列表(L2 故障切换)。RelayURL 连接失败时按序尝试。
+	// 优先级:RelayURL > RelayURLs[0] > RelayURLs[1] > ...
+	// DNS SRV/域名轮询可用单个域名,N 个 Agent 分布到不同 IP。
+	RelayURLs []string          `json:"relay_urls,omitempty"`
 	Token     string            `json:"token,omitempty"`     // 鉴权 token（非 mTLS 模式）/ enrollment token（mTLS 首次注册）
 	Tags      map[string]string `json:"tags,omitempty"`      // 业务标签
 	Heartbeat time.Duration     `json:"heartbeat,omitempty"` // 心跳间隔，默认 15s
 	// MTLS 启用 mTLS 模式（wss:// + 客户端证书）。为 true 时 Token 作为 enrollment token（首次），
 	// 证书获取后用 mTLS 连接，不再用 token。为 false 时走 ws://+token 明文模式（向后兼容）。
 	MTLS      bool              `json:"mtls,omitempty"`
-	// AllowedRoots 文件操作允许的根目录（file 任务 + 大文件传输共用）。
-	// 留空时用 DefaultFilePolicy（拒绝系统目录/敏感文件，需显式配置允许的工作目录）。
+	// AllowedRoots 文件操作允许的根目录(file 任务 + 大文件传输共用)。
+	// 留空时按 AllowAllRoots 决定:AllowAllRoots=true 则整盘兜底(兼容),false 则严格拒绝。
 	AllowedRoots []string          `json:"allowed_roots,omitempty"`
-	// MaxConcurrentTasks 最大并发执行任务数（C6 并发限流）。0 或负数表示不限。
-	// 默认 4，防止被并发任务打爆。
+	// AllowAllRoots 未配置 AllowedRoots 时是否放开整盘(向后兼容默认 true)。
+	// 生产环境应设 false + 配置 AllowedRoots 做最小权限。
+	AllowAllRoots bool `json:"allow_all_roots,omitempty"`
+	// Workspace 工作空间目录(deploy/文件操作默认基准目录)。
+	// 留空则默认 <exeDir>/workspace/。启动时自动 MkdirAll。
+	// AllowedRoots 会自动追加此目录(部署目录始终可写)。
+	Workspace string `json:"workspace,omitempty"`
+	// MinVersion 允许的最低版本(防降级)。
+	// 自更新时若新版本 < MinVersion 则拒绝。留空则不强制。
+	MinVersion string `json:"min_version,omitempty"`
+	// MaxConcurrentTasks 最大并发执行任务数(C6 并发限流)。0 或负数表示不限。
+	// 默认 4,防止被并发任务打爆。
 	MaxConcurrentTasks int `json:"max_concurrent_tasks,omitempty"`
 	Glm       struct {
 		APIKey  string `json:"api_key,omitempty"` // GLM 视觉模型 key（guiclick 执行器需要）
@@ -46,6 +60,7 @@ func DefaultConfig() Config {
 	c := Config{
 		Heartbeat:          15 * time.Second,
 		MaxConcurrentTasks: 4,
+		AllowAllRoots:      true, // P0-S4:向后兼容默认放开整盘(带告警),生产应设 false
 	}
 	c.Glm.BaseURL = "https://open.bigmodel.cn/api/paas/v4"
 	c.Glm.Model = "glm-5-turbo"
@@ -70,6 +85,27 @@ func exeDir() string {
 		return "."
 	}
 	return filepath.Dir(exe)
+}
+
+// Validate 校验 Agent 配置(M5 神级提升)。
+func (c Config) Validate() error {
+	if c.RelayURL == "" {
+		return fmt.Errorf("relay_url 不能为空")
+	}
+	// URL 格式校验
+	if !strings.HasPrefix(c.RelayURL, "ws://") && !strings.HasPrefix(c.RelayURL, "wss://") {
+		return fmt.Errorf("relay_url 必须以 ws:// 或 wss:// 开头")
+	}
+	if c.AgentID == "" {
+		return fmt.Errorf("agent_id 不能为空(留空则自动生成)")
+	}
+	if c.Heartbeat < 5*time.Second && c.Heartbeat != 0 {
+		return fmt.Errorf("heartbeat %v 过短(建议 ≥5s)", c.Heartbeat)
+	}
+	if c.MaxConcurrentTasks < 0 {
+		return fmt.Errorf("max_concurrent_tasks 不能为负数")
+	}
+	return nil
 }
 
 // loadConfig 从配置文件加载（不存在则用默认值），并用 flag 覆盖。

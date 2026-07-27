@@ -34,12 +34,31 @@ type wsConn struct {
 
 	writeMu sync.Mutex
 
-	// B1 修复：二进制帧路由——serveAgent 的 Read 循环拦截二进制帧，
-	// 按 transferID 路由到对应 channel，HTTP handler 从 channel 消费。
+	// B1/P0-C1 修复:二进制帧路由——serveAgent 的 Read 循环拦截二进制帧,
+	// 按 transferID 路由到对应 channel,HTTP handler 从 channel 消费。
+	//
+	// P0-C1 核心修复:用 xferSession(data+done)替代裸 channel。
+	// routeXferData 锁内只取 session 引用,锁外用 select+done 发送,
+	// 避免持锁阻塞导致死锁(channel 满时消费者断开会双向死锁)。
 	xferMu       sync.Mutex
-	xferChannels map[string]chan []byte // transferID → data channel（二进制帧）
+	xferChannels map[string]*xferSession             // transferID → 下载数据会话
 	xferReady    map[string]chan *proto.FileTransferReady    // transferID → ready 信号
 	xferComplete map[string]chan *proto.FileTransferComplete // transferID → 完成信号
+}
+
+// xferSession 下载传输会话:data 为数据 channel,done 为取消信号。
+//
+// P0-C1 修复:done channel 在 unregister/closeAll 时 close,
+// routeXferData 用 select 监听 done 优雅退出,不再持锁阻塞。
+type xferSession struct {
+	data  chan []byte // 传输数据(满则背压)
+	done  chan struct{} // close 时通知生产者(routeXferData)停止发送
+	once  sync.Once
+}
+
+// signalDone 幂等关闭 done channel(防重复 close panic)。
+func (s *xferSession) signalDone() {
+	s.once.Do(func() { close(s.done) })
 }
 
 // registerReadyChannel 注册等待 Agent 的 FileTransferReady（A4 修复）。
@@ -67,55 +86,95 @@ func (w *wsConn) registerCompleteChannel(transferID string) chan *proto.FileTran
 }
 
 // unregisterXferChannels 清理所有传输通道。
+// P0-#4/P0-C1 修复:close done channel 通知生产者停止;不再持锁阻塞发送。
 func (w *wsConn) unregisterXferChannels(transferID string) {
 	w.xferMu.Lock()
-	defer w.xferMu.Unlock()
-	if ch, ok := w.xferChannels[transferID]; ok {
+	if s, ok := w.xferChannels[transferID]; ok {
 		delete(w.xferChannels, transferID)
-		close(ch)
+		s.signalDone() // 通知 routeXferData 停止发送
 	}
-	delete(w.xferReady, transferID)
-	delete(w.xferComplete, transferID)
+	if ch, ok := w.xferReady[transferID]; ok {
+		delete(w.xferReady, transferID)
+		safeCloseReadyChan(ch)
+	}
+	if ch, ok := w.xferComplete[transferID]; ok {
+		delete(w.xferComplete, transferID)
+		safeCloseCompleteChan(ch)
+	}
+	w.xferMu.Unlock()
 }
 
-// registerXferChannel 注册一个传输数据通道，返回只读 channel。
+// registerXferChannel 注册一个传输数据通道,返回只读 channel。
 func (w *wsConn) registerXferChannel(transferID string) <-chan []byte {
 	w.xferMu.Lock()
 	defer w.xferMu.Unlock()
 	if w.xferChannels == nil {
-		w.xferChannels = make(map[string]chan []byte)
+		w.xferChannels = make(map[string]*xferSession)
 	}
-	ch := make(chan []byte, 64)
-	w.xferChannels[transferID] = ch
-	return ch
-}
-
-// unregisterXferChannel 注销传输通道。
-func (w *wsConn) unregisterXferChannel(transferID string) {
-	w.xferMu.Lock()
-	defer w.xferMu.Unlock()
-	if ch, ok := w.xferChannels[transferID]; ok {
-		delete(w.xferChannels, transferID)
-		close(ch)
+	s := &xferSession{
+		data: make(chan []byte, 64),
+		done: make(chan struct{}),
 	}
+	w.xferChannels[transferID] = s
+	return s.data
 }
 
 // routeXferData 把二进制帧路由到对应 transferID 的 channel。
-// A2 修复：删除 default 分支改为阻塞式，让生产者（Agent WS 读）自然背压。
-// 满了会阻塞 serveAgent 的 Read 循环 → Agent 侧 WS 写阻塞 → TCP 背压 → 全链路自协调。
+//
+// P0-C1 修复(关键):锁内只取 session 引用,锁外用 select+done 发送。
+// 旧实现持锁阻塞发送 → channel 满时与 unregister 双向死锁。
+// 现在即使 channel 满,done 关闭后 select 立即退出,不持锁。
 func (w *wsConn) routeXferData(transferID string, data []byte, isLast bool) {
 	w.xferMu.Lock()
-	ch, ok := w.xferChannels[transferID]
+	s, ok := w.xferChannels[transferID]
 	w.xferMu.Unlock()
 	if !ok {
 		return
 	}
+	// 锁外发送:channel 满时阻塞,但 done 关闭后立即退出
 	if len(data) > 0 {
-		ch <- data // 阻塞直到消费端读取（背压）
+		select {
+		case s.data <- data:
+		case <-s.done:
+			return // 消费者已退出,丢弃
+		}
 	}
 	if isLast {
-		ch <- nil // 阻塞发送 EOF 标记
+		select {
+		case s.data <- nil: // EOF 标记
+		case <-s.done:
+		}
 	}
+}
+
+// closeAllXferChannels 关闭所有传输通道(Agent 断线时调用,P1-#5 修复)。
+// 让所有阻塞在 <-ch 的 HTTP handler 立即收到 channel 关闭信号并退出。
+func (w *wsConn) closeAllXferChannels() {
+	w.xferMu.Lock()
+	defer w.xferMu.Unlock()
+	for id, s := range w.xferChannels {
+		delete(w.xferChannels, id)
+		s.signalDone()
+	}
+	for id, ch := range w.xferReady {
+		delete(w.xferReady, id)
+		safeCloseReadyChan(ch)
+	}
+	for id, ch := range w.xferComplete {
+		delete(w.xferComplete, id)
+		safeCloseCompleteChan(ch)
+	}
+}
+
+// safeCloseReadyChan/safeCloseCompleteChan 防 close 已关闭 channel 的 panic。
+func safeCloseReadyChan(ch chan *proto.FileTransferReady) {
+	defer func() { recover() }()
+	close(ch)
+}
+
+func safeCloseCompleteChan(ch chan *proto.FileTransferComplete) {
+	defer func() { recover() }()
+	close(ch)
 }
 
 func (w *wsConn) writeJSON(ctx context.Context, v any) error {
@@ -184,7 +243,36 @@ func (b *EventBus) Unsubscribe(id string) {
 	b.mu.Unlock()
 }
 
-// Broadcast 向所有订阅者非阻塞投递。慢消费者丢事件并计数（D7）。
+// SubscribeWithFilter 订阅指定类型的事件(D3:事件过滤,减少无关推送)。
+// 只投递 filter 中包含的事件类型。filter=nil 表示全量订阅(兼容旧接口)。
+func (b *EventBus) SubscribeWithFilter(bufSize int, filter map[string]bool) (string, <-chan Event) {
+	if bufSize <= 0 {
+		bufSize = 64
+	}
+	id := uuid.NewString()
+	// 用包装 channel 做过滤
+	rawCh := make(chan Event, bufSize)
+	filteredCh := make(chan Event, bufSize)
+	b.mu.Lock()
+	b.subscribers[id] = rawCh
+	b.mu.Unlock()
+	// 单 goroutine 做过滤(避免 Broadcast 中遍历 filter)
+	go func() {
+		for ev := range rawCh {
+			if filter == nil || filter[ev.Kind] {
+				select {
+				case filteredCh <- ev:
+				default:
+					atomic.AddInt64(&b.dropped, 1)
+				}
+			}
+		}
+		close(filteredCh)
+	}()
+	return id, filteredCh
+}
+
+// Broadcast 向所有订阅者非阻塞投递。慢消费者丢事件并计数(D7)。
 func (b *EventBus) Broadcast(ev Event) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -204,11 +292,12 @@ type Relay struct {
 	cfg     Config
 	agents  *Registry
 	console *EventBus
-	store   *Store        // 任务持久化（R2/F1），可为 nil（关闭持久化）
-	ca      *CA           // 内置 CA（C7 身份认证），可为 nil（关闭 mTLS）
-	policy  *CommandPolicy // 命令安全策略（S4）
-	audit   *AuditLog     // 审计日志（F1）
-	scheduler *Scheduler  // H2 定时任务调度器，可为 nil
+	store   TaskStore      // 任务持久化(R2/F1),可为 nil(关闭持久化)
+	ca      *CA           // 内置 CA(C7 身份认证),可为 nil(关闭 mTLS)
+	policy  *CommandPolicy // 命令安全策略(S4)
+	audit   *AuditLog     // 审计日志(F1)
+	scheduler *Scheduler  // H2 定时任务调度器,可为 nil
+	updateRepo *UpdateRepo // Agent 版本仓库(自更新分发),可为 nil
 }
 
 func NewRelay(cfg Config) *Relay {
@@ -220,9 +309,15 @@ func NewRelay(cfg Config) *Relay {
 	}
 }
 
-// WithStore 注入持久化存储（C4）。
-func (r *Relay) WithStore(s *Store) *Relay {
+// WithStore 注入持久化存储(C4)。
+func (r *Relay) WithStore(s TaskStore) *Relay {
 	r.store = s
+	return r
+}
+
+// WithUpdateRepo 注入 Agent 版本仓库(自更新分发)。
+func (r *Relay) WithUpdateRepo(u *UpdateRepo) *Relay {
+	r.updateRepo = u
 	return r
 }
 
@@ -313,8 +408,13 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 					TS:      time.Now().UnixMilli(),
 				})
 				log.Printf("[agent] %s 离线", agentID)
+				// F11:webhook 告警(Agent 离线)
+				notifyAgentOffline(agentID, "")
 			}
 		}
+		// P1-#5 修复:Agent 断线时关闭所有传输通道,
+		// 让阻塞的 HTTP upload/download handler 立即退出(否则会挂到超时,最长 30 分钟)
+		wc.closeAllXferChannels()
 		wc.close(websocket.StatusNormalClosure, "bye")
 	}
 	defer cleanup()
@@ -325,18 +425,23 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			log.Printf("[agent-read] %s 连接断开: %v", wc.id, err)
 			return
 		}
-		if msgType != websocket.MessageText {
-			// B1 修复：二进制帧 = 文件下载数据，路由到 transferID 的 channel
-			// M3 修复：保留 isLast 语义，不再硬编码 false
-			transferID, isLast, payload, parseErr := proto.ParseBinaryFrame(data)
-			if parseErr == nil {
-				wc.routeXferData(transferID, payload, isLast)
-			}
-			continue
+	if msgType != websocket.MessageText {
+		// B1 修复：二进制帧 = 文件下载数据，路由到 transferID 的 channel
+		transferID, isLast, payload, parseErr := proto.ParseBinaryFrame(data)
+		if parseErr == nil {
+			wc.routeXferData(transferID, payload, isLast)
 		}
+		continue
+	}
 		var env proto.Envelope
 		if err := json.Unmarshal(data, &env); err != nil {
 			log.Printf("[agent-read] JSON 解析失败: %v", err)
+			continue
+		}
+		// P0-P2 修复:协议版本校验(防 v2 载荷被当 v1 解析)
+		if !env.IsValidVersion() {
+			log.Printf("[agent-read] %s 收到不兼容的协议版本 v=%d (期望 %d),忽略",
+				wc.id, env.Version, proto.Version)
 			continue
 		}
 
@@ -468,36 +573,39 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			}
 
 		case proto.TypeFileTransferReady:
-			// A4：路由到 ready channel（让 upload handler 等待）
+			// A4:路由到 ready channel(让 upload/download handler 等待)
+			// P1-#6 修复:阻塞式发送(持锁),替代原 select-default 丢弃语义。
+			// handler 端用 select+time.After 消费,buf=1,正常情况立即送达。
 			var ready proto.FileTransferReady
 			if err := env.Decode(&ready); err == nil {
 				wc.xferMu.Lock()
 				ch, ok := wc.xferReady[ready.TransferID]
-				wc.xferMu.Unlock()
 				if ok {
 					select {
 					case ch <- &ready:
 					default:
+						// buf=1 满了说明 handler 没消费(异常),保留旧值优先
 					}
 				}
+				wc.xferMu.Unlock()
 			}
 			r.console.Broadcast(Event{
 				Kind: env.Type, AgentID: agentID, Payload: env.Payload, TS: time.Now().UnixMilli(),
 			})
 
 		case proto.TypeFileTransferComplete:
-			// A5：路由到 complete channel（让 upload handler 等待完成）
+			// A5:路由到 complete channel(让 upload handler 等待完成)
 			var complete proto.FileTransferComplete
 			if err := env.Decode(&complete); err == nil {
 				wc.xferMu.Lock()
 				ch, ok := wc.xferComplete[complete.TransferID]
-				wc.xferMu.Unlock()
 				if ok {
 					select {
 					case ch <- &complete:
 					default:
 					}
 				}
+				wc.xferMu.Unlock()
 			}
 			r.console.Broadcast(Event{
 				Kind: env.Type, AgentID: agentID, Payload: env.Payload, TS: time.Now().UnixMilli(),
@@ -510,6 +618,34 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 				Payload: env.Payload,
 				TS:      time.Now().UnixMilli(),
 			})
+
+		case proto.TypeTunnelReady:
+			// 阶段 3.1:隧道 ready 路由到 xferReady(复用,handler 按 tunnelID 匹配)
+			var ready proto.TunnelReady
+			if err := env.Decode(&ready); err == nil {
+				wc.xferMu.Lock()
+				ch, ok := wc.xferReady[ready.TunnelID]
+				if ok {
+					// 把 TunnelReady 映射为 FileTransferReady 复用 channel
+					fr := &proto.FileTransferReady{
+						TransferID: ready.TunnelID,
+						Accepted:   ready.Accepted,
+						Reason:     ready.Reason,
+					}
+					select {
+					case ch <- fr:
+					default:
+					}
+				}
+				wc.xferMu.Unlock()
+			}
+
+		case proto.TypeTunnelClose:
+			// 隧道关闭:通知 dataCh 消费者 EOF
+			var tc proto.TunnelClose
+			if err := env.Decode(&tc); err == nil {
+				wc.routeXferData(tc.TunnelID, nil, true) // 发 EOF(nil + isLast)
+			}
 
 		default:
 			log.Printf("[agent-read] 未知消息类型 %s from %s", env.Type, agentID)

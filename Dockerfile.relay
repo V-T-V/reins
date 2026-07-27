@@ -1,0 +1,46 @@
+# go-rmm Relay Dockerfile(multi-stage,最小镜像)
+#
+# 构建: docker build -f Dockerfile.relay -t go-rmm-relay:latest .
+# 运行: docker run -d --name rmm-relay -p 7780:7780 -v rmm-data:/data go-rmm-relay:latest
+#
+# 数据卷: /data (持久化 tasks.db + audit.log + ca-* + agent-binaries/)
+
+# === Stage 1: 构建 ===
+FROM golang:1.25-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# 编译 Relay(CGO_ENABLED=0 纯静态)
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags "-s -w -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo docker)" \
+    -o /out/go-rmm-relay ./relay/
+
+# === Stage 2: 运行(最小镜像) ===
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata && \
+    adduser -D -u 1000 rmm
+
+WORKDIR /app
+COPY --from=builder /out/go-rmm-relay /app/go-rmm-relay
+
+# 数据目录
+RUN mkdir -p /data && chown rmm:rmm /data
+VOLUME ["/data"]
+
+USER rmm
+
+EXPOSE 7780
+
+# 健康检查(浅探,无需 token)
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD wget -q -O- http://127.0.0.1:7780/healthz || exit 1
+
+ENTRYPOINT ["/app/go-rmm-relay"]
+CMD ["-addr", ":7780", "-dev"]

@@ -50,6 +50,10 @@ func (e *GUIClickExecutor) Exec(ctx context.Context, payload []byte, progress Pr
 	if maxSteps <= 0 {
 		maxSteps = 5
 	}
+	// P2 修复:硬上限防 DoS(Console 可下发 MaxSteps:100000 导致长时间运行 + 天价 GLM 账单)
+	if maxSteps > 20 {
+		maxSteps = 20
+	}
 
 	// 定位目标窗口（限定截图范围）
 	var hwnd uintptr
@@ -101,12 +105,20 @@ func (e *GUIClickExecutor) Exec(ctx context.Context, payload []byte, progress Pr
 			return r
 		}
 
-		// 3. 点击第一个元素（坐标换算：模型坐标以截图左上为原点 → 屏幕绝对坐标）
+		// 3. 点击第一个元素(坐标换算:模型坐标以截图左上为原点 → 屏幕绝对坐标)
 		target := elements[0]
 		clickX := target.X + originX
 		clickY := target.Y + originY
+		// P2 修复:坐标越界检查(模型返回负数/超大值会导致点错位置或 API 报错)
+		if clickX < 0 || clickY < 0 {
+			stepsLog = append(stepsLog, map[string]any{
+				"step": step, "status": "invalid_coords",
+				"error": fmt.Sprintf("坐标越界(%d,%d),跳过", clickX, clickY),
+			})
+			continue
+		}
 
-		progress("click", fmt.Sprintf("第 %d 步：点击 %q (%d,%d)", step, target.Text, clickX, clickY),
+		progress("click", fmt.Sprintf("第 %d 步:点击 %q (%d,%d)", step, target.Text, clickX, clickY),
 			step*100/maxSteps)
 
 		if err := win32.ClickAt(clickX, clickY, win32.ClickSingle); err != nil {

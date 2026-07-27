@@ -1,0 +1,62 @@
+# go-rmm Helm chart values
+#
+# 部署: helm install rmm deploy/helm/go-rmm --set token=your-secret
+# 升级: helm upgrade rmm deploy/helm/go-rmm --set token=new-secret
+
+relay:
+  image:
+    repository: ghcr.io/qiushichang/go-rmm-relay
+    tag: "2.2.0"
+    pullPolicy: IfNotPresent
+
+  replicas: 1
+
+  # 鉴权 token(必须设置)
+  token: ""
+
+  # mTLS 配置(可选)
+  mtls:
+    enabled: false
+    certSecret: ""
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  service:
+    type: ClusterIP
+    port: 7780
+    # 生产环境用 LoadBalancer 或 Ingress 暴露
+    annotations: {}
+
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+
+agent:
+  enabled: false  # 默认不部署 Agent 到 K8s(Agent 通常部署到外部主机)
+  image:
+    repository: ghcr.io/qiushichang/go-rmm-agent
+    tag: "2.2.0"
+  relayUrl: "ws://rmm-relay:7780/agent"
+  token: ""
+
+monitoring:
+  # Prometheus ServiceMonitor
+  enabled: false
+  namespace: monitoring
+  interval: 30s
+
+ingress:
+  enabled: false
+  className: nginx
+  host: rmm.example.com
+  tls:
+    enabled: false
+    secretName: rmm-tls

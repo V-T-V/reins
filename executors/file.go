@@ -192,9 +192,13 @@ func (e *FileExecutor) chunkUpload(task proto.FileTask) proto.TaskResult {
 		n, _ := out.Write(chunkData)
 		totalBytes += n
 	}
-	// 清理临时分片 + A8 修复：清理 merge 锁 map 防内存泄漏
+	// 清理临时分片 + A8 修复:清理 merge 锁 map 防内存泄漏
 	os.RemoveAll(tmpDir)
+	// P2 修复:delete chunkMergeLocks 必须在 chunkMergeMu 保护内,
+	// 否则与 getChunkMergeLock 的 map 读写并发(race detector 必报 + 极端情况误删他人锁)
+	chunkMergeMu.Lock()
 	delete(chunkMergeLocks, task.UploadID)
+	chunkMergeMu.Unlock()
 
 	r := ok("")
 	r.Stdout = fmt.Sprintf("merged %d chunks, %d bytes", task.TotalChunks, totalBytes)

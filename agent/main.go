@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/QiuShichang/go-rmm/executors"
@@ -75,9 +76,11 @@ func main() {
 		log.Fatalf("配置加载失败: %v", err)
 	}
 
-	// 校验 Relay URL（install/run 必填）
-	if (cmd == "install" || cmd == "run") && cfg.RelayURL == "" {
-		log.Fatalf("缺少 -relay 参数。用法见 --help")
+	// M5:统一配置校验(install/run 必须有效)
+	if cmd == "install" || cmd == "run" {
+		if err := cfg.Validate(); err != nil {
+			log.Fatalf("配置无效: %v", err)
+		}
 	}
 
 	disp := buildDispatcher(cfg)
@@ -117,6 +120,8 @@ func runServiceFromConfig() {
 
 // runForeground 前台调试模式。
 func runForeground(cfg Config, disp *executors.Dispatcher) {
+	// 自更新健康自检
+	StartHealthCheck()
 	log.Printf("[agent] 前台模式启动: agent_id=%s relay=%s caps=%v mtls=%v",
 		cfg.AgentID, cfg.RelayURL, disp.Types(), cfg.MTLS)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -147,7 +152,28 @@ func setupAgentCerts(ctx context.Context, a *Agent, cfg Config) error {
 	return nil
 }
 
-// buildDispatcher 构造任务分发器，注册当前可用的执行器。
+// buildDispatcher 构造任务分发器,注册当前可用的执行器。
+// 同时初始化 workspace 目录并注入 AllowedRoots。
 func buildDispatcher(cfg Config) *executors.Dispatcher {
+	ensureWorkspace(&cfg)
 	return registerExecutors(cfg)
+}
+
+// ensureWorkspace 初始化工作空间目录。
+// 阶段 1.1:deploy/文件操作的默认基准目录,AllowedRoots 自动追加。
+// 自更新:exeDir 也加入 AllowedRoots(Agent 二进制所在目录,自更新需要写 .new/.bak)。
+func ensureWorkspace(cfg *Config) {
+	if cfg.Workspace == "" {
+		cfg.Workspace = filepath.Join(exeDir(), "workspace")
+	}
+	if err := os.MkdirAll(cfg.Workspace, 0755); err != nil {
+		log.Printf("[agent] workspace 创建失败 %s: %v(继续)", cfg.Workspace, err)
+	} else {
+		log.Printf("[agent] workspace: %s", cfg.Workspace)
+	}
+	// workspace 始终加入 AllowedRoots(部署目录可写)
+	cfg.AllowedRoots = append(cfg.AllowedRoots, cfg.Workspace)
+	// 自更新:exeDir 加入 AllowedRoots(写 .new/.bak 文件)
+	// 注:FilePolicy 黑名单仍生效(Program Files 等系统目录会挡,需部署到非系统目录)
+	cfg.AllowedRoots = append(cfg.AllowedRoots, exeDir())
 }

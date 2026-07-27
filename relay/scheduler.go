@@ -83,8 +83,21 @@ func (s *Scheduler) AddRule(rule CronRule) error {
 	if rule.CronExpr == "" {
 		return fmt.Errorf("cron 表达式不能为空")
 	}
-	rule.CreatedAt = time.Now().UnixMilli()
-	rule.Enabled = true
+	now := time.Now().UnixMilli()
+	rule.CreatedAt = now
+	// P1-C6 修复:不强制覆盖 Enabled。用 CreatedAt==0 判断是否新规则(新规则默认启用)。
+	// 但 CronRule.Enabled 是 bool(零值 false),无法区分"未设"和"显式 false"。
+	// 妥协:新规则(CreatedAt==0 即未创建过)默认 true,已存在规则保留原值。
+	// CLI commands.go 用 --disabled 创建时传 Enabled=*false,CreatedAt 未设(0),
+	// 会被这里改回 true——为支持 disabled,CLI 端用 CreatedAt<0 作禁用标记。
+	if rule.CreatedAt == 0 || rule.Enabled {
+		rule.Enabled = true
+	}
+	// 如果 CLI 想创建禁用规则,会设 CreatedAt=-1(哨兵值),这里识别
+	if rule.CreatedAt < 0 {
+		rule.Enabled = false
+		rule.CreatedAt = now
+	}
 
 	// 持久化
 	if err := s.saveRule(rule); err != nil {
@@ -94,8 +107,8 @@ func (s *Scheduler) AddRule(rule CronRule) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.schedule(rule)
-	log.Printf("[scheduler] 新增规则 %s: %s → agent=%s type=%s",
-		rule.ID, rule.CronExpr, rule.AgentID, rule.TaskType)
+	log.Printf("[scheduler] 新增规则 %s: %s → agent=%s type=%s enabled=%v",
+		rule.ID, rule.CronExpr, rule.AgentID, rule.TaskType, rule.Enabled)
 	return nil
 }
 
@@ -154,11 +167,14 @@ func (s *Scheduler) executeRule(rule CronRule) {
 		Timeout: rule.Timeout,
 	}
 
-	// 持久化任务（复用 store）
+	// 持久化任务(复用 store)
 	if s.store != nil {
+		now := time.Now().UnixMilli()
 		s.store.SaveTask(StoredTask{
-			Request: task,
-			Status:  StatusPending,
+			Request:   task,
+			Status:    StatusPending,
+			CreatedAt: now,                         // P1-C5 修复:填充时间戳
+			UpdatedAt: now,                         // 否则 reaper 误判超时秒数立即回收
 		})
 	}
 

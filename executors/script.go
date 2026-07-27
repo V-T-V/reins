@@ -69,6 +69,7 @@ func (e *ScriptExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFun
 	default:
 		return fail("", "不支持的 lang: "+lang)
 	}
+	setProcAttr(cmd) // P1-A1:进程组,防孙进程孤儿
 
 	// 强制 UTF-8（仅 ps1 有效，bat 忽略）
 	var stdout, stderr bytes.Buffer

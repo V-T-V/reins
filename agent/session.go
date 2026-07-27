@@ -33,6 +33,7 @@ type ShellSession struct {
 	stdin     io.WriteCloser
 	cancel    context.CancelFunc
 	lastInput time.Time
+	recorder  *SessionRecorder // L1: 会话录屏
 }
 
 // NewSessionManager 构造会话管理器。
@@ -40,9 +41,19 @@ func NewSessionManager() *SessionManager {
 	return &SessionManager{sessions: make(map[string]*ShellSession)}
 }
 
-// available 检查终端是否可用（H4 的 ConPTY 可用时升级）。
+// available 检查终端是否可用(H4 的 ConPTY 可用时升级)。
 func (sm *SessionManager) available() bool {
 	return true // 管道模式总是可用
+}
+
+// GetRecorder 获取会话的录屏器(L1:供 pipeToOutput 调用)。
+func (sm *SessionManager) GetRecorder(sessionID string) *SessionRecorder {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if s, ok := sm.sessions[sessionID]; ok {
+		return s.recorder
+	}
+	return nil
 }
 
 // OpenSession 启动持久 shell 进程，stdout/stderr 经 outputCb 回调推送。
@@ -58,6 +69,7 @@ func (sm *SessionManager) OpenSession(sessionID string, cols, rows int, shell st
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, shell)
+	setProcAttr(cmd) // P1-A1:进程组,防孙进程孤儿
 	cmd.Env = append(cmd.Env, "TERM=xterm-256color")
 
 	stdin, err := cmd.StdinPipe()
@@ -91,6 +103,17 @@ func (sm *SessionManager) OpenSession(sessionID string, cols, rows int, shell st
 		cancel:    cancel,
 		lastInput: time.Now(),
 	}
+	// L1: 启动会话录屏(asciinema v2 格式)
+	if cols <= 0 {
+		cols = 80
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+	rec, recErr := NewSessionRecorder(sessionID, agentBizID, cols, rows)
+	if recErr == nil {
+		session.recorder = rec
+	} // 录屏失败不阻塞会话
 	sm.mu.Lock()
 	sm.sessions[sessionID] = session
 	sm.mu.Unlock()
@@ -148,6 +171,10 @@ func (sm *SessionManager) CloseSession(sessionID, reason string) {
 	}
 	session.cancel()
 	session.stdin.Close()
+	// L1: 关闭录屏文件
+	if session.recorder != nil {
+		session.recorder.Close()
+	}
 	log.Printf("[shell] 会话 %s 已关闭 (reason=%s)", sessionID, reason)
 }
 
@@ -186,9 +213,16 @@ func pipeToOutput(reader io.Reader, sessionID, stream string, cb func(proto.Shel
 	for {
 		n, err := reader.Read(buf)
 		if n > 0 {
+			data := buf[:n]
+			// L1: 录屏(只录 stdout,不录 stderr 噪音)
+			if stream == "stdout" {
+				if rec := sessions.GetRecorder(sessionID); rec != nil {
+					rec.WriteOutput(data)
+				}
+			}
 			cb(proto.ShellOutput{
 				SessionID: sessionID,
-				DataB64:   base64.StdEncoding.EncodeToString(buf[:n]),
+				DataB64:   base64.StdEncoding.EncodeToString(data),
 				Stream:    stream,
 			})
 		}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -39,16 +41,58 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/events", r.handleSSE)
 	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
 	mux.HandleFunc("GET /healthz", r.handleHealthz) // D8 深度健康检查
+	// 阶段 3.1:隧道(端口转发)
+	mux.HandleFunc("POST /api/tunnel/open", r.handleTunnelOpen)
+	mux.HandleFunc("POST /api/tunnel/data", r.handleTunnelData)
+	mux.HandleFunc("GET /api/tunnel/poll", r.handleTunnelPoll)
+	mux.HandleFunc("POST /api/tunnel/close", r.handleTunnelClose)
+	// 自更新:Agent 版本仓库 + 分发
+	mux.HandleFunc("GET /api/updates", r.handleUpdateList)
+	mux.HandleFunc("POST /api/updates/upload", r.handleUpdateUpload)
+	mux.HandleFunc("POST /api/updates/apply", r.handleUpdateApply)
+	// 电源操作(标签白名单鉴权)
+	mux.HandleFunc("POST /api/power", r.handlePower)
+	// S6:Prometheus 文本格式(无需鉴权,供 Prometheus scraper)
+	mux.HandleFunc("GET /metrics", r.handlePromMetrics)
+	// S6:pprof 调试端点(net/http/pprof 注册到 DefaultServeMux)
+	mux.Handle("/debug/pprof/", http.DefaultServeMux)
+	// XL1:Secret Management(凭据下发不落 audit)
+	mux.HandleFunc("POST /api/secrets", r.handleSecretPut)
+	mux.HandleFunc("GET /api/secrets/", r.handleSecretGet)
+	mux.HandleFunc("DELETE /api/secrets/", r.handleSecretDelete)
+	// XL4:审计 SIEM 导出(CEF/JSON/Syslog)
+	mux.HandleFunc("GET /api/audit/export", r.handleAuditExport)
+	// XL6:智能调度(负载均衡选择最优 Agent)
+	mux.HandleFunc("GET /api/scheduler/best", r.handleSelectBest)
+	// D2:工具发现(供 AI Agent)
+	mux.HandleFunc("GET /api/tools", r.handleListTools)
+	// O2:流式任务(SSE 实时 stdout)
+	mux.HandleFunc("POST /api/tasks/stream", r.handleStreamTask)
+	// F8:脚本库
+	mux.HandleFunc("GET /api/scripts", r.handleScriptList)
+	mux.HandleFunc("POST /api/scripts", r.handleScriptUpload)
+	mux.HandleFunc("GET /api/scripts/", r.handleScriptGet)
+	mux.HandleFunc("DELETE /api/scripts/", r.handleScriptDelete)
+	mux.HandleFunc("POST /api/scripts/", r.handleScriptRun)
+	// D1:Agent 二进制下载（一行安装用）
+	r.registerDownloadDir(mux)
 }
 
-// GET /healthz —— 深度健康检查（D8 / P3-1）。
-// 检查 store 可用性，返回各组件状态 JSON。
-func (r *Relay) handleHealthz(w http.ResponseWriter, _ *http.Request) {
+// GET /healthz —— 深度健康检查(D8 / P3-1)。
+// 检查 store 可用性,返回各组件状态 JSON。
+// P1-S7 修复:加鉴权(原无鉴权泄漏 agents 数 + store 错误信息)。
+// 浅健康检查(无需鉴权)用 /healthz/simple,深度需鉴权。
+func (r *Relay) handleHealthz(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		// 无鉴权时只返回最基本的 "ok",不泄漏组件信息
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+		return
+	}
 	status := map[string]any{
-		"relay":     "ok",
-		"store":     "disabled",
-		"agents":    len(r.agents.Snapshot()),
-		"uptime_s":  int(time.Since(metrics.StartedAt).Seconds()),
+		"relay":    "ok",
+		"store":    "disabled",
+		"agents":   len(r.agents.Snapshot()),
+		"uptime_s": int(time.Since(metrics.StartedAt).Seconds()),
 	}
 	httpStatus := http.StatusOK
 	if r.store != nil {
@@ -140,8 +184,11 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 
 	taskIDs := make(map[string]string)
 	dispatched := []string{}
+	// D2 优化:并行投递(当前串行 dispatchTask → 并行 goroutine)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 	for _, aid := range agentIDs {
-		taskID := "batch-" + body.Type + "-" + aid + "-" + fmt.Sprint(time.Now().UnixMilli())
+		taskID := "batch-" + body.Type + "-" + aid + "-" + fmt.Sprint(time.Now().UnixNano()) + "-" + randSuffix(4)
 		task := proto.TaskRequest{
 			TaskID:  taskID,
 			Type:    body.Type,
@@ -149,23 +196,28 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 			Payload: body.Payload,
 			Timeout: body.Timeout,
 		}
-		// P2-1 修复：批量路径补 metrics 打点
 		metrics.Inc("submitted")
-		// 持久化 + 投递（复用 handlePostTask 的逻辑）
 		if r.store != nil {
 			r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: time.Now().UnixMilli()})
 		}
-		conn := r.agents.Conn(aid)
-		if conn != nil {
-			if err := r.dispatchTask(conn, task); err == nil {
-				dispatched = append(dispatched, aid)
-				taskIDs[aid] = taskID
+		wg.Add(1)
+		go func(agentID, tid string, t proto.TaskRequest) {
+			defer wg.Done()
+			conn := r.agents.Conn(agentID)
+			if conn != nil {
+				if err := r.dispatchTask(conn, t); err == nil {
+					mu.Lock()
+					dispatched = append(dispatched, agentID)
+					taskIDs[agentID] = tid
+					mu.Unlock()
+				}
 			}
-		}
+		}(aid, taskID, task)
 		if r.audit != nil {
 			r.audit.Log(AuditEntry{Event: "task_submitted", AgentID: aid, TaskID: taskID, Type: body.Type, Detail: "batch:" + body.Tag})
 		}
 	}
+	wg.Wait() // D2:等所有并行投递完成
 	log.Printf("[task] 批量下发 tag=%s → %d agents", body.Tag, len(dispatched))
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"tag":        body.Tag,
@@ -371,17 +423,26 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// 尝试立即投递（Agent 在线）
+	// S3 修复:能力感知路由——校验 Agent 是否支持该任务类型(在投递前,不管在线否)
+	// 避免向不支持 browse 的 Agent 投递 browse,浪费投递配额
+	if !r.agentSupports(task.AgentID, task.Type) {
+		log.Printf("[task] Agent %s 不支持任务类型 %s,拒绝", task.AgentID, task.Type)
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent %s 不支持任务类型 %s (能力: %v)",
+			task.AgentID, task.Type, r.agentCapabilities(task.AgentID))))
+		return
+	}
+
+	// 尝试立即投递(Agent 在线)
 	conn := r.agents.Conn(task.AgentID)
 	if conn == nil {
-		// Agent 离线：保留 pending，等 Agent 上线后 dispatchPendingTasks 投递
-		log.Printf("[task] 缓存 task=%s type=%s (agent=%s 离线，待上线投递)",
+		// Agent 离线:保留 pending,等 Agent 上线后 dispatchPendingTasks 投递
+		log.Printf("[task] 缓存 task=%s type=%s (agent=%s 离线,待上线投递)",
 			task.TaskID, task.Type, task.AgentID)
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"task_id":  task.TaskID,
 			"status":   StatusPending,
 			"agent_id": task.AgentID,
-			"message":  "agent 离线，任务已缓存待投递",
+			"message":  "agent 离线,任务已缓存待投递",
 		})
 		return
 	}
@@ -398,12 +459,15 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-// dispatchTask 把任务封装为 Envelope 并转发给 Agent，更新持久化状态为 dispatched。
+// dispatchTask 把任务封装为 Envelope 并转发给 Agent,更新持久化状态为 dispatched。
+//
+// P0-C3 修复:投递前 CAS 占坑(CASDispatchToPending),只允许 pending→dispatched。
+// 防止 reaper.tryRedispatch 与 dispatchPendingTasks 并发向 Agent 发同一任务两次。
 func (r *Relay) dispatchTask(conn *wsConn, task proto.TaskRequest) error {
-	// E2/W1：maxAttempts 兜底，防 poison task 无限重投
+	// E2/W1:maxAttempts 兜底,防 poison task 无限重投
 	if r.store != nil {
 		if existing, _ := r.store.GetTask(task.TaskID); existing != nil && existing.Attempt >= MaxTaskAttempts {
-			log.Printf("[task] task=%s 达到最大投递次数 %d，转 failed", task.TaskID, MaxTaskAttempts)
+			log.Printf("[task] task=%s 达到最大投递次数 %d,转 failed", task.TaskID, MaxTaskAttempts)
 			r.store.UpdateTaskStatus(task.TaskID, StatusFailed)
 			r.store.SaveResult(task.TaskID, proto.TaskResult{
 				TaskID: task.TaskID, Success: false,
@@ -415,16 +479,26 @@ func (r *Relay) dispatchTask(conn *wsConn, task proto.TaskRequest) error {
 			}
 			return fmt.Errorf("任务 %s 超过最大投递次数", task.TaskID)
 		}
+		// P0-C3:CAS 占坑——只允许 pending→dispatched,防止并发重复投递
+		// 已 dispatched/acknowledged/终态的任务跳过(返回 error,调用方可 log 后继续)
+		if err := r.store.CASDispatchToPending(task.TaskID); err != nil {
+			log.Printf("[task] task=%s 已被并发投递或终态,跳过: %v", task.TaskID, err)
+			return err
+		}
 	}
 
 	env, err := proto.NewEnvelope(proto.TypeTaskRequest, "relay", task.AgentID, task)
 	if err != nil {
 		return err
 	}
-	// 用独立 ctx（不绑请求生命周期，因 Agent 可能慢）
+	// 用独立 ctx(不绑请求生命周期,因 Agent 可能慢)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := conn.writeJSON(ctx, env); err != nil {
+		// WS 写失败:回退到 pending 让 reaper 补投
+		if r.store != nil {
+			r.store.UpdateTaskStatus(task.TaskID, StatusPending)
+		}
 		return err
 	}
 	// 更新持久化状态
@@ -438,6 +512,7 @@ func (r *Relay) dispatchTask(conn *wsConn, task proto.TaskRequest) error {
 		st.Status = StatusDispatched
 		st.Attempt++
 		st.Request = task
+		st.UpdatedAt = time.Now().UnixMilli()
 		_ = r.store.SaveTask(st)
 		metrics.Inc("dispatched")
 		log.Printf("[task] 下发 task=%s type=%s → agent=%s (attempt=%d)",
@@ -448,7 +523,17 @@ func (r *Relay) dispatchTask(conn *wsConn, task proto.TaskRequest) error {
 	return nil
 }
 
-// dispatchPendingTasks 在 Agent 上线时调用：找出该 Agent 的 pending 任务并投递。
+// agentSupports 检查 Agent 是否支持任务类型(S3 能力感知路由)。
+func (r *Relay) agentSupports(agentID, taskType string) bool {
+	return r.agents.Supports(agentID, taskType)
+}
+
+// agentCapabilities 返回 Agent 能力列表。
+func (r *Relay) agentCapabilities(agentID string) []string {
+	return r.agents.Capabilities(agentID)
+}
+
+// dispatchPendingTasks 在 Agent 上线时调用:找出该 Agent 的 pending 任务并投递。
 func (r *Relay) dispatchPendingTasks(agentID string) {
 	if r.store == nil {
 		return
@@ -525,16 +610,30 @@ func (r *Relay) handleSSE(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // Nginx 关闭缓冲
 
-	// M7 修复：SSE 写超时，防止慢 Console 挂住 goroutine
+	// P1-C4 修复:SSE 写超时改为 per-write(每次写前重置 deadline),
+	// 而非绝对 deadline(旧实现连接 30s 后所有写 deadline exceeded 静默丢事件)。
 	rc := http.NewResponseController(w)
-	rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
 	defer rc.SetWriteDeadline(time.Time{}) // 清除 deadline
 
-	subID, ch := r.console.Subscribe(64)
+	// P1 集成 SubscribeWithFilter:支持 ?events= 过滤,减少无关事件推送
+	// 用法: GET /api/events?events=task_result,agent_online
+	eventsParam := req.URL.Query().Get("events")
+	var subID string
+	var ch <-chan Event
+	if eventsParam != "" {
+		filter := make(map[string]bool)
+		for _, e := range strings.Split(eventsParam, ",") {
+			filter[strings.TrimSpace(e)] = true
+		}
+		subID, ch = r.console.SubscribeWithFilter(64, filter)
+	} else {
+		subID, ch = r.console.Subscribe(64)
+	}
 	defer r.console.Unsubscribe(subID)
-	log.Printf("[sse] 控制台订阅 %s 建立连接", subID)
+	log.Printf("[sse] 控制台订阅 %s 建立连接 (filter=%s)", subID, eventsParam)
 
-	// 先推一个 hello 事件，便于客户端确认连接建立
+	// 先推一个 hello 事件,便于客户端确认连接建立
+	rc.SetWriteDeadline(time.Now().Add(30 * time.Second)) // per-write
 	writeSSE(w, flusher, "hello", map[string]any{"sub_id": subID})
 	flusher.Flush()
 
@@ -548,14 +647,30 @@ func (r *Relay) handleSSE(w http.ResponseWriter, req *http.Request) {
 			if !ok {
 				return
 			}
-			writeSSE(w, flusher, ev.Kind, map[string]any{
+			// P1-C4:每次写前重置 deadline(空闲超时,而非连接绝对超时)
+			rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
+			if writeSSEErr(w, flusher, ev.Kind, map[string]any{
 				"agent_id": ev.AgentID,
 				"data":     json.RawMessage(ev.Payload),
 				"ts":       ev.TS,
-			})
+			}) {
+				return // 写失败,退出
+			}
 			flusher.Flush()
 		}
 	}
+}
+
+// writeSSEErr 写 SSE 事件并返回是否出错(用于决定是否退出循环)。
+func writeSSEErr(w http.ResponseWriter, _ http.Flusher, event string, data any) bool {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return false // marshal 失败不算写失败
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, payload); err != nil {
+		return true // 写失败(客户端断开)
+	}
+	return false
 }
 
 // --- HTTP 辅助 ---
@@ -568,6 +683,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func errMap(err error) map[string]any {
 	return map[string]any{"error": err.Error()}
+}
+
+// randSuffix 生成 n 字符的十六进制随机后缀,用于 taskID 去重。
+func randSuffix(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = "0123456789abcdef"[time.Now().UnixNano()>>uint((i+1)*4)&0xf]
+	}
+	return string(b)
 }
 
 func writeSSE(w http.ResponseWriter, _ http.Flusher, event string, data any) {
@@ -739,6 +863,17 @@ func (r *Relay) handleAddCron(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("未知的任务类型: %s", rule.TaskType)))
 		return
 	}
+	// P0-S2 修复:cron 规则必须经过命令策略校验(原来完全绕过)
+	// cron 是持久化执行,绕过策略 = 永久后门,危害比单次任务更大
+	if err := r.policy.CheckPayload(rule.TaskType, rule.Payload); err != nil {
+		log.Printf("[policy] 拦截高危 cron 规则 agent=%s type=%s: %v", rule.AgentID, rule.TaskType, err)
+		metrics.Inc("blocked")
+		if r.audit != nil {
+			r.audit.Log(AuditEntry{Event: "cron_blocked", AgentID: rule.AgentID, Type: rule.TaskType, Detail: err.Error()})
+		}
+		writeJSON(w, http.StatusForbidden, errMap(err))
+		return
+	}
 	// 生成 ID
 	if rule.ID == "" {
 		rule.ID = "cron-" + fmt.Sprint(time.Now().UnixMilli())
@@ -824,6 +959,11 @@ func (r *Relay) handleShellOpen(w http.ResponseWriter, req *http.Request) {
 
 // POST /api/shell/input —— 向会话发送 stdin。
 // 请求体: {"session_id":"...", "agent_id":"...", "data_b64":"..."}
+//
+// P0-S1 修复:shell input 之前完全绕过命令策略,可执行 Format-Volume 等高危命令。
+// 现在解码 base64 后过 CommandPolicy.CheckCommand,拦截高危命令。
+// 局限:shell 是交互式流,用户可分多次输入绕过单行检测(如 'Forma'+'t-Volume')。
+// 根本防线是 P0-S3(Agent 侧强制校验),这里做行级快速过滤。
 func (r *Relay) handleShellInput(w http.ResponseWriter, req *http.Request) {
 	if err := r.authorize(req); err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
@@ -838,10 +978,28 @@ func (r *Relay) handleShellInput(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("session_id 不能为空")))
 		return
 	}
+	// P0-S1:解码 base64 后过命令策略校验
+	if body.DataB64 != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(body.DataB64); err == nil {
+			if err := r.policy.CheckCommand(string(decoded)); err != nil {
+				log.Printf("[policy] 拦截高危 shell input agent=%s: %v", body.AgentID, err)
+				metrics.Inc("blocked")
+				if r.audit != nil {
+					r.audit.Log(AuditEntry{Event: "shell_blocked", AgentID: body.AgentID, Detail: err.Error()})
+				}
+				writeJSON(w, http.StatusForbidden, errMap(err))
+				return
+			}
+		}
+	}
 	conn := r.agents.Conn(body.AgentID)
 	if conn == nil {
 		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("agent 不在线")))
 		return
+	}
+	// P2-S4 修复:shell input 必须审计(原来完全无审计)
+	if r.audit != nil {
+		r.audit.Log(AuditEntry{Event: "shell_input", AgentID: body.AgentID, Detail: summarizeBase64(body.DataB64, 200)})
 	}
 	input := proto.ShellInput{SessionID: body.SessionID, DataB64: body.DataB64}
 	env, _ := proto.NewEnvelope(proto.TypeShellInput, "relay", body.AgentID, input)
@@ -852,6 +1010,21 @@ func (r *Relay) handleShellInput(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"session_id": body.SessionID})
+}
+
+// summarizeBase64 解码 base64 截取前 maxLen 字符,用于审计日志。
+func summarizeBase64(b64 string, maxLen int) string {
+	decoded, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return "<decode error>"
+	}
+	s := string(decoded)
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	s = strings.ReplaceAll(s, "\r", "")
+	if len(s) > maxLen {
+		return s[:maxLen] + "..."
+	}
+	return s
 }
 
 // POST /api/shell/close —— 关闭会话。
@@ -936,14 +1109,15 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// A4 修复：等 Agent ready（检查路径校验是否通过 + 获取续传偏移）
+	// A4 修复:等 Agent ready(检查路径校验是否通过 + 获取续传偏移)
+	// P1-P10 修复:加 case <-ctx.Done() 让客户端断开及时取消
 	select {
 	case ready := <-readyCh:
 		if !ready.Accepted {
 			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("Agent 拒绝: %s", ready.Reason)))
 			return
 		}
-		// A6 修复：续传偏移——丢弃 HTTP body 前 N 字节
+		// A6 修复:续传偏移——丢弃 HTTP body 前 N 字节
 		if ready.ResumeOffset > 0 {
 			if _, err := io.CopyN(io.Discard, req.Body, ready.ResumeOffset); err != nil {
 				writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("续传 seek 失败: %w", err)))
@@ -954,11 +1128,18 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 	case <-time.After(10 * time.Second):
 		writeJSON(w, http.StatusGatewayTimeout, errMap(fmt.Errorf("等待 Agent ready 超时")))
 		return
+	case <-ctx.Done():
+		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("客户端断开等待 ready")))
+		return
 	}
 
-	// 3. stream-through：读 HTTP body → 二进制 WS 帧
-	buf := make([]byte, 256*1024)
+	// 3. stream-through:读 HTTP body → 二进制 WS 帧
+	// P1-#7 修复:只有 Read 返回 io.EOF(正常结束)才发 isLast;
+	// 其它错误(客户端断开/超时)不发 isLast,避免 Agent 把截断的文件当完整文件校验。
+	buf := Get256K()
+	defer Put256K(buf)
 	totalSent := int64(0)
+	aborted := false
 	for {
 		n, readErr := req.Body.Read(buf)
 		if n > 0 {
@@ -973,16 +1154,31 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 			totalSent += int64(n)
 		}
 		if readErr != nil {
+			if readErr != io.EOF {
+				// 客户端中断或读错误:不发 isLast,通知 Agent 取消
+				aborted = true
+				log.Printf("[xfer] 上传中断 %s: 已发 %d bytes, 错误: %v", transferID, totalSent, readErr)
+				cancelEnv, _ := proto.NewEnvelope(proto.TypeFileTransferCancel, "relay", agentID,
+					proto.FileTransferCancel{TransferID: transferID, Reason: "client aborted: " + readErr.Error()})
+				conn.writeJSON(ctx, cancelEnv)
+			}
 			break
 		}
 	}
-	// 发 isLast 帧
-	frame := proto.BuildBinaryFrame(transferID, true, nil)
-	conn.writeMu.Lock()
-	conn.conn.Write(ctx, websocket.MessageBinary, frame)
-	conn.writeMu.Unlock()
+	if !aborted {
+		// 正常结束:发 isLast 帧
+		frame := proto.BuildBinaryFrame(transferID, true, nil)
+		conn.writeMu.Lock()
+		conn.conn.Write(ctx, websocket.MessageBinary, frame)
+		conn.writeMu.Unlock()
+	} else {
+		// 中断:不等 complete,直接返回错误
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("上传中断: 已传 %d bytes", totalSent)))
+		return
+	}
 
-	// A5 修复：等 Agent 完成校验后再返回（而非发完就 200）
+	// A5 修复:等 Agent 完成校验后再返回(而非发完就 200)
+	// P1-P10:加 ctx.Done() 让客户端断开及时取消
 	select {
 	case complete := <-completeCh:
 		if complete.Success {
@@ -998,8 +1194,10 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 		} else {
 			writeJSON(w, http.StatusInternalServerError, errMap(fmt.Errorf("Agent 校验失败: %s", complete.Error)))
 		}
+	case <-ctx.Done():
+		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("客户端断开等待校验完成")))
 	case <-time.After(5 * time.Minute):
-		// 超时：已发送但 Agent 校验未完成
+		// 超时:已发送但 Agent 校验未完成
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"transfer_id": transferID,
 			"bytes":       totalSent,
@@ -1031,6 +1229,12 @@ func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
+	// B1/D9 修复：先注册 channel 再发 init，防止 Agent 处理过快时
+	// 二进制帧在 channel 就绪前到达被 routeXferData 丢弃。
+	ch := conn.registerXferChannel(transferID)
+	readyCh := conn.registerReadyChannel(transferID)
+	defer conn.unregisterXferChannels(transferID)
+
 	// 发 init（download 方向）
 	init := proto.FileTransferInit{
 		TransferID: transferID,
@@ -1045,10 +1249,17 @@ func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	// B1 修复：不再直接 Read WS（会与 serveAgent 竞态），
-	// 改为注册 channel，serveAgent 的 Read 循环会路由二进制帧过来。
-	ch := conn.registerXferChannel(transferID)
-	defer conn.unregisterXferChannel(transferID)
+	// D9 修复：等待 Agent ready（检查文件是否存在、路径策略是否通过）
+	select {
+	case ready := <-readyCh:
+		if !ready.Accepted {
+			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("Agent 拒绝: %s", ready.Reason)))
+			return
+		}
+	case <-time.After(10 * time.Second):
+		writeJSON(w, http.StatusGatewayTimeout, errMap(fmt.Errorf("等待 Agent 就绪超时")))
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(path)))
@@ -1063,6 +1274,10 @@ func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request)
 		case data, ok := <-ch:
 			if !ok {
 				goto done // channel 关闭
+			}
+			if data == nil {
+				// isLast 空帧 → EOF（D9 修复：不能忽略 nil，否则永久阻塞）
+				goto done
 			}
 			if len(data) > 0 {
 				w.Write(data)

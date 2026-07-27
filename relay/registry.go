@@ -20,18 +20,25 @@ type agentEntry struct {
 
 // Registry 维护在线 Agent 注册表。
 //
-// 线程安全：所有方法内部加锁。Relay 的所有组件（WS handler、REST handler、SSE 推送器）
+// 线程安全:所有方法内部加锁。Relay 的所有组件(WS handler、REST handler、SSE 推送器)
 // 都通过 Registry 读写 Agent 状态。
+//
+// D1 优化:capabilityCache 缓存 Agent 能力(避免 Supports() 每次遍历)。
 type Registry struct {
-	mu     sync.RWMutex
-	agents map[string]*agentEntry // agentID → entry
+	mu              sync.RWMutex
+	agents          map[string]*agentEntry // agentID → entry
+	capabilityCache map[string]map[string]bool // agentID → {taskType: true}(D1 缓存)
 }
 
 func NewRegistry() *Registry {
-	return &Registry{agents: make(map[string]*agentEntry)}
+	return &Registry{
+		agents:          make(map[string]*agentEntry),
+		capabilityCache: make(map[string]map[string]bool),
+	}
 }
 
-// Register 登记一个 Agent 上线。若已存在则覆盖（重连场景）。
+// Register 登记一个 Agent 上线。若已存在则覆盖(重连场景)。
+// D1:注册时更新 capabilityCache。
 func (r *Registry) Register(info proto.Register, conn *wsConn) (wasOnline bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -42,6 +49,12 @@ func (r *Registry) Register(info proto.Register, conn *wsConn) (wasOnline bool) 
 		lastBeat:     time.Now(),
 		registeredAt: time.Now(),
 	}
+	// D1:更新能力缓存(O(1) 查找替代 O(N) 遍历)
+	caps := make(map[string]bool, len(info.Capabilities))
+	for _, c := range info.Capabilities {
+		caps[c] = true
+	}
+	r.capabilityCache[info.AgentID] = caps
 	return wasOnline
 }
 
@@ -54,6 +67,7 @@ func (r *Registry) Unregister(agentID string, conn *wsConn) bool {
 		return false
 	}
 	delete(r.agents, agentID)
+	delete(r.capabilityCache, agentID) // D1:清理缓存
 	return true
 }
 
@@ -91,8 +105,8 @@ func (r *Registry) Snapshot() []proto.Register {
 	return out
 }
 
-// FindByTag 返回带指定标签的在线 Agent ID 列表（C10 批量下发用）。
-// tag 格式 "key=value"，匹配 Agent 的 Tags。
+// FindByTag 返回带指定标签的在线 Agent ID 列表(C10 批量下发用)。
+// tag 格式 "key=value",匹配 Agent 的 Tags。
 func (r *Registry) FindByTag(tag string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -106,6 +120,27 @@ func (r *Registry) FindByTag(tag string) []string {
 		}
 	}
 	return out
+}
+
+// Capabilities 返回指定 Agent 的能力列表(S3 能力感知路由用)。
+func (r *Registry) Capabilities(agentID string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if e, ok := r.agents[agentID]; ok {
+		return e.info.Capabilities
+	}
+	return nil
+}
+
+// Supports 检查指定 Agent 是否支持给定任务类型。
+// D1 优化:用 capabilityCache O(1) 查找,替代 O(N) 遍历 Capabilities slice。
+func (r *Registry) Supports(agentID, taskType string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if caps, ok := r.capabilityCache[agentID]; ok {
+		return caps[taskType] // O(1) hash 查找
+	}
+	return false
 }
 
 // Sweep 清理超时未心跳的 Agent，返回被清理的 agentID 列表。

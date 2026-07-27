@@ -56,13 +56,17 @@ type transferSession struct {
 	direction string // upload / download
 	path      string
 	file      *os.File
-	hash      hash.Hash // C2：增量 SHA256（每次 Write 时更新，isLast 时直接 Sum）
+	hash      hash.Hash // C2:增量 SHA256(每次 Write 时更新,isLast 时直接 Sum)
 	bytesDone int64
 	total     int64
-	expectedSHA256 string // M8: Console 预算的摘要，完成时比对
+	expectedSHA256 string // M8: Console 预算的摘要,完成时比对
 	startTime time.Time
 	lastProg  time.Time // 进度限流
 	cancel    context.CancelFunc
+	// P0-D1 修复:per-session 互斥锁。
+	// recvLoop 对每个上传帧 `go handleUploadData`,多 goroutine 并发操作同一 session。
+	// 此锁保证 file.Write + hash.Write + bytesDone 串行化,杜绝乱序写入与 data race。
+	mu sync.Mutex
 }
 
 // hashWriter 包装 sha256 使其实现 io.Writer。
@@ -80,27 +84,45 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 		}
 	}
 
-	partPath := init.Path + ".part"
-	var resumeOffset int64 = 0
-
 	if init.Direction == "upload" {
-		// 上传：检查 .part 文件是否存在（续传）
+		// 上传:检查 .part 文件是否存在(续传)
+		partPath := init.Path + ".part"
+		var resumeOffset int64 = 0
 		if info, err := os.Stat(partPath); err == nil {
 			resumeOffset = info.Size()
 			log.Printf("[xfer] 续传 %s: 从 offset=%d 继续", init.TransferID, resumeOffset)
 		}
-		// 打开/创建 .part 文件（追加模式）
+		// 打开/创建 .part 文件(追加模式)
 		f, err := os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			ready.Reason = "打开文件失败: " + err.Error()
 			return ready
+		}
+		// P0-D2 修复:续传时重算已有 .part 前 resumeOffset 字节的 hash
+		// 旧实现新建 hash 是空的,只算续传后追加部分 → SHA256 必然校验失败。
+		// 现在把已有 .part 内容喂给 hash,使最终 Sum 覆盖完整文件。
+		h := sha256.New()
+		if resumeOffset > 0 {
+			if err := feedExistingToHash(partPath, resumeOffset, h); err != nil {
+				log.Printf("[xfer] 续传 hash 初始化失败 %s: %v(从头开始)", init.TransferID, err)
+				// hash 初始化失败:截断 .part 从头开始
+				f.Close()
+				os.Truncate(partPath, 0)
+				f, err = os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+				if err != nil {
+					ready.Reason = "重置续传文件失败: " + err.Error()
+					return ready
+				}
+				h = sha256.New()
+				resumeOffset = 0
+			}
 		}
 		te.mu.Lock()
 		te.sessions[init.TransferID] = &transferSession{
 			id: init.TransferID, direction: "upload", path: init.Path,
 			file: f, total: init.Size, startTime: time.Now(),
 			expectedSHA256: init.SHA256,
-			hash: sha256.New(), // C2：增量 hash
+			hash: h, // C2/P0-D2:增量 hash(续传时已喂入已有部分)
 		}
 		te.mu.Unlock()
 		ready.Accepted = true
@@ -133,8 +155,41 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 	return ready
 }
 
-// ReceiveUploadData 接收上传的二进制数据帧，写入文件 + SHA256。
+// feedExistingToHash 把 path 文件前 n 字节喂给 hasher(用于续传 hash 初始化)。
+// P0-D2 修复:续传时 hash 必须覆盖已有 .part 内容,否则最终 Sum 必然校验失败。
+func feedExistingToHash(path string, n int64, h hash.Hash) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	buf := make([]byte, 64*1024)
+	var read int64
+	for read < n {
+		want := int64(len(buf))
+		if read+want > n {
+			want = n - read
+		}
+		nr, err := f.Read(buf[:want])
+		if nr > 0 {
+			h.Write(buf[:nr])
+			read += int64(nr)
+		}
+		if err != nil {
+			if err == io.EOF && read == n {
+				break // 正好读完
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+// ReceiveUploadData 接收上传的二进制数据帧,写入文件 + SHA256。
 // 由 recvLoop 在收到 MessageBinary 时调用。
+//
+// P0-D1 修复:整个函数体在 sess.mu.Lock 内串行执行,
+// 保证 file.Write + hash.Write + bytesDone 的顺序一致(多 goroutine 并发调用时)。
 func (te *TransferEngine) ReceiveUploadData(transferID string, data []byte, isLast bool, progressCb func(proto.FileTransferProgress), completeCb func(proto.FileTransferComplete)) {
 	te.mu.Lock()
 	sess, ok := te.sessions[transferID]
@@ -143,9 +198,13 @@ func (te *TransferEngine) ReceiveUploadData(transferID string, data []byte, isLa
 		return
 	}
 
-	// A7 修复：写入前检查累计大小不超限
+	// P0-D1:per-session 锁,串行化写文件+hash+计数
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	// A7 修复:写入前检查累计大小不超限
 	if sess.total > 0 && sess.bytesDone+int64(len(data)) > sess.total*2 {
-		te.completeUpload(transferID, false, sess.bytesDone, "上传数据超过声明大小的 2 倍，拒绝", completeCb)
+		te.completeUpload(transferID, false, sess.bytesDone, "上传数据超过声明大小的 2 倍,拒绝", completeCb)
 		return
 	}
 	// 写入文件 + C2 增量 hash
@@ -155,11 +214,11 @@ func (te *TransferEngine) ReceiveUploadData(transferID string, data []byte, isLa
 		return
 	}
 	if sess.hash != nil {
-		sess.hash.Write(data[:n]) // C2：流过即算，不再重读
+		sess.hash.Write(data[:n]) // C2:流过即算,不再重读
 	}
 	sess.bytesDone += int64(n)
 
-	// 进度上报（500ms 限流）
+	// 进度上报(500ms 限流)
 	now := time.Now()
 	if now.Sub(sess.lastProg) > 500*time.Millisecond || isLast {
 		sess.lastProg = now
@@ -168,21 +227,21 @@ func (te *TransferEngine) ReceiveUploadData(transferID string, data []byte, isLa
 	}
 
 	if isLast {
-		// C2：直接用增量 hash 的结果（不再重读文件）
+		// C2:直接用增量 hash 的结果(不再重读文件)
 		sess.file.Close()
 		partPath := sess.path + ".part"
 		var hashHex string
 		if sess.hash != nil {
 			hashHex = hex.EncodeToString(sess.hash.Sum(nil))
 		} else {
-			// 降级：重读文件算 hash
+			// 降级:重读文件算 hash
 			hashHex = te.computeFileHash(partPath)
 		}
 		if hashHex == "" {
 			te.completeUpload(transferID, false, sess.bytesDone, "SHA256 计算失败", completeCb)
 			return
 		}
-		// M8：双边校验——比对 Console 预算的摘要
+		// M8:双边校验——比对 Console 预算的摘要
 		if sess.expectedSHA256 != "" && hashHex != sess.expectedSHA256 {
 			os.Remove(partPath)
 			te.completeUpload(transferID, false, sess.bytesDone,
@@ -280,6 +339,7 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 }
 
 // Cancel 取消传输。
+// P2 修复:upload 会话取消时删除 .part 文件,防磁盘垃圾 + 防同 ID 重试基于废数据续传。
 func (te *TransferEngine) Cancel(transferID string) {
 	te.mu.Lock()
 	sess, ok := te.sessions[transferID]
@@ -287,8 +347,14 @@ func (te *TransferEngine) Cancel(transferID string) {
 		delete(te.sessions, transferID)
 	}
 	te.mu.Unlock()
-	if ok && sess.file != nil {
-		sess.file.Close()
+	if ok {
+		if sess.file != nil {
+			sess.file.Close()
+		}
+		// upload 取消删 .part,防残留垃圾 + 防续传基于废数据
+		if sess.direction == "upload" {
+			os.Remove(sess.path + ".part")
+		}
 	}
 	log.Printf("[xfer] 取消 %s", transferID)
 }

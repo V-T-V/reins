@@ -1,0 +1,46 @@
+# go-rmm golangci-lint 配置
+# 世界级 Go 项目的标准 linter 集合
+
+run:
+  timeout: 5m
+  go: "1.25"
+
+linters:
+  enable:
+    - errcheck       # 检查未处理的 error
+    - gosimple       # 简化代码
+    - govet          # go vet
+    - ineffassign    # 检查无效赋值
+    - staticcheck    # 综合静态检查
+    - unused         # 检查未使用的代码
+    - misspell       # 拼写检查
+    - revive         # Go 社区风格
+    - gofmt          # 格式检查
+    - goimports      # import 顺序
+    - bodyclose      # 检查 http.Response.Body 是否 Close
+    - prealloc       # slice 预分配建议
+    - unconvert      # 检查不必要的类型转换
+    - gocritic       # 代码改进建议
+    - nilerr         # 检查 nil error 返回
+
+linters-settings:
+  gocritic:
+    enabled-tags:
+      - performance
+      - style
+  staticcheck:
+    checks: ["all"]
+
+issues:
+  exclude-rules:
+    # 测试文件放宽部分检查
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gocritic
+    # 平台特定文件(Windows/Unix)
+    - path: procattr_
+      linters:
+        - unused
+  max-issues-per-linter: 0
+  max-same-issues: 0

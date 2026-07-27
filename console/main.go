@@ -64,12 +64,13 @@ func buildMux(relayURL string) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// 1. 反向代理 /api/* 和 /agent 到 Relay
-	proxy := httputil.NewSingleHostReverseProxy(relay)
-	// 自定义 Director：保留原 path，透传 SSE 必要头
-	origDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		origDirector(req)
-		req.Host = relay.Host // 避免 Host 头导致 Relay 拒绝
+	// P1-P7 修复:用 ReverseProxy 的 FlushInterval 实时刷新 SSE(默认会攒批导致 shell/进度延迟)
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(relay)
+			r.Out.Host = relay.Host // 避免 Host 头导致 Relay 拒绝
+		},
+		FlushInterval: -1, // -1 = 每个 Write 立即 Flush(SSE/WS 实时性)
 	}
 	mux.Handle("/api/", proxy)
 	// SSE 需要禁用缓冲

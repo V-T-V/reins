@@ -1,0 +1,125 @@
+# go-rmm goreleaser 配置(L7 神级提升)
+#
+# 用法:
+#   goreleaser release --clean
+#   goreleaser build --clean  (只构建不发布)
+#
+# 产物:
+#   - go-rmm-relay_{version}_{os}_{arch}.tar.gz
+#   - go-rmm-agent_{version}_{os}_{arch}.tar.gz (Windows .exe)
+#   - go-rmm-cli_{version}_{os}_{arch}.tar.gz
+#   - checksums.txt (SHA256)
+#   - SBOM (syft 格式)
+
+version: 2
+
+project_name: go-rmm
+
+before:
+  hooks:
+    - go mod tidy
+    - go vet ./...
+
+builds:
+  # Relay(服务端)
+  - id: relay
+    main: ./relay/
+    binary: go-rmm-relay
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+  # Agent(Windows 服务 + Linux daemon)
+  - id: agent
+    main: ./agent/
+    binary: go-rmm-agent
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+  # CLI(跨平台客户端)
+  - id: cli
+    main: ./cmd/go-rmm/
+    binary: go-rmm
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: relay
+    builds: [relay]
+    name_template: >-
+      go-rmm-relay_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - deploy/go-rmm-relay.service
+      - README.md
+      - DEPLOYMENT.md
+
+  - id: agent
+    builds: [agent]
+    name_template: >-
+      go-rmm-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+
+  - id: cli
+    builds: [cli]
+    name_template: >-
+      go-rmm-cli_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+
+# SBOM 生成(供应链安全)
+sboms:
+  - id: go-rmm
+    artifacts: archive
+
+release:
+  github:
+    owner: QiuShichang
+    name: go-rmm
+  draft: true
+  prerelease: auto
+  name_template: "go-rmm {{ .Version }}"

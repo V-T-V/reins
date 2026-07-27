@@ -1,125 +1,136 @@
 # go-rmm
 
-> Go 实现的远程自动化执行操作平台——通过反向 WebSocket 中继，让 Web 控制台远程驱动 Windows Agent 执行 6 类任务。
+> 企业级零信任远程访问 + 自动化运维平台 — Go 实现
 
-## 这是什么
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev)
+[![Version](https://img.shields.io/badge/version-4.1.0-blue)]()
+[![License](https://img.shields.io/badge/license-MIT-green)]()
+[![Tests](https://img.shields.io/badge/tests-216-brightgreen)]()
+[![CLI](https://img.shields.io/badge/CLI-51%20commands-blue)]()
+[![Coverage](https://img.shields.io/badge/proto%20coverage-91.3%25-brightgreen)]()
 
-一个三组件的远程操作平台，解决"如何远程自动化操控另一台 Windows"的问题：
+远程控制 Windows/Linux 主机:命令执行、文件传输、交互式 Shell、端口转发、多步编排、系统监控、告警、自更新。
 
-| 组件 | 产出 | 职责 |
-|------|------|------|
-| **Relay** | `go-rmm-relay` | 公网/局域网中继服务器，管理 Agent 连接池，路由任务与结果 |
-| **Agent** | `go-rmm-agent.exe` | Windows 常驻服务，反向连接 Relay，执行任务 |
-| **Console** | ~~独立进程~~ | 已合并进 Relay（N1），浏览器直接访问 Relay 端口 |
+## ✨ 核心特性
 
-```
-浏览器 ──HTTP/SSE──► Relay(内嵌Web UI) ◄──反向WS── Windows Agent(服务化)
-                                          ├─ powershell/script/file/screenshot
-                                          ├─ browse/guiclick
-                                          ├─ shell（交互终端）
-                                          └─ transfer（5GB大文件传输）
-```
+### 远程操作(15 命令)
+| 能力 | 命令 |
+|------|------|
+| 命令执行 | `task run -a <agent> -c "Get-Date"` |
+| 流式执行 | `task stream -a <agent> -c "ping -t 8.8.8.8"` (SSE 实时 stdout) |
+| 多 Agent 并行 | `exec -a a1,a2,a3 -c "hostname"` |
+| 交互式 Shell | `shell open -a <agent>` (asciinema 录屏) |
+| 文件传输 | `file upload/download` (SHA256 + 断点续传) |
+| 目录同步 | `sync push/pull` |
+| 端口转发 | `tunnel -L 3306:db:3306` (SSH -L) |
 
-## 快速部署（零配置）
+### 自动化编排(6 命令)
+| 能力 | 命令 |
+|------|------|
+| 多步部署 | `deploy run playbook.json` |
+| 批量部署 | `deploy batch pb.json --tag env=prod` |
+| 工作流 | `workflow run wf.json` (条件+变量提取+on_failure) |
+| 告警规则 | `alert add --agent X --metric cpu --gt 90` |
+| 健康巡检 | `health-check --tag prod --schedule "*/5 * * * *"` |
+| 进程守护 | `watch add --svc MyAppService` |
+
+### 多 Agent 分析(5 命令)
+| 能力 | 命令 |
+|------|------|
+| 拓扑视图 | `topology` (按 tag 分组) |
+| 批量诊断 | `diagnose --tag prod` (并行体检+告警) |
+| 差异对比 | `compare agent-1 agent-2` |
+| 清单导出 | `inventory --format csv` |
+| 历史统计 | `history -n 100` (成功率+分布) |
+
+### 系统监控(7 命令)
+| 能力 | 命令 |
+|------|------|
+| 系统体检 | `sysinfo -a <agent>` |
+| 实时监控 | `monitor top` (glances TUI: CPU/Mem/Disk/Net/GPU) |
+| 系统快照 | `snapshot take` + `snapshot diff` |
+| 实时事件 | `events` (SSE: agent上线/任务结果/策略拦截) |
+| 网络诊断 | `net ping/dns/trace/ports/check` |
+| 日志聚合 | `logs tail/read/search` |
+| 文件搜索 | `find name/grep/stat/du` |
+
+### 企业级能力
+| 能力 | 说明 |
+|------|------|
+| **多租户 RBAC** | `tenant:role:secret` token 格式 |
+| **审计防篡改** | hash chain + SIEM 导出(CEF/Syslog) |
+| **Secret 管理** | 凭据 TTL+一次性,不落 audit |
+| **Session 录屏** | asciinema v2,可回放 |
+| **可观测性** | slog + Prometheus + pprof |
+| **Webhook 告警** | Slack/钉钉/企业微信 |
+| **水平扩展** | TaskStore interface + Redis + Pub/Sub |
+| **AI Agent SDK** | `client.New()` → 45+ 方法 + 流式执行 |
+
+## 🚀 快速开始
 
 ```bash
-# Linux 服务端（1行，零参数零token）
-./go-rmm-relay-linux
+# 1. 服务端(一台机器)
+./go-rmm-relay                    # 零配置启动,自动生成 token
+# → 浏览器打开 http://localhost:7780
 
-# Windows 被控端（管理员，1行，只填IP）
-go-rmm-agent.exe install -relay 192.168.1.100
+# 2. 被控端(每台目标机)
+./go-rmm-agent run -relay ws://server:7780/agent -token <token>
 
-# 浏览器打开
-http://192.168.1.100:7780
+# 3. 操作(你的电脑)
+go-rmm --relay http://server:7780 --token <token> agent list
+go-rmm --relay http://server:7780 --token <token> task run -a <agent> -c "hostname"
+go-rmm --relay http://server:7780 --token <token> monitor top -a <agent>
 ```
 
-## 为什么用 Go
+## 📦 部署
 
-- **单文件部署**：编译成单二进制，无运行时依赖（vs Node.js 需 node + node_modules）
-- **服务化原生**：`kardianos/service` 一行注册为 Windows 服务，开机自启（vs Python 需 pywin32）
-- **交叉编译**：`GOOS=windows go build` 一条命令产出 Windows 可执行文件
-- **并发模型**：goroutine 天然适合"管理多 Agent 连接 + 并发执行任务"
+| 方式 | 命令 |
+|------|------|
+| Linux | `./scripts/quickstart.sh server` |
+| Windows | `.\scripts\quickstart.ps1` |
+| Docker | `docker build -f Dockerfile.relay -t go-rmm . && docker run -p 7780:7780 go-rmm` |
+| K8s | `helm install rmm deploy/helm/go-rmm` |
+| 服务器 | `./scripts/deploy-to-server.sh` |
 
-Go 做**控制平面**（通信/调度/服务化），数据平面（具体点击/识别）委托给更强工具：PowerShell 调 Win32、chromedp 调浏览器、云端视觉模型。
+## 🔌 AI Agent 接入
 
-## 快速开始
+```go
+import "github.com/QiuShichang/go-rmm/client"
 
-```bash
-# Linux 服务端（零参数零token）
-./go-rmm-relay-linux
+c := client.New("https://relay:7780", "token")
 
-# Windows 被控端（管理员，只填IP）
-go-rmm-agent.exe install -relay 192.168.1.100
+// 发现工具(33+ 个)
+tools, _ := c.ListTools()
 
-# 浏览器打开
-http://192.168.1.100:7780
+// 执行命令
+stdout, _ := c.RunCommand("agent-1", "Get-Date", 10)
+
+// 流式执行(实时 stdout)
+result, _ := c.StreamCommand(ctx, "agent-1", "ping 8.8.8.8", 30, func(event string, data json.RawMessage) {
+    fmt.Println(event, string(data))
+})
+
+// 系统体检
+info, _ := c.Sysinfo("agent-1")
 ```
 
-## 生产部署（Linux 服务端 + Windows Agent）
+## 📊 指标
 
-```bash
-# ① Linux 服务器
-scp go-rmm-relay-linux user@server:/opt/
-ssh user@server "chmod +x /opt/go-rmm-relay-linux && /opt/go-rmm-relay-linux"
+| 项目 | 数值 |
+|------|------|
+| Go 文件 | 154 |
+| 代码行 | 28,000+ |
+| CLI 命令 | 51 |
+| API 端点 | 42 |
+| SDK 方法 | 45+ |
+| 测试用例 | 216 |
+| 基准测试 | 22 |
+| 性能优化 | 8 项 (55x~1940x) |
 
-# 可选：注册 systemd 开机自启
-cat > /etc/systemd/system/go-rmm-relay.service << 'EOF'
-[Unit]
-Description=go-rmm Relay
-After=network.target
-[Service]
-ExecStart=/opt/go-rmm-relay-linux
-Restart=always
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl enable --now go-rmm-relay
-```
+## 📄 文档
+- [部署指南](./DEPLOYMENT.md)
+- [性能基线](./BENCHMARK.md)
+- [API 文档](./deploy/openapi.yaml)
+- [架构详解](./AGENTS.md)
 
-```powershell
-# ② Windows 被控机器（管理员 PowerShell）
-.\go-rmm-agent.exe install -relay 服务器IP
-# 自动安装为服务 + 启动 + 连接
-
-# 管理
-.\go-rmm-agent.exe status
-.\go-rmm-agent.exe stop
-.\go-rmm-agent.exe uninstall
-```
-
-## 任务协议
-
-所有消息用统一的 `Envelope` 信封，详见 [`proto/message.go`](./proto/message.go)。任务下发示例：
-
-```json
-{
-  "task_id": "t-001",
-  "type": "powershell",
-  "agent_id": "agent-win01",
-  "payload": { "command": "Get-Process | Select-Object -First 5" },
-  "timeout": 30
-}
-```
-
-## 技术栈
-
-| 层 | 选型 |
-|----|------|
-| WebSocket | `coder/websocket`（nhooyr 继任者） |
-| 服务化 | `kardianos/service` |
-| Win32 API | `golang.org/x/sys/windows` |
-| 浏览器自动化 | `chromedp`（build tag 隔离） |
-| Web | 标准库 `net/http` + `embed.FS` + 原生 JS |
-
-## 文档
-
-- [`DEPLOYMENT.md`](./DEPLOYMENT.md) —— **生产部署运维指南**（内网/公网/mTLS/服务化/故障排查）
-- [`BENCHMARK.md`](./BENCHMARK.md) —— **性能基线**（关键路径 benchmark + 优化记录 + 回归门禁）
-- [`AGENTS.md`](./AGENTS.md) —— 完整架构与开发约定
-- [`proto/message.go`](./proto/message.go) —— 通信协议定义
-
-## 状态
-
-## 状态
-
-P7 完成（零配置部署：Relay 内嵌 Web UI + 裸 IP 自动补全 + 安装引导页）。详见 [`AGENTS.md` 当前情况](./AGENTS.md#当前情况status)。
+## 📜 License: MIT

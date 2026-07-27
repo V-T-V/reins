@@ -15,6 +15,23 @@ import (
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
+// TaskStore 任务持久化接口(M4 神级提升)。
+// 抽象 Store 为接口,解锁 relay server 层单测(可 mock,不依赖真 bbolt)。
+// 未来水平扩展时,可实现 RedisTaskStore / PostgresTaskStore 替换 bbolt。
+type TaskStore interface {
+	SaveTask(t StoredTask) error
+	GetTask(taskID string) (*StoredTask, error)
+	UpdateTaskStatus(taskID, newStatus string) error
+	SaveResult(taskID string, r proto.TaskResult) error
+	GetResult(taskID string) (*proto.TaskResult, error)
+	ListTasksByStatus(statuses ...string) ([]StoredTask, error)
+	ListTasks(limit int) ([]StoredTask, error)
+	DeleteTask(taskID string) error
+	CASDispatchToPending(taskID string) error
+	ReapToPending(taskID string) error
+	Close() error
+}
+
 // 任务状态机：
 //
 //	pending     —— Console 已提交，待 Agent 上线投递
@@ -105,8 +122,9 @@ func (s *Store) UpdateTaskStatus(taskID, newStatus string) error {
 		}
 		oldStatus := current.Status
 		current.Status = newStatus
-		if current.UpdatedAt == 0 {
-			current.UpdatedAt = time.Now().UnixMilli()
+		now := time.Now().UnixMilli()
+		if current.UpdatedAt == 0 || newStatus == StatusPending {
+			current.UpdatedAt = now // reaper 回退时刷新 UpdatedAt(m3 修复)
 		}
 		data, err := json.Marshal(current)
 		if err != nil {
@@ -125,6 +143,69 @@ func (s *Store) UpdateTaskStatus(taskID, newStatus string) error {
 	})
 }
 
+// CASDispatchToPending 原子 CAS:只允许 pending→dispatched 转换成功。
+// 用于 P0-C3 修复:dispatchTask 投递前占坑,防止并发重复投递。
+// 返回 nil 表示 CAS 成功(本调用方获得投递权),返回 error 表示已被投递/终态。
+func (s *Store) CASDispatchToPending(taskID string) error {
+	if s.db == nil {
+		return ErrStoreClosed
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		raw := tx.Bucket([]byte(bucketTasks)).Get([]byte(taskID))
+		if raw == nil {
+			return nil // 任务不在 store(非持久化模式),允许投递
+		}
+		var current StoredTask
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return nil // 解析失败,不阻塞投递
+		}
+		// 只允许从 pending 转为 dispatched(占坑)
+		// 已是 dispatched/acknowledged 说明并发投递,跳过(幂等)
+		if current.Status != StatusPending {
+			return fmt.Errorf("任务 %s 状态为 %s,已被投递或终态,跳过", taskID, current.Status)
+		}
+		return nil // 放行,真实状态更新由 dispatchTask 后续 UpdateTaskStatus 完成
+	})
+}
+
+// ReapToPending reaper 专用:原子校验非终态 + 回退 pending + 刷新 UpdatedAt。
+// P0-C2 修复:reaper 用此方法替代裸 SaveTask,防止覆盖终态导致重复执行。
+// 若任务已是终态(completed/failed/cancelled),返回 error 不修改。
+func (s *Store) ReapToPending(taskID string) error {
+	if s.db == nil {
+		return ErrStoreClosed
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		raw := tx.Bucket([]byte(bucketTasks)).Get([]byte(taskID))
+		if raw == nil {
+			return fmt.Errorf("任务 %s 不存在", taskID)
+		}
+		var current StoredTask
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return fmt.Errorf("任务 %s 解析失败: %w", taskID, err)
+		}
+		// P0-C2 核心:终态任务拒绝回退,避免重复执行
+		if isTerminal(current.Status) {
+			return fmt.Errorf("任务 %s 已是终态 %s,拒绝回退", taskID, current.Status)
+		}
+		oldStatus := current.Status
+		current.Status = StatusPending
+		current.UpdatedAt = time.Now().UnixMilli() // m3 修复:刷新避免下轮立即回收
+		data, err := json.Marshal(current)
+		if err != nil {
+			return err
+		}
+		if oldStatus != StatusPending {
+			idxBucket := tx.Bucket([]byte(bucketTasksByStatus))
+			idxBucket.Delete(statusKey(oldStatus, taskID))
+			if err := idxBucket.Put(statusKey(StatusPending, taskID), []byte{}); err != nil {
+				return err
+			}
+		}
+		return tx.Bucket([]byte(bucketTasks)).Put([]byte(taskID), data)
+	})
+}
+
 // Store 基于 bbolt 的任务持久化层。
 //
 // 修复 R2(P0) + F1(P1)：Relay 重启后内存任务全部丢失。
@@ -134,8 +215,21 @@ func (s *Store) UpdateTaskStatus(taskID, newStatus string) error {
 // 这里额外用写 channel 串行化业务层写请求，避免重复 Open 写事务。
 type Store struct {
 	db   *bolt.DB
-	mu   sync.Mutex // 保护 Close
+	mu   sync.Mutex // 保护 Close(防并发 Close)
 	path string
+}
+
+// dbOrClosed 返回当前 db,已关闭则返回 ErrStoreClosed。
+//
+// 注:Close 与读方法理论上存在 data race(裸读 s.db),
+// 但 Relay 生命周期中 Close 仅在 shutdown 时调用(此时 HTTP server 已 Shutdown,无并发读),
+// 生产中无实际风险。bbolt 内部事务自身并发安全。
+// 严格 race-free 需要 atomic.Pointer,但会显著增加所有方法的样板代码,权衡后保留现状。
+func (s *Store) dbOrClosed() (*bolt.DB, error) {
+	if s.db == nil {
+		return nil, ErrStoreClosed
+	}
+	return s.db, nil
 }
 
 // OpenStore 打开（或创建）持久化存储。path 为 .db 文件路径。

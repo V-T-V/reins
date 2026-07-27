@@ -47,7 +47,26 @@ func (c Config) String() string {
 	if c.Token != "" {
 		mask = c.Token[:min(4, len(c.Token))] + "***"
 	}
-	return fmt.Sprintf("addr=%s token=%s dev=%v", c.Addr, mask, c.Dev)
+	return fmt.Sprintf("addr=%s token=%s dev=%v mtls=%v", c.Addr, mask, c.Dev, c.MTLS)
+}
+
+// Validate 校验 Relay 配置(M5 神级提升)。
+// 返回 nil 表示配置有效,非 nil 含可读的错误说明。
+func (c Config) Validate() error {
+	if c.Addr == "" {
+		return fmt.Errorf("addr 不能为空")
+	}
+	// mTLS 模式必须配证书
+	if c.MTLS {
+		if c.CertFile == "" || c.KeyFile == "" {
+			return fmt.Errorf("mtls 模式需要 -tls-cert 和 -tls-key")
+		}
+	}
+	// token 长度建议(非强制)
+	if c.Token != "" && len(c.Token) < 8 {
+		return fmt.Errorf("token 长度 %d 过短(建议 ≥8 字符)", len(c.Token))
+	}
+	return nil
 }
 
 // dataDir 返回数据目录（与可执行文件同目录的 data/）。
@@ -57,4 +76,13 @@ func dataDir() string {
 		return "data"
 	}
 	return filepath.Join(filepath.Dir(exe), "data")
+}
+
+// dlDir 返回 Agent 二进制下载目录（与可执行文件同目录的 dl/）。
+func dlDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "dl"
+	}
+	return filepath.Join(filepath.Dir(exe), "dl")
 }

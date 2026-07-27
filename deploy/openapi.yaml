@@ -1,0 +1,320 @@
+# go-rmm Relay API — OpenAPI 3.0 规范(L5 神级提升)
+#
+# 用途:
+#   1. 生成 API 文档(Swagger UI / Redoc)
+#   2. 自动生成客户端 SDK(多语言)
+#   3. API 契约测试
+#
+# 在线查看:把此文件粘贴到 https://editor.swagger.io/
+
+openapi: 3.0.3
+info:
+  title: go-rmm Relay API
+  description: |
+    go-rmm 远程自动化执行平台的 REST API。
+    所有端点(除 /healthz)需 Authorization: Bearer <token>。
+  version: 2.2.0
+  contact:
+    name: go-rmm
+    url: https://github.com/QiuShichang/go-rmm
+
+servers:
+  - url: http://localhost:7780
+    description: 本地开发
+
+security:
+  - BearerAuth: []
+
+paths:
+  /healthz:
+    get:
+      summary: 健康检查
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  relay: { type: string }
+                  store: { type: string }
+                  agents: { type: integer }
+                  uptime_s: { type: integer }
+
+  /metrics:
+    get:
+      summary: Prometheus 指标
+      security: []
+      responses:
+        "200":
+          description: Prometheus text format
+
+  /api/agents:
+    get:
+      summary: 列出在线 Agent
+      responses:
+        "200":
+          description: Agent 列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items: { $ref: "#/components/schemas/Agent" }
+                  count: { type: integer }
+
+  /api/tasks:
+    post:
+      summary: 下发任务
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskRequest" }
+      responses:
+        "202":
+          description: 任务已接受
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id: { type: string }
+                  status: { type: string }
+                  agent_id: { type: string }
+
+  /api/tasks/{taskID}:
+    get:
+      summary: 查询任务状态和结果
+      parameters:
+        - name: taskID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 任务详情 + 结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task: { $ref: "#/components/schemas/StoredTask" }
+                  result: { $ref: "#/components/schemas/TaskResult" }
+
+  /api/tasks:
+    get:
+      summary: 列出任务历史
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: 任务列表
+
+  /api/tasks/cancel:
+    post:
+      summary: 取消任务
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                task_id: { type: string }
+                agent_id: { type: string }
+      responses:
+        "202": { description: 已取消 }
+
+  /api/tasks/batch:
+    post:
+      summary: 按标签批量下发
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tag: { type: string }
+                type: { type: string }
+                payload: { type: object }
+                timeout: { type: integer }
+
+  /api/transfer/upload:
+    post:
+      summary: 上传文件到 Agent
+      parameters:
+        - name: agent_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+
+  /api/transfer/download:
+    post:
+      summary: 从 Agent 下载文件
+      parameters:
+        - name: agent_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 文件流
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+
+  /api/tunnel/open:
+    post:
+      summary: 开启端口转发隧道
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tunnel_id: { type: string }
+                agent_id: { type: string }
+                target: { type: string }
+
+  /api/power:
+    post:
+      summary: 电源操作(关机/重启/休眠)
+      description: 需 Agent 带 power_allowed=true 标签
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent_id: { type: string }
+                op: { type: string, enum: [shutdown, restart, sleep, lock] }
+                force: { type: boolean }
+                delay: { type: integer }
+
+  /api/updates:
+    get:
+      summary: 列出 Agent 版本仓库
+      responses:
+        "200": { description: 版本列表 }
+
+  /api/updates/upload:
+    post:
+      summary: 上传新 Agent 版本到仓库
+      parameters:
+        - name: version
+          in: query
+          schema: { type: string }
+      requestBody:
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+
+  /api/updates/apply:
+    post:
+      summary: 触发 Agent 自更新
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent_id: { type: string }
+                version: { type: string }
+                force: { type: boolean }
+
+  /api/crons:
+    get:
+      summary: 列出定时任务规则
+      responses:
+        "200": { description: 规则列表 }
+    post:
+      summary: 新建定时任务规则
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cron_expr: { type: string }
+                agent_id: { type: string }
+                task_type: { type: string }
+
+  /api/agents/revoke:
+    post:
+      summary: 撤销 Agent 证书(mTLS)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent_id: { type: string }
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    Agent:
+      type: object
+      properties:
+        agent_id: { type: string }
+        hostname: { type: string }
+        os: { type: string }
+        version: { type: string }
+        capabilities:
+          type: array
+          items: { type: string }
+        tags:
+          type: object
+          additionalProperties: { type: string }
+
+    TaskRequest:
+      type: object
+      properties:
+        task_id: { type: string }
+        type: { type: string }
+        agent_id: { type: string }
+        payload: { type: object }
+        timeout: { type: integer }
+        idempotency_key: { type: string }
+
+    StoredTask:
+      type: object
+      properties:
+        request: { $ref: "#/components/schemas/TaskRequest" }
+        status: { type: string }
+        attempt: { type: integer }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+
+    TaskResult:
+      type: object
+      properties:
+        task_id: { type: string }
+        success: { type: boolean }
+        stdout: { type: string }
+        stderr: { type: string }
+        exit_code: { type: integer }
+        duration_ms: { type: integer }
+        error: { type: string }

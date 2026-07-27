@@ -1,0 +1,213 @@
+// Package main — Agent 自更新执行器。
+//
+// 自更新流程(Windows rename + copy + SCM 自重启):
+//  1. 校验 BinaryPath 文件存在
+//  2. 重算 SHA256,与 UpdateTask.SHA256 比对(防损坏/篡改)
+//  3. 版本防降级:新版本不得低于 MinVersion(除非 Force)
+//  4. 写 .update-pending 标记文件(供健康自检识别)
+//  5. rename 当前 exe → .bak(Windows 允许重命名运行中的 exe)
+//  6. rename .new → exe
+//  7. 设 pendingRestart flag,主循环检测后优雅退出
+//  8. SCM OnFailure=restart 自动拉起新版本
+//  9. 新版本启动健康自检,成功注册 Relay 后删 .update-pending
+// 10. 若 60s 未注册,健康自检用 .bak 回滚
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/QiuShichang/go-rmm/proto"
+)
+
+// pendingRestart 自更新完成后置 true,主循环检测后退出让 SCM 重启。
+var pendingRestart bool
+
+// UpdateExecutor 自更新执行器(agent 包内部,不走标准 Executor 接口)。
+// 强依赖 agent 包的 os.Executable/version/exeDir,故在 agent 包内实现。
+// runTask 对 task.Type==update 做特殊分发(见 connection.go)。
+type UpdateExecutor struct{}
+
+// updateExec 全局实例。
+var updateExec = &UpdateExecutor{}
+
+// versionsMatchMin 防降级检查:version 是否 >= minVersion。
+// 简化 semver 比较:解析 "v1.2.3" → [1,2,3] 逐段比。
+func versionGE(version, minVersion string) bool {
+	if minVersion == "" {
+		return true // 无约束
+	}
+	v := parseSemver(version)
+	m := parseSemver(minVersion)
+	if len(v) < 3 || len(m) < 3 {
+		return version >= minVersion // 字符串兜底
+	}
+	for i := 0; i < 3; i++ {
+		if v[i] > m[i] {
+			return true
+		}
+		if v[i] < m[i] {
+			return false
+		}
+	}
+	return true // 相等
+}
+
+// parseSemver 解析 "v1.2.3" → [1,2,3]。失败返回空。
+func parseSemver(s string) []int {
+	out := make([]int, 0, 3)
+	current := 0
+	started := false
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			current = current*10 + int(c-'0')
+			started = true
+		} else if c == '.' {
+			if started {
+				out = append(out, current)
+				current = 0
+				started = false
+			}
+		}
+	}
+	if started {
+		out = append(out, current)
+	}
+	return out
+}
+
+// computeSHA256 计算文件 SHA256。
+func computeSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	buf := make([]byte, 64*1024)
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			h.Write(buf[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// updatePendingMarkerPath 标记文件路径(<exeDir>/.update-pending)。
+func updatePendingMarkerPath() string {
+	return filepath.Join(exeDir(), ".update-pending")
+}
+
+// execUpdate 核心更新逻辑(由 runTask 对 update 类型任务调用)。
+// 支持两种二进制来源:
+//   - BinaryB64: 内联 base64(解码写临时文件)
+//   - BinaryPath: 已存在的文件路径
+func (e *UpdateExecutor) execUpdate(payload []byte) proto.TaskResult {
+	var task proto.UpdateTask
+	if err := jsonUnmarshalUpdate(payload, &task); err != nil {
+		return proto.TaskResult{Success: false, Error: "解析 update 任务失败: " + err.Error()}
+	}
+
+	// 确定二进制来源:优先 BinaryB64(内联),其次 BinaryPath(文件)
+	var binaryPath string
+	cleanupTemp := false
+	if task.BinaryB64 != "" {
+		// 解码 base64 写到 exeDir/go-rmm-agent.exe.new
+		binData, err := base64.StdEncoding.DecodeString(task.BinaryB64)
+		if err != nil {
+			return proto.TaskResult{Success: false, Error: "base64 解码失败: " + err.Error()}
+		}
+		binaryPath = filepath.Join(exeDir(), "go-rmm-agent.exe.new")
+		if err := os.WriteFile(binaryPath, binData, 0755); err != nil {
+			return proto.TaskResult{Success: false, Error: "写临时文件失败: " + err.Error()}
+		}
+		cleanupTemp = true
+	} else if task.BinaryPath != "" {
+		binaryPath = task.BinaryPath
+		if !filepath.IsAbs(binaryPath) {
+			binaryPath = filepath.Join(exeDir(), binaryPath)
+		}
+	} else {
+		return proto.TaskResult{Success: false, Error: "binary_path 或 binary_b64 不能都为空"}
+	}
+	// 失败时清理临时文件
+	defer func() {
+		if cleanupTemp {
+			os.Remove(binaryPath)
+		}
+	}()
+
+	// 1. 文件存在检查
+	if _, err := os.Stat(binaryPath); err != nil {
+		return proto.TaskResult{Success: false, Error: "新二进制不存在: " + err.Error()}
+	}
+
+	// 2. SHA256 校验
+	actualSHA, err := computeSHA256(binaryPath)
+	if err != nil {
+		return proto.TaskResult{Success: false, Error: "SHA256 计算失败: " + err.Error()}
+	}
+	if task.SHA256 != "" && actualSHA != task.SHA256 {
+		return proto.TaskResult{Success: false, Error: fmt.Sprintf("SHA256 校验失败: 期望 %s 实际 %s", task.SHA256[:16], actualSHA[:16])}
+	}
+
+	// 3. 版本防降级(Force 跳过)
+	if !task.Force {
+		if task.MinVersion != "" && !versionGE(task.Version, task.MinVersion) {
+			return proto.TaskResult{Success: false, Error: fmt.Sprintf("版本 %s 低于最低要求 %s(降级被拒)", task.Version, task.MinVersion)}
+		}
+	}
+
+	// 4. 当前 exe 路径
+	currentExe, err := os.Executable()
+	if err != nil {
+		return proto.TaskResult{Success: false, Error: "获取当前 exe 路径失败: " + err.Error()}
+	}
+	currentExe, _ = filepath.EvalSymlinks(currentExe)
+	bakPath := currentExe + ".bak"
+
+	// 5. 写 .update-pending 标记(健康自检识别用)
+	//    内容是新版本号,自检成功后删除
+	if err := os.WriteFile(updatePendingMarkerPath(), []byte(task.Version), 0644); err != nil {
+		return proto.TaskResult{Success: false, Error: "写 update-pending 标记失败: " + err.Error()}
+	}
+
+	// 6. rename 当前 exe → .bak(Windows 允许重命名运行中的 exe)
+	//    先删旧 .bak(上次更新留下的)
+	os.Remove(bakPath)
+	if err := os.Rename(currentExe, bakPath); err != nil {
+		os.Remove(updatePendingMarkerPath()) // 回滚标记
+		return proto.TaskResult{Success: false, Error: "rename 当前 exe→.bak 失败: " + err.Error()}
+	}
+
+	// 7. rename .new → exe
+	if err := os.Rename(binaryPath, currentExe); err != nil {
+		// 失败:rename .bak 回去(恢复)
+		os.Rename(bakPath, currentExe)
+		os.Remove(updatePendingMarkerPath())
+		return proto.TaskResult{Success: false, Error: "rename .new→exe 失败(已回滚): " + err.Error()}
+	}
+
+	// 8. 标记重启(主循环检测后退出,SCM 自动拉新版本)
+	pendingRestart = true
+
+	return proto.TaskResult{
+		Success: true,
+		Stdout:  fmt.Sprintf("更新成功: %s → %s (sha256=%s),等待服务重启", version, task.Version, actualSHA[:16]),
+		Data:    []byte(fmt.Sprintf(`{"old_version":%q,"new_version":%q,"sha256":%q}`, version, task.Version, actualSHA)),
+	}
+}
+
+// jsonUnmarshalUpdate 辅助:JSON 反序列化。
+func jsonUnmarshalUpdate(payload []byte, v any) error {
+	return json.Unmarshal(payload, v)
+}

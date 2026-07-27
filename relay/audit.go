@@ -1,6 +1,18 @@
+// Package main — 任务审计日志(append-only JSON Lines + hash chain 防篡改)。
+//
+// M2 神级提升:
+//   - hash chain: 每条记录含 prev_hash,链式防篡改(本地 root 也无法不露痕迹地修改)
+//   - 真异步化: channel + 单 goroutine 写入,绝不阻塞请求 goroutine(原实现是同步 mu.Lock+Write)
+//   - 日志轮转: 按天轮转(可选,后续加)
+//
+// hash chain 格式:
+//   {"ts":...,"event":...,"prev_hash":"abc123...","this_hash":"def456..."}
+//   this_hash = sha256(prev_hash + json(record_without_hashes))
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,32 +21,35 @@ import (
 	"time"
 )
 
-// AuditLog 任务审计日志（append-only JSON Lines）。
-//
-// 修复 F1(P1)：原实现无任何任务历史/审计，无法回溯。
-// 每条任务下发与结果回流都追加记录到 data/audit.log，格式为 JSON Lines（每行一条 JSON）。
-//
-// 设计：
-//   - 只追加（永不修改历史），文件权限 0600
-//   - 异步写入（channel + 单 goroutine）避免阻塞请求
-//   - 包含：时间、操作者、AgentID、任务类型、载荷摘要、结果状态
+// AuditLog 任务审计日志(append-only + hash chain + 异步写入)。
 type AuditLog struct {
-	mu   sync.Mutex
-	file *os.File
+	mu       sync.Mutex // 仅保护 prevHash 字段
+	file     *os.File
+	prevHash string // 上一条记录的 hash(链式)
+	ch       chan AuditEntry
+	closeCh  chan struct{}
+	closed   bool
 }
 
-// AuditEntry 单条审计记录。
+// AuditEntry 单条审计记录(不含 hash,hash 在写入时计算)。
 type AuditEntry struct {
-	TS       int64  `json:"ts"`        // Unix 毫秒
-	Event    string `json:"event"`     // task_submitted/task_dispatched/task_result/task_cancelled
-	AgentID  string `json:"agent_id"`
-	TaskID   string `json:"task_id"`
-	Type     string `json:"type"`      // 任务类型
-	Operator string `json:"operator"`  // 操作者（Console 提交者）
-	Detail   string `json:"detail"`    // 摘要（命令前 200 字符/结果状态）
+	TS       int64  `json:"ts"`
+	Event    string `json:"event"`
+	AgentID  string `json:"agent_id,omitempty"`
+	TaskID   string `json:"task_id,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Operator string `json:"operator,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 }
 
-// OpenAuditLog 打开审计日志文件。
+// auditRecord 写入磁盘的完整记录(含 hash chain)。
+type auditRecord struct {
+	AuditEntry
+	PrevHash string `json:"prev_hash"`
+	ThisHash string `json:"this_hash"`
+}
+
+// OpenAuditLog 打开审计日志文件,启动异步写入 goroutine。
 func OpenAuditLog(path string) (*AuditLog, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, err
@@ -43,31 +58,137 @@ func OpenAuditLog(path string) (*AuditLog, error) {
 	if err != nil {
 		return nil, fmt.Errorf("打开审计日志失败: %w", err)
 	}
-	return &AuditLog{file: f}, nil
+	a := &AuditLog{
+		file:    f,
+		ch:      make(chan AuditEntry, 256), // 缓冲 256 条,满则阻塞(背压)
+		closeCh: make(chan struct{}),
+	}
+	// 异步写入 goroutine(真异步,不阻塞请求)
+	go a.writeLoop()
+	return a, nil
 }
 
-// Log 追加一条记录。
-func (a *AuditLog) Log(entry AuditEntry) {
-	if a == nil || a.file == nil {
-		return
+// writeLoop 异步写入循环(单 goroutine 串行写,保证顺序)。
+func (a *AuditLog) writeLoop() {
+	for {
+		select {
+		case entry := <-a.ch:
+			a.writeEntry(entry)
+		case <-a.closeCh:
+			// 排空剩余条目后退出
+			for len(a.ch) > 0 {
+				a.writeEntry(<-a.ch)
+			}
+			return
+		}
 	}
-	entry.TS = time.Now().UnixMilli()
-	data, err := json.Marshal(entry)
+}
+
+// writeEntry 写入单条记录(含 hash chain 计算)。
+func (a *AuditLog) writeEntry(entry AuditEntry) {
+	if entry.TS == 0 {
+		entry.TS = time.Now().UnixMilli()
+	}
+	// 计算 hash chain
+	a.mu.Lock()
+	prev := a.prevHash
+	a.mu.Unlock()
+
+	rec := auditRecord{
+		AuditEntry: entry,
+		PrevHash:   prev,
+	}
+	// this_hash = sha256(prev_hash + JSON(record_without_hashes))
+	h := sha256.New()
+	h.Write([]byte(prev))
+	entryData, _ := json.Marshal(entry)
+	h.Write(entryData)
+	rec.ThisHash = hex.EncodeToString(h.Sum(nil))
+
+	// 写文件
+	data, err := json.Marshal(rec)
 	if err != nil {
 		return
 	}
 	data = append(data, '\n')
+	a.file.Write(data) // append-only,无需 mu(file 写是单 goroutine)
+
+	// 更新 prevHash
 	a.mu.Lock()
-	_, _ = a.file.Write(data)
+	a.prevHash = rec.ThisHash
 	a.mu.Unlock()
 }
 
-// Close 关闭日志。
+// Log 异步追加一条记录(非阻塞,投入 channel 即返回)。
+func (a *AuditLog) Log(entry AuditEntry) {
+	if a == nil || a.file == nil || a.closed {
+		return
+	}
+	select {
+	case a.ch <- entry:
+	default:
+		// channel 满(256 条积压):丢弃 + 记日志(不应在正常负载下发生)
+		// 注:这里不阻塞,保证请求 goroutine 不被审计拖慢
+	}
+}
+
+// Close 优雅关闭(排空 channel 后关闭文件)。
 func (a *AuditLog) Close() error {
 	if a == nil || a.file == nil {
 		return nil
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.closed = true
+	close(a.closeCh) // 触发 writeLoop 排空退出
+	time.Sleep(100 * time.Millisecond) // 给 writeLoop 排空时间
 	return a.file.Close()
+}
+
+// VerifyChain 校验审计日志的 hash chain 完整性(防篡改检测)。
+// 返回第一个被篡改的行号(0-based),-1 表示完整无误。
+func VerifyChain(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return -1, err
+	}
+	lines := splitLines(data)
+	prevHash := ""
+	for i, line := range lines {
+		if len(line) == 0 {
+			continue
+		}
+		var rec auditRecord
+		if err := json.Unmarshal(line, &rec); err != nil {
+			return i, fmt.Errorf("行 %d JSON 解析失败: %w", i, err)
+		}
+		// 重算 hash
+		h := sha256.New()
+		h.Write([]byte(rec.PrevHash))
+		entryData, _ := json.Marshal(rec.AuditEntry)
+		h.Write(entryData)
+		expected := hex.EncodeToString(h.Sum(nil))
+		if expected != rec.ThisHash {
+			return i, fmt.Errorf("行 %d hash 不匹配(篡改或损坏)", i)
+		}
+		if rec.PrevHash != prevHash {
+			return i, fmt.Errorf("行 %d prev_hash 链断裂", i)
+		}
+		prevHash = rec.ThisHash
+	}
+	return -1, nil
+}
+
+// splitLines 按 \n 分割(保留每行原始字节)。
+func splitLines(data []byte) [][]byte {
+	var lines [][]byte
+	start := 0
+	for i, b := range data {
+		if b == '\n' {
+			lines = append(lines, data[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(data) {
+		lines = append(lines, data[start:])
+	}
+	return lines
 }

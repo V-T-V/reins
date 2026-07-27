@@ -67,6 +67,12 @@ func DefaultCommandPolicy() *CommandPolicy {
 // F2 优化：先对命令做小写化，然后用 strings.Contains 做 quickCheck 预过滤，
 // 只有包含危险关键词的命令才跑对应正则。安全命令 O(1) 跳过全部 15 个正则。
 func (p *CommandPolicy) Check(command string) error {
+	return p.CheckCommand(command)
+}
+
+// CheckCommand 与 Check 等价,显式命名便于 shell input 场景调用。
+// P0-S1:shell input 解码后的文本过此方法。
+func (p *CommandPolicy) CheckCommand(command string) error {
 	if p == nil {
 		return nil
 	}

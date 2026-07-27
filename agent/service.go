@@ -37,8 +37,10 @@ func (p *program) Stop(s svc.Service) error {
 }
 
 func (p *program) run() {
+	// 自更新健康自检(若有 .update-pending 标记,启动 60s 倒计时)
+	StartHealthCheck()
 	a := NewAgent(p.cfg, p.disp)
-	// G1 修复：服务模式也接线 mTLS（与 runForeground 一致）
+	// G1 修复:服务模式也接线 mTLS(与 runForeground 一致)
 	if err := setupAgentCerts(p.ctx, a, p.cfg); err != nil {
 		log.Printf("[service] mTLS 证书初始化失败: %v", err)
 	}
@@ -48,15 +50,23 @@ func (p *program) run() {
 }
 
 // serviceConfig 构造 kardianos 服务描述。
+//
+// 自更新关键:Option["OnFailure"]="restart" 让服务意外停止时 SCM 自动重启。
+// Agent 自更新流程是"rename+copy 后主动退出",依赖 SCM 把新版本拉起来。
 func serviceConfig(cfg Config) *svc.Config {
 	return &svc.Config{
 		Name:        "go-rmm-agent",
 		DisplayName: "go-rmm Remote Agent",
-		Description: "go-rmm 远程自动化执行 Agent——经反向 WebSocket 连接中继服务器，执行下发的自动化任务。",
-		// Arguments：服务启动时调用的参数。kardianos 会自动加上可执行文件路径。
-		// 这里不带子命令（空参 = run 模式），从配置文件读 Relay 地址。
+		Description: "go-rmm 远程自动化执行 Agent——经反向 WebSocket 连接中继服务器,执行下发的自动化任务。",
+		// Arguments:服务启动时调用的参数。kardianos 会自动加上可执行文件路径。
+		// 这里不带子命令(空参 = run 模式),从配置文件读 Relay 地址。
 		Arguments: []string{},
-		Option:    map[string]interface{}{},
+		Option: map[string]interface{}{
+			// 自更新依赖:服务意外停止时自动重启(延迟 3 秒,给文件操作留时间)
+			"OnFailure":              "restart",
+			"OnFailureDelayDuration": "3s",
+			"OnFailureResetDuration": "300s", // 5 分钟内连续失败才计数
+		},
 	}
 }
 

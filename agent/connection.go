@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -56,21 +59,50 @@ func mtlsHTTPClient(certs *AgentCerts) *http.Client {
 func (a *Agent) Run(ctx context.Context) error {
 	agentBizID = a.cfg.AgentID
 	backoff := initialBackoff
+	rng := rand.New(rand.NewSource(time.Now().UnixNano())) // S1: jitter 随机源
+	relayIdx := 0 // L2: 当前使用的 relay 索引(RelayURLs 轮询)
 	for {
+		// 自更新:pendingRestart 标记触发优雅退出,SCM 自动拉新版本
+		if pendingRestart {
+			log.Printf("[agent] 自更新完成,退出以重启服务...")
+			return nil
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		err := a.connectAndServe(ctx)
-		if ctx.Err() != nil {
-			return ctx.Err() // 主动退出，不重连
+		// L2: 选择 relay(主 URL 优先,失败后轮询 RelayURLs)
+		relayURL := a.cfg.RelayURL
+		if relayURL == "" && len(a.cfg.RelayURLs) > 0 {
+			relayURL = a.cfg.RelayURLs[relayIdx%len(a.cfg.RelayURLs)]
 		}
-		log.Printf("[agent] 连接断开: %v，%v 后重连", err, backoff)
+		if relayURL == "" {
+			return fmt.Errorf("无 relay_url 可用(主 URL + 备用列表均空)")
+		}
+		a.cfg.RelayURL = relayURL // connectAndServe 用此字段
+		err := a.connectAndServe(ctx)
+		// 自更新可能在 connectAndServe 内完成,再次检查
+		if pendingRestart {
+			log.Printf("[agent] 自更新完成,退出以重启服务...")
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err() // 主动退出,不重连
+		}
+		// L2: 连接失败时切换到下一个备用 relay
+		if len(a.cfg.RelayURLs) > 0 {
+			relayIdx++
+			nextRelay := a.cfg.RelayURLs[relayIdx%len(a.cfg.RelayURLs)]
+			log.Printf("[agent] 连接 %s 断开: %v,切换到备用 %s", relayURL, err, nextRelay)
+		}
+		// S1 修复:full jitter 退避,防 thundering herd
+		jittered := time.Duration(rng.Int63n(int64(backoff)))/10*9 + backoff/10
+		log.Printf("[agent] %v 后重连", jittered)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(backoff):
+		case <-time.After(jittered):
 		}
-		// 指数退避，封顶 30s
+		// 指数退避,封顶 30s
 		backoff *= 2
 		if backoff > maxBackoff {
 			backoff = maxBackoff
@@ -111,15 +143,23 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	// 子 ctx：连接级取消（断线时让心跳 goroutine 退出）
 	connCtx, connCancel := context.WithCancel(ctx)
 	defer connCancel()
-	// H3：连接断开时关闭所有 shell 会话（防资源泄漏）
+	// H3:连接断开时关闭所有 shell 会话(防资源泄漏)
 	defer sessions.CloseAll()
-	// J1：连接断开时关闭所有文件传输会话
+	// J1:连接断开时关闭所有文件传输会话
 	defer transfers.CloseAll()
+	// 阶段 3.1:连接断开时关闭所有隧道
+	defer tunnelMgr.CloseAll()
+	// 注入隧道 ready 回调(发 TunnelReady 给 Relay)
+	tunnelReadyCb = func(ready proto.TunnelReady) {
+		_ = wc.writeEnvelope(ctx, proto.TypeTunnelReady, "relay", ready)
+	}
 
 	// 1. 发送 register
 	if err := a.sendRegister(connCtx, wc); err != nil {
 		return err
 	}
+	// 自更新健康确认:注册成功 = 新版本健康,取消回滚倒计时
+	ConfirmUpdateHealthy()
 	// 2. 连接建立后补发队列中积压的结果（R3 修复核心）
 	if resultQueue.len() > 0 {
 		log.Printf("[agent] 连接恢复，补发 %d 个积压结果", resultQueue.len())
@@ -127,10 +167,38 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	}
 	// 3. 启动心跳 goroutine
 	go a.heartbeatLoop(connCtx, wc)
-	// 4. 启动幂等缓存清理
-	go idempotencySweepLoop(connCtx)
-	// 5. 接收循环（阻塞直到断开）
+	// 4. 启动进程级后台 sweep(幂等缓存清理 + shell 回收)
+	// P1-A4 修复:用 sync.Once 保证只启动一次,绑定进程级 ctx(不随连接起伏)
+	startBackgroundSweeps(ctx)
+	// 5. 接收循环(阻塞直到断开)
 	return a.recvLoop(connCtx, wc)
+}
+
+// sweepsOnce 保证后台 sweep goroutine 只启动一次(进程级)。
+var sweepsOnce sync.Once
+
+// startBackgroundSweeps 启动进程级后台任务(幂等缓存清理 + 空闲 shell 回收)。
+// P1-A2/P1-A4 修复:绑定进程级 ctx,不随连接断开停止。
+func startBackgroundSweeps(ctx context.Context) {
+	sweepsOnce.Do(func() {
+		go idempotencySweepLoop(ctx)
+		go sessionsReapLoop(ctx)
+	})
+}
+
+// sessionsReapLoop 周期回收空闲 shell 会话(P1-A2 修复)。
+// 原 ReapIdle 定义但从未调用,空闲 shell 永久泄漏(powershell 进程 + 2 goroutine)。
+func sessionsReapLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sessions.ReapIdle(30 * time.Minute) // 30 分钟无活动的会话回收
+		}
+	}
 }
 
 // sendRegister 发送注册消息。
@@ -184,15 +252,37 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 		if err != nil {
 			return err
 		}
-		// J1/A9：二进制帧 = 文件上传数据，异步处理避免阻塞 recvLoop（心跳/任务不被卡）
+		// 二进制帧:文件上传数据 OR 隧道数据(阶段 1.2 帧扩展区分)
 		if msgType == websocket.MessageBinary {
-			go a.handleUploadData(ctx, wc, data)
+			if proto.IsTunnelFrame(data) {
+				// 隧道帧:同步路由到 TunnelManager(快,只是 conn.Write)
+				tunnelID, _, _, payload, err := proto.ParseTunnelFrame(data)
+				if err == nil {
+					tunnelMgr.HandleData(tunnelID, payload)
+				}
+			} else {
+				// 文件帧:异步处理避免阻塞 recvLoop
+				// S4 修复:panic recovery 防止执行器内部 panic 崩溃整个 Agent
+				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Printf("[agent] handleUploadData panic(已恢复): %v", r)
+						}
+					}()
+					a.handleUploadData(ctx, wc, data)
+				}()
+			}
 			continue
 		}
 		// JSON 帧 = 控制信令
 		var env proto.Envelope
 		if err := json.Unmarshal(data, &env); err != nil {
 			log.Printf("[agent] 消息解析失败: %v", err)
+			continue
+		}
+		// P0-P2 修复:协议版本校验
+		if !env.IsValidVersion() {
+			log.Printf("[agent] 收到不兼容的协议版本 v=%d (期望 %d),忽略", env.Version, proto.Version)
 			continue
 		}
 		switch env.Type {
@@ -213,6 +303,13 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 			if err := env.Decode(&cancel); err == nil {
 				transfers.Cancel(cancel.TransferID)
 			}
+		case proto.TypeTunnelOpen:
+			a.handleTunnelOpen(ctx, wc, env)
+		case proto.TypeTunnelClose:
+			var tc proto.TunnelClose
+			if err := env.Decode(&tc); err == nil {
+				tunnelMgr.Close(tc.TunnelID, "remote closed: "+tc.Reason)
+			}
 		default:
 			log.Printf("[agent] 忽略消息类型 %s", env.Type)
 		}
@@ -221,7 +318,15 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 
 // handleTask 原始入口（兼容，直接 go，不经 pool）。
 func (a *Agent) handleTask(parent context.Context, wc *wsConn, env proto.Envelope) {
-	go func() { a.runTask(parent, wc, env) }()
+	// S4 修复:panic recovery 防止任务执行器内部 panic 崩溃整个 Agent
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[agent] runTask panic(已恢复): %v", r)
+			}
+		}()
+		a.runTask(parent, wc, env)
+	}()
 }
 
 // runTask 执行单个任务的核心逻辑（C5 增强版：ACK + 幂等 + 队列发送）。
@@ -273,8 +378,14 @@ func (a *Agent) runTask(parent context.Context, wc *wsConn, env proto.Envelope) 
 	}
 
 	// 5. 执行
-	result := a.disp.Dispatch(ctx, task, progress)
-	// 如果是被取消的，标注
+	// update 任务特殊处理:不走标准 Executor(强依赖 agent 包的 os.Executable/version)
+	var result proto.TaskResult
+	if task.Type == proto.TaskUpdate {
+		result = updateExec.execUpdate(task.Payload)
+	} else {
+		result = a.disp.Dispatch(ctx, task, progress)
+	}
+	// 如果是被取消的,标注
 	if ctx.Err() == context.Canceled {
 		result.Error = "任务被取消"
 	}
@@ -367,6 +478,25 @@ func (a *Agent) handleShellClose(env proto.Envelope) {
 }
 
 // --- J1 大文件传输 handler ---
+
+// handleTunnelOpen 处理 tunnel_open(阶段 3.1:端口转发)。
+// 解析 TunnelOpen,委托 TunnelManager.Dial 远端并启动双向转发。
+func (a *Agent) handleTunnelOpen(ctx context.Context, wc *wsConn, env proto.Envelope) {
+	var open proto.TunnelOpen
+	if err := env.Decode(&open); err != nil {
+		log.Printf("[tunnel] open 解析失败: %v", err)
+		return
+	}
+	// writeBin:串行化 WS 写(复用 writeMu)
+	writeBin := func(frame []byte) error {
+		wctx, wcancel := contextWithTimeout(10 * time.Second)
+		defer wcancel()
+		wc.writeMu.Lock()
+		defer wc.writeMu.Unlock()
+		return wc.conn.Write(wctx, websocket.MessageBinary, frame)
+	}
+	tunnelMgr.HandleOpen(open, writeBin)
+}
 
 // handleTransferInit 处理 file_xfer_init。
 func (a *Agent) handleTransferInit(ctx context.Context, wc *wsConn, env proto.Envelope) {

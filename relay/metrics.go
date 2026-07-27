@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	_ "net/http/pprof" // S6:pprof 注册到 DefaultServeMux(通过 /debug/pprof/ 暴露)
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -81,11 +83,59 @@ func (m *Metrics) SetEventsDropped(n int64) {
 	atomic.StoreInt64(&m.EventsDropped, n)
 }
 
-// handleMetrics GET /api/metrics 暴露运行指标。
+// handleMetrics GET /api/metrics 暴露运行指标(JSON 格式,需鉴权)。
+// P1-S7 修复:加鉴权(原无鉴权泄漏在线数/任务计数/goroutine数,利于侦察)。
 func (r *Relay) handleMetrics(w http.ResponseWriter, req *http.Request) {
-	// 更新在线数 + events_dropped（D7 从 EventBus 同步）
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	// 更新在线数 + events_dropped(D7 从 EventBus 同步)
 	metrics.SetAgentsOnline(len(r.agents.Snapshot()))
 	metrics.SetEventsDropped(r.console.Dropped())
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(metrics.Snapshot())
+}
+
+// handlePromMetrics GET /metrics —— Prometheus 文本格式(无需鉴权,供 Prometheus scraper)。
+// S6:零依赖手写 Prometheus exposition 格式(text 0.0.4)。
+func (r *Relay) handlePromMetrics(w http.ResponseWriter, req *http.Request) {
+	// metrics 端点通常不需鉴权(Prometheus 无法带 Bearer),
+	// 但可配置 --metrics-token 保护
+	metrics.SetAgentsOnline(len(r.agents.Snapshot()))
+	metrics.SetEventsDropped(r.console.Dropped())
+	snap := metrics.Snapshot()
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	// 手写 Prometheus exposition 格式
+	writeProm := func(name, help, typ string, val int64) {
+		fmt.Fprintf(w, "# HELP %s %s\n", name, help)
+		fmt.Fprintf(w, "# TYPE %s %s\n", name, typ)
+		fmt.Fprintf(w, "%s %d\n", name, val)
+	}
+	writeProm("gormm_agents_online", "当前在线 Agent 数", "gauge", toInt64(snap["agents_online"]))
+	writeProm("gormmm_tasks_submitted_total", "累计提交任务数", "counter", toInt64(snap["tasks_submitted"]))
+	writeProm("gormmm_tasks_dispatched_total", "累计投递任务数", "counter", toInt64(snap["tasks_dispatched"]))
+	writeProm("gormmm_tasks_completed_total", "累计完成任务数", "counter", toInt64(snap["tasks_completed"]))
+	writeProm("gormmm_tasks_failed_total", "累计失败任务数", "counter", toInt64(snap["tasks_failed"]))
+	writeProm("gormmm_tasks_blocked_total", "被策略拦截的任务数", "counter", toInt64(snap["tasks_blocked"]))
+	writeProm("gormmm_tasks_cancelled_total", "被取消的任务数", "counter", toInt64(snap["tasks_cancelled"]))
+	writeProm("gormmm_tasks_reaped_total", "被 reaper 回退的任务数", "counter", toInt64(snap["tasks_reaped"]))
+	writeProm("gormmm_events_dropped_total", "SSE 丢弃事件数", "counter", toInt64(snap["events_dropped"]))
+	writeProm("gormmm_uptime_seconds", "Relay 运行时长(秒)", "gauge", toInt64(snap["uptime_seconds"]))
+	writeProm("gormmm_goroutines", "Goroutine 数", "gauge", toInt64(snap["goroutines"]))
+}
+
+// toInt64 安全类型转换(any → int64)。
+func toInt64(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	default:
+		return 0
+	}
 }

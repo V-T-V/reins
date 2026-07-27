@@ -29,19 +29,36 @@ type Executor interface {
 // ProgressFunc 长任务上报进度。step 为当前步骤标识，percent 0-100。
 type ProgressFunc func(step, message string, percent int)
 
-// Dispatcher 持有所有已注册的执行器，按任务类型路由。
+// Dispatcher 持有所有已注册的执行器,按任务类型路由。
 //
-// 并发安全（Q1 修复）：executors map 用 RWMutex 保护。
-// 典型用法是启动时 Register（写）、运行时 Dispatch/Types（读），但为防御
-// 运行期动态注册（如热加载执行器）+ race detector 严格性，统一加锁。
+// 并发安全(Q1 修复):executors map 用 RWMutex 保护。
+// 典型用法是启动时 Register(写)、运行时 Dispatch/Types(读),但为防御
+// 运行期动态注册(如热加载执行器)+ race detector 严格性,统一加锁。
+//
+// P0-S3 修复:新增 commandPolicy 字段,Dispatch 前强制过 CheckPayload。
+// 这是 Agent 侧的最后防线,杜绝 Relay 被绕过(shell/cron/未来新类型)的场景。
 type Dispatcher struct {
 	mu        sync.RWMutex
 	executors map[string]Executor
+	// commandPolicy 命令策略(nil 时用默认策略)。
+	// 由 SetCommandPolicy 注入;Dispatch 前强制校验。
+	commandPolicy *CommandPolicy
 }
 
-// New 构造空的 Dispatcher。
+// New 构造空的 Dispatcher,默认启用 DefaultCommandPolicy。
 func New() *Dispatcher {
-	return &Dispatcher{executors: make(map[string]Executor)}
+	return &Dispatcher{
+		executors:     make(map[string]Executor),
+		commandPolicy: DefaultCommandPolicy(),
+	}
+}
+
+// SetCommandPolicy 注入自定义命令策略(nil 则禁用校验)。
+// Agent 启动时注入与 Relay 一致的策略;Agent 是最后防线。
+func (d *Dispatcher) SetCommandPolicy(p *CommandPolicy) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.commandPolicy = p
 }
 
 // Register 注册一个执行器。重复注册同一类型会覆盖（便于测试替换）。
@@ -63,7 +80,25 @@ func (d *Dispatcher) Types() []string {
 }
 
 // Dispatch 路由并执行任务。未知类型返回失败结果。
+//
+// P0-S3 修复:执行前强制过 commandPolicy.CheckPayload。
+// 这是 Agent 侧的最后防线——即使 Relay 被绕过(shell/cron/未来新类型),
+// Agent 也会拒绝高危命令。策略命中返回失败结果,不执行。
 func (d *Dispatcher) Dispatch(ctx context.Context, task proto.TaskRequest, progress ProgressFunc) proto.TaskResult {
+	// P0-S3:Agent 侧命令策略强制校验(最后防线)
+	d.mu.RLock()
+	policy := d.commandPolicy
+	d.mu.RUnlock()
+	if policy != nil {
+		if err := policy.CheckPayload(task.Type, task.Payload); err != nil {
+			return proto.TaskResult{
+				TaskID:  task.TaskID,
+				Success: false,
+				Error:   "Agent 侧策略拒绝: " + err.Error(),
+			}
+		}
+	}
+
 	d.mu.RLock()
 	e, ok := d.executors[task.Type]
 	d.mu.RUnlock()
@@ -74,7 +109,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, task proto.TaskRequest, progr
 			Error:   "不支持的任务类型: " + task.Type,
 		}
 	}
-	// 执行器调用在锁外进行（Exec 可能很慢，不能持锁）
+	// 执行器调用在锁外进行(Exec 可能很慢,不能持锁)
 	return e.Exec(ctx, task.Payload, progress)
 }
 

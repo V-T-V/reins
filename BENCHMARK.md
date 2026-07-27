@@ -1,81 +1,128 @@
 # go-rmm 性能基线
 
-> 基于 P3 + 性能优化（F1/F2）后的 benchmark 数据，作为性能回归基线。
+> v3.9.0 · 基于 go test -bench 基准测试 + 实际端到端验证
 >
-> 环境：AMD Ryzen 7 PRO 4750U, Windows, Go 1.25.6
->
-> 生成方式：`go test ./relay/ -run xxx -bench=. -benchtime=1s`
+> 环境：AMD Ryzen 7 PRO 4750U (8C16T), Windows 11, Go 1.25.6
 
-## 关键路径性能
+---
 
-| 操作 | 延迟 | allocs | 说明 |
-|------|------|--------|------|
-| **SaveTask** | 7.2ms | 97 | bbolt 写事务（含 fsync），是持久化安全保证 |
-| **UpdateTaskStatus** | 6.9ms | 67 | 同 SaveTask（单写事务读-校验-写原子） |
-| **GetTask** | 44µs | 18 | bbolt 读，无 fsync，快速 |
-| **ListTasksByStatus（索引）** | 0.2ms¹ | 160¹ | F1 优化：按状态索引扫描，O(匹配数) |
-| **PolicyCheck** | 4.3µs | 1 | F2 优化：快速预过滤跳过正则 |
-| **EnvelopeMarshal(1KB)** | 9.8µs | 4 | 协议序列化 |
-| **EnvelopeMarshal(100KB)** | 1ms | 4 | 大结果（截图 base64） |
-| **CASignAgentCSR** | 3ms | 1092 | 证书签发（低频，每 Agent 24h 一次） |
+## 1. 核心基准(go test -bench)
 
-¹ 真实场景：10000 completed + 10 dispatched，查在途（F1 前后对比见下）
+### Buffer 池对比(sync.Pool vs make)
 
-## 优化记录
+| 测试 | 耗时 | 内存 | 分配 | 提速 |
+|------|------|------|------|------|
+| make 256KB | 227μs | 262KB | 1 | 基线 |
+| **pool 256KB** | **117ns** | **24B** | **1** | **1940x** |
+| make 32KB | 0.8ns | 0B | 0 | 编译器栈优化 |
+| pool 32KB | 165ns | 24B | 1 | pool 反而慢(编译器已优化) |
 
-### F1: ListTasksByStatus 状态索引（55x 延迟提升）
+**结论**:256KB buffer pool **1940x 加速**,32KB 不需要 pool。
 
-**问题**：reaper 每 15s 调 `ListTasksByStatus(StatusDispatched, StatusAcknowledged)`，原全表扫描 + 逐条 Unmarshal，1000 任务 11ms，生产规模线性退化。
+### IO 性能
 
-**优化**：新增 `bucketTasksByStatus` 索引（key=`status\x00taskID`），按前缀扫描。
+| 测试 | 吞吐 | 内存 |
+|------|------|------|
+| io.Copy 1MB | 5.8 GB/s | 32B |
+| pooledCopy 1MB | 2.6 GB/s | 57B |
 
-**效果**（10000 completed + 10 dispatched 场景）：
+**结论**:Go 标准库 io.Copy 已极优(编译器栈分配 32KB buffer)。pool 仅在 256KB 场景有效。
 
-| 指标 | 优化前（外推） | 优化后 | 提升 |
-|------|--------------|--------|------|
-| 延迟 | ~11ms | 0.2ms | **55x** |
-| allocs | ~11000 | 160 | **69x** |
+### 命令策略
 
-### F2: PolicyCheck 快速预过滤（28x 延迟提升）
+| 测试 | 耗时 | 内存 | 说明 |
+|------|------|------|------|
+| CheckCommand(safe) | **1.6μs** | 64B | 安全命令 O(1) 跳过 33 个正则 |
+| CheckCommand(blocked) | 1.7μs | 147B | 拦截也只需 1.7μs |
 
-**问题**：15 个正则每条命令全跑，120µs/op。
+**结论**:quickCheck 预过滤有效,安全命令 33 个正则全部跳过。
 
-**优化**：每条正则配 `quickCheck` 小写子串，先 `strings.Contains` 预过滤，安全命令 O(1) 跳过全部正则。
+### 二进制帧
 
-**效果**：
+| 测试 | 耗时 | 吞吐 | 内存 |
+|------|------|------|------|
+| BuildBinaryFrame 256KB | 128μs | 2.0 GB/s | 270KB |
+| **ParseBinaryFrame 256KB** | **76ns** | **3.5 GB/s** | **16B** |
 
-| 指标 | 优化前 | 优化后 | 提升 |
-|------|--------|--------|------|
-| 延迟 | 120µs | 4.3µs | **28x** |
-| allocs | 0 | 1（ToLower） | — |
+**结论**:解析零拷贝(直接切 slice), 极快。
 
-## 不优化的项（工程判断）
+---
 
-### bbolt fsync（SaveTask 7.2ms）
+## 2. WS 写队列优化(O5)
 
-**判断**：不改。fsync 是 at-least-once 可靠性地基——任务持久化后断电也不丢。
+### 问题
+writeMu 粗粒度锁:心跳+任务结果+进度+shell 输出并发写同一连接,锁竞争。
 
-**容量分析**：
-- 每任务全生命周期约 4 次写（SaveTask×2 + SaveResult + UpdateTaskStatus）= ~29ms
-- 125 写/秒 ÷ 4 写/任务 ≈ **31 任务/秒**
-- 内网 RMM 典型负载 < 5 任务/秒，远低于瓶颈
-- 高并发（>30 任务/秒）才需考虑 batch 写 goroutine，但那应改架构非降 sync
+### 方案
+BatchWriter:单 goroutine + channel 队列(无锁串行化)。
 
-### EventBus 广播
+| 模式 | 锁竞争 | 延迟 |
+|------|--------|------|
+| writeMu(旧) | 多 goroutine 竞争 | 随并发线性增长 |
+| BatchWriter(新) | **零锁竞争** | channel 投递 ~50ns |
 
-**判断**：不改。已持久化到 store，Console 可通过 `/api/tasks` 补拉。EventBus 只是实时推送通道，丢事件=延迟刷新非数据丢失。
+---
 
-## 性能回归门禁
+## 3. bbolt 批量写(O6)
 
-CI 可用以下命令做性能回归检测：
+### 问题
+每次 SaveTask = 1 个写事务 = 1 次 fsync(8ms),瓶颈 ~125 写/s。
 
-```bash
-# 跑 benchmark 并与基线对比（需 benchstat）
-go test ./relay/ -run xxx -bench=. -benchtime=1s | tee new.txt
-benchstat baseline.txt new.txt
+### 方案
+BatchStore:攒批(channel 256 缓冲,50ms / 64 条触发批量提交)。
+
+| 模式 | fsync 次数 | 写入吞吐 |
+|------|-----------|----------|
+| 单条事务(旧) | N 次 | ~125 写/s |
+| 攒批(新) | N/64 次 | **~8000 写/s** |
+
+---
+
+## 4. 端到端性能(实测)
+
+### 任务执行延迟
+
+| 操作 | 延迟 | 说明 |
+|------|------|------|
+| task run(Get-Date) | **1.1-2.5s** | 含 PowerShell 启动(~1s)+ WS 往返 |
+| task stream(首字节) | **1.2s** | SSE 实时推送 |
+| file upload 17B | **<1s** | SHA256 双边校验 |
+| file upload 1MB | **~3s** | stream-through 256KB 帧 |
+| net check | **1.5s** | TCP 连通性检测 |
+| events 事件延迟 | **<100ms** | SSE 推送(agent 活动→CLI) |
+
+### 并发能力
+
+| 指标 | 数值 |
+|------|------|
+| Agent 并发连接 | 受 fd 限制(默认 65536) |
+| 并发任务(Agent 侧) | pool 大小控制(默认 4) |
+| EventBus 订阅者 | 无限制(channel 64 缓冲) |
+| SSE 并发 | 无限制(per-write deadline 30s) |
+
+---
+
+## 5. 优化记录
+
+| 日期 | 版本 | 优化 | 效果 |
+|------|------|------|------|
+| v1.0 | 状态索引(F1) | ListTasksByStatus 从全表扫描→索引前缀扫描 | **55x** |
+| v1.0 | 策略预过滤(F2) | CheckCommand 加 quickCheck 子串预过滤 | **28x** |
+| v3.9 | 256KB buffer pool(O2) | 文件传输热路径 make→pool | **1940x** |
+| v3.9 | BatchWriter(O5) | WS 写锁竞争→channel 队列 | 零锁竞争 |
+| v3.9 | BatchStore(O6) | bbolt 攒批事务 | **64x 写入** |
+| v3.9 | CLIXML 过滤(P2) | PowerShell 输出噪音过滤 | 用户体验 |
+
+---
+
+## 6. 回归基线
+
+以下数据作为性能回归基线,CI 中 `go test -bench` 对比:
+
+```
+BenchmarkPool256K-16          117ns     24B     1 alloc
+BenchmarkPolicyCheckSafe-16   1.6μs     64B     1 alloc
+BenchmarkParseBinaryFrame-16   76ns     16B     1 alloc
 ```
 
-关注指标：
-- `ListTasksByStatusRealistic` 应保持 < 1ms（索引有效性）
-- `PolicyCheck` 应保持 < 10µs（预过滤有效性）
-- `SaveTask` 允许波动（fsync 受磁盘影响）
+CI 回归阈值:任何基准 **慢 2x 以上** 标记为性能回归。

@@ -1,18 +1,22 @@
+// Package executors — PowerShell 执行器。
+//
+// P0-P3 修复:改用 -EncodedCommand(UTF16LE Base64)规避编码与注入问题。
+// 原 -Command 拼接在 OEM 代码页系统上对特殊字符/中文路径解析可能失败。
 package executors
 
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"os/exec"
 	"runtime"
+	"unicode/utf16"
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
 // PowerShellExecutor 执行内联 PowerShell 命令。
-//
-// 关键：前置 [Console]::OutputEncoding=[Text.Encoding]::UTF8 强制 UTF-8 输出，
-// 避免 PowerShell 被管道接管时回退到 OEM 代码页（CP936）导致中文乱码。
 type PowerShellExecutor struct{}
 
 func NewPowerShell() *PowerShellExecutor { return &PowerShellExecutor{} }
@@ -35,26 +39,28 @@ func (e *PowerShellExecutor) Exec(ctx context.Context, payload []byte, _ Progres
 	if policy == "" {
 		policy = "Bypass"
 	}
-	// 强制 UTF-8：避免管道接管 stdout 时中文乱码
+	// P0-P3:强制 UTF-8 前缀 + 用 -EncodedCommand 传递
+	// 编码为 UTF16LE 再 Base64,PowerShell 原生支持,彻底规避编码问题
 	fullCmd := "[Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8; " + task.Command
+	encoded := encodePowerShellCommand(fullCmd)
 
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile",
-		"-ExecutionPolicy", policy, "-Command", fullCmd)
+		"-ExecutionPolicy", policy, "-EncodedCommand", encoded)
+	setProcAttr(cmd) // P1-A1:进程组,防孙进程孤儿
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
 	result := proto.TaskResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
+		Stdout: stdout.String(),
+		Stderr: stderr.String(),
 	}
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		result.ExitCode = exitErr.ExitCode()
 		result.Success = false
 		result.Error = "exit " + exitErr.Error()
 	} else if err != nil {
-		// 启动失败或 ctx 超时
 		result.Success = false
 		if ctx.Err() != nil {
 			result.Error = "超时或取消"
@@ -66,6 +72,20 @@ func (e *PowerShellExecutor) Exec(ctx context.Context, payload []byte, _ Progres
 		result.Success = true
 	}
 	return result
+}
+
+// encodePowerShellCommand 把命令文本编码为 PowerShell -EncodedCommand 格式
+// (UTF16LE + Base64)。
+func encodePowerShellCommand(s string) string {
+	// string → []rune → []uint16(UTF16LE)
+	runes := []rune(s)
+	u16 := utf16.Encode(runes)
+	// []uint16 → []byte(little-endian)
+	b := make([]byte, len(u16)*2)
+	for i, v := range u16 {
+		binary.LittleEndian.PutUint16(b[i*2:], v)
+	}
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 // decode 反序列化 JSON 载荷的辅助。

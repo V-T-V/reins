@@ -23,12 +23,14 @@ func RegisterAll(d *Dispatcher, opts Options) []string {
 		d.Register(NewPowerShell())
 		d.Register(NewScript())
 		d.Register(NewScreenshot())
+		d.Register(NewPower())    // 电源操作
+		d.Register(NewMonitor())  // 流式监测
 		if opts.VisionClient != nil && opts.VisionClient.APIKey != "" {
 			d.Register(NewGUIClick(opts.VisionClient))
 		}
 	}
 	d.Register(NewFile())
-	d.Register(newBrowseImpl()) // 默认 stub；-tags browse 编译时为真实实现
+	d.Register(newBrowseImpl()) // 默认 stub;-tags browse 编译时为真实实现
 
 	return d.Types()
 }

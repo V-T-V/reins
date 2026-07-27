@@ -70,6 +70,9 @@ const (
 	TaskScreenshot = "screenshot" // 窗口/全屏截图
 	TaskBrowse     = "browse"     // headless 浏览器自动化
 	TaskGUIClick   = "guiclick"   // 视觉驱动的桌面 GUI 点击
+	TaskUpdate     = "update"     // Agent 自更新(替换二进制 + 重启)
+	TaskPower      = "power"      // 电源操作(关机/重启/休眠)
+	TaskMonitor    = "monitor"    // 流式系统监测(top/htop)
 )
 
 // ValidTaskTypes 已知任务类型集合（用于 Relay 侧 type 校验，防透传未知类型）。
@@ -80,10 +83,36 @@ var ValidTaskTypes = map[string]bool{
 	TaskScreenshot: true,
 	TaskBrowse:     true,
 	TaskGUIClick:   true,
+	TaskUpdate:     true,
+	TaskPower:      true,
+	TaskMonitor:    true,
 }
 
 // IsValidTaskType 判断是否为已知任务类型。
 func IsValidTaskType(t string) bool { return ValidTaskTypes[t] }
+
+// P0-P2 修复:协议版本校验。
+// 当前只支持 v1,未来演进时需放宽或协商。
+// 不匹配时调用方应记录/拒绝,防止 v2 载荷被当 v1 解析。
+func (e Envelope) IsValidVersion() bool {
+	return e.Version == Version
+}
+
+// P1-P9 修复:任务状态公开常量(供 CLI/Console 复用,避免硬编码漂移)。
+// 与 relay/store.go 的 Status* 保持一致(单向依赖:relay 定义,这里导出给外部)。
+const (
+	StatusPending      = "pending"
+	StatusDispatched   = "dispatched"
+	StatusAcknowledged = "acknowledged"
+	StatusCompleted    = "completed"
+	StatusFailed       = "failed"
+	StatusCancelled    = "cancelled"
+)
+
+// IsTerminalStatus 判断是否终态(不可变更)。
+func IsTerminalStatus(status string) bool {
+	return status == StatusCompleted || status == StatusFailed || status == StatusCancelled
+}
 
 // 默认任务超时（秒）。TaskRequest.Timeout 为 0 时使用此值。
 const DefaultTaskTimeout = 60

@@ -6,12 +6,16 @@ import (
 	"crypto/x509"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
@@ -21,6 +25,16 @@ const heartbeatTimeout = 45 * time.Second
 
 func main() {
 	cfg := parseFlags()
+	// S2:结构化日志(JSON 生产 / Text 开发)
+	initLogger(cfg.Dev)
+	initWebhooks() // F11:webhook 告警
+
+	// 零配置体验:非 dev 模式下自动生成并保存 token(dev 模式不校验)
+	if cfg.Token == "" && !cfg.Dev {
+		cfg.Token = loadOrGenToken()
+	}
+
+	slog.Info("relay 启动", "version", version, "config", cfg)
 	log.Printf("[relay] go-rmm-relay %s 启动: %s", version, cfg)
 
 	relay := NewRelay(cfg)
@@ -48,7 +62,7 @@ func main() {
 		}
 	}
 
-	// C9：打开审计日志（data/audit.log）
+	// C9:打开审计日志(data/audit.log)
 	audit, err := OpenAuditLog(filepath.Join(dataDir(), "audit.log"))
 	if err != nil {
 		log.Printf("[relay] 审计日志打开失败(降级): %v", err)
@@ -56,6 +70,24 @@ func main() {
 		relay.WithAudit(audit)
 		defer audit.Close()
 		log.Printf("[relay] 审计日志已启用: %s", filepath.Join(dataDir(), "audit.log"))
+	}
+
+	// 自更新版本仓库(data/agent-binaries/)
+	updateRepo, err := NewUpdateRepo(dataDir())
+	if err != nil {
+		log.Printf("[relay] 版本仓库初始化失败(降级): %v", err)
+	} else {
+		relay.WithUpdateRepo(updateRepo)
+		log.Printf("[relay] Agent 版本仓库已启用: %s", filepath.Join(dataDir(), "agent-binaries"))
+	}
+
+	// F8:脚本库(data/scripts/)
+	scriptLibInstance, err := NewScriptLibrary(dataDir())
+	if err != nil {
+		log.Printf("[relay] 脚本库初始化失败(降级): %v", err)
+	} else {
+		scriptLib = scriptLibInstance
+		log.Printf("[relay] 脚本库已启用: %s", filepath.Join(dataDir(), "scripts"))
 	}
 
 	// H2：启动定时任务调度器
@@ -70,9 +102,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	relay.registerHTTP(mux)
-	mux.HandleFunc("/agent", relay.handleAgentWS)     // Agent 反向连接
-	mux.HandleFunc("/console", relay.handleConsoleWS) // 控制台 WS（预留）
-	relay.registerWebUI(mux)                           // N1：内嵌 Web 控制台
+	mux.HandleFunc("/agent", relay.handleAgentWS) // Agent 反向连接
+	// P2-S6 清理:移除 /console 死路由(原 handler 立即 Close,无用且增加攻击面)
+	relay.registerWebUI(mux) // N1:内嵌 Web 控制台
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
@@ -103,14 +135,37 @@ func main() {
 		log.Printf("[relay] mTLS 已启用：要求 Agent 客户端证书 + CRL 撤销校验")
 	}
 
-	// 心跳超时清理 goroutine
-	go sweepLoop(relay)
-	// D2：任务状态机 reaper（回退超时未 ACK 的任务）
-	go reaperLoop(relay)
-
-	// 优雅关闭
+	// 优雅关闭 ctx(P2:上移,供 sweepLoop/reaperLoop 共用)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// 零交互:启动成功后打印连接信息
+	port := cfg.Addr
+	if strings.HasPrefix(port, ":") { port = port[1:] }
+	if port == "" { port = "7780" }
+	localIP := getLocalIP()
+	tokenHint := cfg.Token
+	if len(tokenHint) > 8 { tokenHint = tokenHint[:8] + "..." }
+
+	fmt.Println()
+	fmt.Println("╔════════════════════════════════════════════════════╗")
+	fmt.Println("║         go-rmm 服务端已启动!                       ║")
+	fmt.Printf( "║  Web UI:  http://localhost:%s                     ║\n", port)
+	fmt.Printf( "║  外网IP:  http://%s:%s                          \n", localIP, port)
+	fmt.Printf( "║  Token:   %s              \n", tokenHint)
+	fmt.Println("║                                                    ║")
+	fmt.Println("║  ─── 在被控端执行 ───                              ║")
+	fmt.Printf( "║  go-rmm-agent run -relay ws://%s:%s/agent -token <token>\n", localIP, port)
+	fmt.Println("║                                                    ║")
+	fmt.Println("║  ─── 在操作端执行 ───                              ║")
+	fmt.Printf( "║  go-rmm --relay http://%s:%s --token <token> agent list\n", localIP, port)
+	fmt.Println("╚════════════════════════════════════════════════════╝")
+	fmt.Println()
+
+	// 心跳超时清理 goroutine(P2:支持优雅退出)
+	go sweepLoop(ctx, relay)
+	// D2:任务状态机 reaper(回退超时未 ACK 的任务,P2 支持优雅退出)
+	go reaperLoop(ctx, relay)
 
 	go func() {
 		if cfg.MTLS && cfg.CertFile != "" && cfg.KeyFile != "" {
@@ -127,26 +182,78 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	log.Printf("[relay] 收到退出信号，开始关闭...")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	slog.Info("收到退出信号,开始优雅关闭...")
+	gracefulShutdown(srv, relay, cfg)
+	slog.Info("Relay 已关闭")
+}
+
+// gracefulShutdown 优雅停机流程(XL7 神级提升)。
+//
+// 顺序:
+//  1. HTTP Server Shutdown(停止接收新请求,等待在途 handler 完成)
+//  2. 等待 Agent WS 连接的 serveAgent goroutine 完成(最多 grace 秒)
+//  3. flush 审计日志(异步 channel 排空)
+//  4. 关闭 store / audit / scheduler / CA
+//  5. 关闭所有 Agent WS 连接
+func gracefulShutdown(srv *http.Server, relay *Relay, cfg Config) {
+	// Phase 1: HTTP Server 优雅关闭(等待在途 HTTP handler)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(shutdownCtx)
-	log.Printf("[relay] 已关闭")
+	slog.Info("关闭 HTTP Server(等待在途请求)...")
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Warn("HTTP Server 关闭超时", "error", err)
+	}
+
+	// Phase 2: flush 审计日志(hash chain 需要排空 channel)
+	slog.Info("flush 审计日志...")
+	if relay.audit != nil {
+		relay.audit.Close() // Close 内部会排空 channel 后关闭文件
+	}
+
+	// Phase 3: 关闭存储
+	slog.Info("关闭持久化存储...")
+	if relay.store != nil {
+		relay.store.Close()
+	}
+
+	// Phase 4: 关闭调度器
+	slog.Info("关闭定时任务调度器...")
+	if relay.scheduler != nil {
+		relay.scheduler.Stop()
+	}
+
+	// Phase 5: 关闭所有 Agent WS 连言(通知 Agent 重连到其他 Relay)
+	slog.Info("关闭 Agent 连接...")
+	if relay.agents != nil {
+		for _, agent := range relay.agents.Snapshot() {
+			if conn := relay.agents.Conn(agent.AgentID); conn != nil {
+				conn.close(websocket.StatusNormalClosure, "relay shutting down")
+			}
+		}
+	}
+
+	slog.Info("优雅关闭完成")
 }
 
 // sweepLoop 周期清理超时未心跳的 Agent。
-func sweepLoop(r *Relay) {
+// P2 修复:支持优雅退出(响应 shutdown ctx)。
+func sweepLoop(ctx context.Context, r *Relay) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		removed := r.agents.Sweep(heartbeatTimeout)
-		for _, id := range removed {
-			log.Printf("[registry] 清理超时 Agent %s", id)
-			r.console.Broadcast(Event{
-				Kind:    proto.TypeAgentOffline,
-				AgentID: id,
-				TS:      time.Now().UnixMilli(),
-			})
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			removed := r.agents.Sweep(heartbeatTimeout)
+			for _, id := range removed {
+				log.Printf("[registry] 清理超时 Agent %s", id)
+				r.console.Broadcast(Event{
+					Kind:    proto.TypeAgentOffline,
+					AgentID: id,
+					TS:      time.Now().UnixMilli(),
+				})
+			}
 		}
 	}
 }

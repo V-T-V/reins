@@ -1,0 +1,18 @@
+# Docker 构建上下文忽略
+bin/
+*.exe
+*.zip
+*.tar.gz
+data/
+.git/
+.github/
+*.md
+AGENTS.md
+README.md
+DEPLOYMENT.md
+BENCHMARK.md
+MANUAL.html
+部署指南.txt
+go-rmm-windows.zip
+go-rmm-nginx-deploy.tar.gz
+build-relay.bat
