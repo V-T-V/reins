@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ type TransferEngine struct {
 	mu       sync.Mutex
 	sessions map[string]*transferSession
 	policy   *fileTransferPolicy // B3 修复：路径校验
+	workspace string              // FT:相对路径解析基准(避免落到 SYSTEM CWD)
 }
 
 // fileTransferPolicy 复用 executors.FilePolicy 的路径校验逻辑。
@@ -49,6 +51,26 @@ func allowAllPaths(string) error { return nil }
 // SetPolicy 注入路径校验函数（由 Agent 从 executors.FilePolicy 适配）。
 func (te *TransferEngine) SetPolicy(check func(string) error) {
 	te.policy = &fileTransferPolicy{check: check}
+}
+
+// SetWorkspace 注入 workspace 目录(相对路径解析基准)。
+// FT 修复:Agent 以 SYSTEM 身份运行时 CWD=C:\Windows\System32,
+// 相对路径会落到系统目录。注入 workspace 后,相对路径统一解析到 workspace。
+func (te *TransferEngine) SetWorkspace(ws string) {
+	te.workspace = ws
+}
+
+// resolveToWorkspace 把相对路径解析到 workspace(而非 CWD)。
+// 绝对路径原样返回。
+func resolveToWorkspace(path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	ws := transfers.workspace
+	if ws == "" {
+		return path // 无 workspace 配置,保持原样(向后兼容)
+	}
+	return filepath.Join(ws, path)
 }
 
 type transferSession struct {
@@ -75,6 +97,11 @@ type hashWriter struct{ sum [32]byte; w io.Writer; h bool }
 // HandleInit 处理 file_xfer_init：准备文件，返回 ready（含续传偏移）。
 func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTransferReady {
 	ready := proto.FileTransferReady{TransferID: init.TransferID}
+
+	// FT 修复:相对路径解析到 workspace(而非 SYSTEM 的 CWD C:\Windows\System32)。
+	// 之前相对路径 "foo.zip" 会落到 SYSTEM 的 CWD,导致文件散落在系统目录。
+	// 现在统一 join 到 workspace(Agent 启动时配置),与路径策略 Check 的行为一致。
+	init.Path = resolveToWorkspace(init.Path)
 
 	// B3 修复：路径穿越校验（upload 和 download 都校验）
 	if te.policy != nil && te.policy.check != nil {

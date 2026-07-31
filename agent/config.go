@@ -47,12 +47,41 @@ type Config struct {
 	MinVersion string `json:"min_version,omitempty"`
 	// MaxConcurrentTasks 最大并发执行任务数(C6 并发限流)。0 或负数表示不限。
 	// 默认 4,防止被并发任务打爆。
-	MaxConcurrentTasks int `json:"max_concurrent_tasks,omitempty"`
+	MaxConcurrentTasks int              `json:"max_concurrent_tasks,omitempty"`
 	Glm       struct {
 		APIKey  string `json:"api_key,omitempty"` // GLM 视觉模型 key（guiclick 执行器需要）
 		BaseURL string `json:"base_url,omitempty"` // 默认 https://open.bigmodel.cn/api/paas/v4
 		Model   string `json:"model,omitempty"`    // 默认 glm-5-turbo
 	} `json:"glm,omitempty"`
+
+	// === 主从双 Agent 架构(M1) ===
+	//
+	// Role 角色:"master"(主,稳定不更新,负责救援从)/ "slave"(从,可热更新,承担业务)。
+	// 留空 = 向后兼容,等同 slave(单 Agent 模式)。
+	//
+	// master 行为差异:
+	//   - 注册最小 executor 集(powershell/script/file/service/watchdog),不注册 screenshot/monitor/browse/guiclick
+	//   - 拒绝 update 任务(主自己永不更新)
+	//   - 启动本地看门狗 goroutine,周期检查 slave 服务状态并自动救援
+	//
+	// slave 行为差异:
+	//   - 注册全 executor 集(现有行为不变)
+	//   - 接受 update 任务(可被热更新)
+	Role string `json:"role,omitempty"`
+
+	// ServiceName Windows/Linux 服务名。
+	// 留空则按 Role 推导:master→go-rmm-master, slave→go-rmm-slave, 空→go-rmm-agent(兼容)。
+	// 用于 kardianos/service 注册 + 看门狗 sc.exe 操作。
+	ServiceName string `json:"service_name,omitempty"`
+
+	// === master 专属配置(看门狗 + 救援用) ===
+	//
+	// SlaveExeDir 从 Agent 的 exe 目录(如 C:\Program Files\go-rmm-slave)。
+	// 看门狗用它定位从的 .bak 文件做本地回滚兜底。仅 master 需要。
+	SlaveExeDir string `json:"slave_exe_dir,omitempty"`
+	// SlaveAgentID 从 Agent 的 agent_id(如 agent-PC-abc123)。
+	// master 经 Relay 救援时用此 ID 定位从(POST /api/updates/apply)。仅 master 需要。
+	SlaveAgentID string `json:"slave_agent_id,omitempty"`
 }
 
 // DefaultConfig 返回带默认值的配置。
@@ -105,7 +134,31 @@ func (c Config) Validate() error {
 	if c.MaxConcurrentTasks < 0 {
 		return fmt.Errorf("max_concurrent_tasks 不能为负数")
 	}
+	// 主从角色校验
+	if c.Role != "" && c.Role != "master" && c.Role != "slave" {
+		return fmt.Errorf("role 必须是 master/slave/空(兼容),得到 %q", c.Role)
+	}
+	// master 必须配 SlaveExeDir(看门狗需要)
+	if c.Role == "master" && c.SlaveExeDir == "" {
+		return fmt.Errorf("master 角色必须配置 slave_exe_dir(看门狗需要定位从的目录)")
+	}
 	return nil
+}
+
+// DerivedServiceName 按 Role 推导 Windows/Linux 服务名。
+// 优先用显式配置的 ServiceName,否则按 Role 推导。
+func (c Config) DerivedServiceName() string {
+	if c.ServiceName != "" {
+		return c.ServiceName
+	}
+	switch c.Role {
+	case "master":
+		return "go-rmm-master"
+	case "slave":
+		return "go-rmm-slave"
+	default:
+		return "go-rmm-agent" // 向后兼容
+	}
 }
 
 // loadConfig 从配置文件加载（不存在则用默认值），并用 flag 覆盖。
@@ -143,6 +196,7 @@ func loadConfig(args []string) (cmd string, cfg Config, err error) {
 	token := fs.String("token", cfg.Token, "鉴权 token / enrollment token（mTLS）")
 	agentID := fs.String("id", cfg.AgentID, "Agent ID")
 	mtls := fs.Bool("mtls", cfg.MTLS, "启用 mTLS 模式（wss://+客户端证书）")
+	role := fs.String("role", cfg.Role, "角色: master(主,稳定)/ slave(从,可更新)。空=兼容单 Agent")
 	if e := fs.Parse(args[1:]); e != nil {
 		return cmd, cfg, e
 	}
@@ -150,6 +204,9 @@ func loadConfig(args []string) (cmd string, cfg Config, err error) {
 	cfg.Token = *token
 	cfg.AgentID = *agentID
 	cfg.MTLS = *mtls
+	if *role != "" {
+		cfg.Role = *role
+	}
 	return cmd, cfg, nil
 }
 

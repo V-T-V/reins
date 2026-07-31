@@ -32,7 +32,11 @@ func registerExecutors(cfg Config) *executors.Dispatcher {
 		}
 	}
 
-	executors.RegisterAll(d, executors.Options{VisionClient: visionClient})
+	executors.RegisterAll(d, executors.Options{
+		VisionClient: visionClient,
+		Workspace:    cfg.Workspace, // D4:相对路径解析基准
+		Role:         cfg.Role,      // M1:master 注册最小能力集
+	})
 
 	// M1 修复:大文件传输引擎复用与 FileExecutor 一致的路径校验策略。
 	// 创建共享的 FilePolicy 实例,同时用于 file 任务和大文件传输。
@@ -44,6 +48,10 @@ func registerExecutors(cfg Config) *executors.Dispatcher {
 	//   - 未配置 AllowedRoots 且 AllowAllRoots=true(默认):用整盘兜底,记录告警
 	//   - 未配置 AllowedRoots 且 AllowAllRoots=false:严格 fail-closed
 	sharedPolicy := executors.DefaultFilePolicy()
+	// D4 修复:注入 Workspace 作为相对路径的解析基准。
+	// 使用户传 "foo.txt" / "workspace\foo.txt" 可预期地落到允许根内,
+	// 不受 Agent 启动 CWD 影响。
+	sharedPolicy.Workspace = cfg.Workspace
 	if len(cfg.AllowedRoots) > 0 {
 		sharedPolicy.AllowedRoots = cfg.AllowedRoots
 	} else if cfg.AllowAllRoots {
@@ -55,6 +63,9 @@ func registerExecutors(cfg Config) *executors.Dispatcher {
 	transfers.SetPolicy(func(path string) error {
 		return sharedPolicy.Check(path)
 	})
+	// FT 修复:注入 workspace 作为相对路径的写入基准。
+	// 避免 SYSTEM 服务模式下相对路径落到 C:\Windows\System32。
+	transfers.SetWorkspace(cfg.Workspace)
 
 	return d
 }

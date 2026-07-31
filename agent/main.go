@@ -122,8 +122,10 @@ func runServiceFromConfig() {
 func runForeground(cfg Config, disp *executors.Dispatcher) {
 	// 自更新健康自检
 	StartHealthCheck()
-	log.Printf("[agent] 前台模式启动: agent_id=%s relay=%s caps=%v mtls=%v",
-		cfg.AgentID, cfg.RelayURL, disp.Types(), cfg.MTLS)
+	// M1 主从架构:master 角色启动本地看门狗
+	StartWatchdog(cfg)
+	log.Printf("[agent] 前台模式启动: agent_id=%s relay=%s caps=%v mtls=%v role=%s",
+		cfg.AgentID, cfg.RelayURL, disp.Types(), cfg.MTLS, cfg.Role)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	a := NewAgent(cfg, disp)

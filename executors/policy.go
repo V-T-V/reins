@@ -22,6 +22,11 @@ type FilePolicy struct {
 	DeniedPaths []string
 	// AllowAll 完全放开（仅用于本地调试，生产禁用）。
 	AllowAll bool
+	// Workspace 相对路径的解析基准目录（绝对路径）。
+	// 当用户传 "foo.txt" 或 "workspace\foo.txt" 时，用此目录而非 Agent CWD
+	// 作为 filepath.Abs 的基准，使相对路径可预期地落到允许根内。
+	// 留空时回退到 filepath.Abs 的默认行为（CWD）。
+	Workspace string
 }
 
 // DefaultFilePolicy 返回安全默认策略：拒绝系统目录、私钥、凭据。
@@ -76,9 +81,20 @@ func (p FilePolicy) Check(path string) error {
 
 	// 规范化:Clean + Abs(解析 .. 的文本层)
 	clean := filepath.Clean(path)
-	abs, err := filepath.Abs(clean)
-	if err != nil {
-		return fmt.Errorf("路径解析失败: %w", err)
+	// 相对路径:优先解析到 Workspace(而非 Agent CWD)。
+	// 这样 "foo.txt" / "workspace\foo.txt" 可预期地落到允许根内,
+	// 避免因 Agent 启动目录不同而行为不一致。
+	var abs string
+	if filepath.IsAbs(clean) {
+		abs = clean
+	} else if p.Workspace != "" {
+		abs = filepath.Join(p.Workspace, clean)
+	} else {
+		var err error
+		abs, err = filepath.Abs(clean)
+		if err != nil {
+			return fmt.Errorf("路径解析失败: %w", err)
+		}
 	}
 	absLower := strings.ToLower(abs)
 

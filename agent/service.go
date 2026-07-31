@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -39,6 +40,8 @@ func (p *program) Stop(s svc.Service) error {
 func (p *program) run() {
 	// 自更新健康自检(若有 .update-pending 标记,启动 60s 倒计时)
 	StartHealthCheck()
+	// M1 主从架构:master 角色启动本地看门狗
+	StartWatchdog(p.cfg)
 	a := NewAgent(p.cfg, p.disp)
 	// G1 修复:服务模式也接线 mTLS(与 runForeground 一致)
 	if err := setupAgentCerts(p.ctx, a, p.cfg); err != nil {
@@ -53,10 +56,20 @@ func (p *program) run() {
 //
 // 自更新关键:Option["OnFailure"]="restart" 让服务意外停止时 SCM 自动重启。
 // Agent 自更新流程是"rename+copy 后主动退出",依赖 SCM 把新版本拉起来。
+//
+// M1 主从架构:服务名按 Role 推导(master/slave/兼容),避免主从注册冲突。
 func serviceConfig(cfg Config) *svc.Config {
+	name := cfg.DerivedServiceName()
+	displayName := "go-rmm Remote Agent"
+	switch cfg.Role {
+	case "master":
+		displayName = "go-rmm Master Agent (稳定,管从)"
+	case "slave":
+		displayName = "go-rmm Slave Agent (业务,可更新)"
+	}
 	return &svc.Config{
-		Name:        "go-rmm-agent",
-		DisplayName: "go-rmm Remote Agent",
+		Name:        name,
+		DisplayName: displayName,
 		Description: "go-rmm 远程自动化执行 Agent——经反向 WebSocket 连接中继服务器,执行下发的自动化任务。",
 		// Arguments:服务启动时调用的参数。kardianos 会自动加上可执行文件路径。
 		// 这里不带子命令(空参 = run 模式),从配置文件读 Relay 地址。
@@ -152,6 +165,9 @@ func serviceStatus() {
 	case svc.StatusStopped:
 		desc = "已停止"
 	}
+	// 同时输出到 stdout(供脚本捕获)和日志(供排错)。
+	// 脚本靠 stdout 判断状态,日志保留运行轨迹。
+	fmt.Printf("Running=%t Status=%s\n", st == svc.StatusRunning, desc)
 	log.Printf("[agent] 服务状态: %s", desc)
 }
 

@@ -65,6 +65,25 @@ func TestFilePolicyTraversalProtection(t *testing.T) {
 			t.Fatalf("AllowAll 应放行: %v", err)
 		}
 	})
+
+	// D4:相对路径解析到 Workspace 而非 CWD
+	t.Run("相对路径解析到Workspace", func(t *testing.T) {
+		ws := filepath.Join(tmpDir, "workspace")
+		p := FilePolicy{AllowedRoots: []string{ws}, Workspace: ws}
+		// 相对路径 "foo.txt" 应解析到 ws/foo.txt 并放行
+		if err := p.Check("foo.txt"); err != nil {
+			t.Fatalf("相对路径应解析到 Workspace 并放行，却被拒: %v", err)
+		}
+		// "workspace\foo.txt" 也能放行(在 ws 内)
+		if err := p.Check(filepath.Join("workspace", "foo.txt")); err != nil {
+			t.Fatalf("workspace 子路径应放行，却被拒: %v", err)
+		}
+		// 相对路径逃逸仍被拦截
+		evil := filepath.Join("..", "..", "etc", "passwd")
+		if err := p.Check(evil); err == nil {
+			t.Fatal("相对路径逃逸应被拦截")
+		}
+	})
 }
 
 // TestFileExecutorRejectsTraversal 端到端验证：穿越路径的任务被拒绝。

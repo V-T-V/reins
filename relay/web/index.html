@@ -86,15 +86,16 @@
     <p style="color:#8b949e">还没有 Agent 连接。按以下步骤部署：</p>
 
     <div class="step">
-      <span class="step-num">1</span><strong>在 Windows 被控机器上，管理员 PowerShell 运行：</strong>
+      <span class="step-num">1</span><strong>在目标 Windows 机器上,以管理员身份打开 PowerShell,粘贴这一行:</strong>
       <div class="cmd" onclick="navigator.clipboard.writeText(this.querySelector('code').textContent);this.querySelector('.copy-hint').textContent='已复制!'">
-        <code id="install-cmd">go-rmm-agent.exe install -relay <span id="relay-ip">IP</span></code>
+        <code id="install-cmd">iex (irm 'http://<span id="relay-ip">IP:7780</span>/install.ps1') -Server 'http://<span id="relay-ip2">IP:7780</span>' -Relay 'ws://<span id="relay-ip3">IP:7780</span>/agent' -Token '<span id="relay-token">TOKEN</span>'</code>
         <span class="copy-hint">点击复制</span>
       </div>
+      <p style="color:#6e7681;font-size:12px;margin-top:6px">这一行会自动:下载 Agent → 注册 Windows 服务 → 启动并连接 Relay</p>
     </div>
 
     <div class="step">
-      <span class="step-num">2</span><strong>安装完成后自动启动，刷新本页面即可看到 Agent。</strong>
+      <span class="step-num">2</span><strong>看到 "✅ go-rmm Agent 部署成功!" 后,刷新本页面即可看到 Agent。</strong>
     </div>
 
     <div style="margin-top:24px">

@@ -208,13 +208,24 @@ func (a *Agent) sendRegister(ctx context.Context, wc *wsConn) error {
 	if sessions.available() {
 		caps = append(caps, "shell")
 	}
+	// M1 主从架构:Tags 自动加 role 标识,便于 Relay/CLI 按 role 筛选。
+	// 不修改原 cfg.Tags(避免污染配置),构造副本。
+	tags := make(map[string]string, len(a.cfg.Tags)+1)
+	for k, v := range a.cfg.Tags {
+		tags[k] = v
+	}
+	role := a.cfg.Role
+	if role == "" {
+		role = "slave" // 兼容旧版:未显式配 role 的视为 slave
+	}
+	tags["role"] = role
 	reg := proto.Register{
 		AgentID:      a.cfg.AgentID,
 		Hostname:     hostname(),
 		OS:           runtimeGOOS() + "/" + runtimeGOARCH(),
 		Version:      version,
 		Capabilities: caps,
-		Tags:         a.cfg.Tags,
+		Tags:         tags,
 	}
 	return wc.writeEnvelope(ctx, proto.TypeRegister, "relay", reg)
 }
@@ -248,6 +259,13 @@ func (a *Agent) heartbeatLoop(ctx context.Context, wc *wsConn) {
 // recvLoop 接收并处理消息（task/shell/file_transfer 控制信令 + 二进制数据帧）。
 func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 	for {
+		// U2 修复:自更新完成后置 pendingRestart,这里主动退出让 SCM 重启服务。
+		// 之前只在 connectAndServe 返回后检查——连接不断开就永远不退出,
+		// 新 exe 替换了却无法重启生效(实测 v4.2.1 更新后进程仍跑旧代码)。
+		if pendingRestart {
+			log.Printf("[agent] 自更新完成,recvLoop 退出以重启服务")
+			return nil
+		}
 		msgType, data, err := wc.read(ctx)
 		if err != nil {
 			return err
@@ -261,9 +279,13 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 					tunnelMgr.HandleData(tunnelID, payload)
 				}
 			} else {
-				// 文件帧:异步处理避免阻塞 recvLoop
-				// S4 修复:panic recovery 防止执行器内部 panic 崩溃整个 Agent
-				go func() {
+				// 文件帧:顺序处理(必须!异步 go 会导致帧乱序 + isLast 提前到达 → 文件损坏)
+				// F1 修复:之前每个帧 `go handleUploadData`,goroutine 调度不保证顺序,
+				// 最后几帧可能乱序或 isLast 先执行 → file 提前 close → "file already closed"
+				// + 数据丢失(实测 1GB 文件丢失 5832 字节)。
+				// 现在 recvLoop 顺序处理:同一 transfer 的帧严格按到达顺序写入。
+				// panic recovery 防止执行器内部 panic 崩溃整个 Agent。
+				func() {
 					defer func() {
 						if r := recover(); r != nil {
 							log.Printf("[agent] handleUploadData panic(已恢复): %v", r)
@@ -316,20 +338,7 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 	}
 }
 
-// handleTask 原始入口（兼容，直接 go，不经 pool）。
-func (a *Agent) handleTask(parent context.Context, wc *wsConn, env proto.Envelope) {
-	// S4 修复:panic recovery 防止任务执行器内部 panic 崩溃整个 Agent
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("[agent] runTask panic(已恢复): %v", r)
-			}
-		}()
-		a.runTask(parent, wc, env)
-	}()
-}
-
-// runTask 执行单个任务的核心逻辑（C5 增强版：ACK + 幂等 + 队列发送）。
+// runTask 执行单个任务的核心逻辑(C5 增强版:ACK + 幂等 + 队列发送)。
 // 由 handleTaskWithPool 经 worker pool 限流后调用。
 func (a *Agent) runTask(parent context.Context, wc *wsConn, env proto.Envelope) {
 	var task proto.TaskRequest
@@ -379,9 +388,20 @@ func (a *Agent) runTask(parent context.Context, wc *wsConn, env proto.Envelope) 
 
 	// 5. 执行
 	// update 任务特殊处理:不走标准 Executor(强依赖 agent 包的 os.Executable/version)
+	//
+	// M1 主从架构:master 角色拒绝 update 任务。
+	// 主 Agent 的设计目标是"极简稳定永不更新",任何对主自身的更新尝试都被拒绝,
+	// 防止主被意外/恶意更新导致失去救援能力。
 	var result proto.TaskResult
 	if task.Type == proto.TaskUpdate {
-		result = updateExec.execUpdate(task.Payload)
+		if a.cfg.Role == "master" {
+			result = proto.TaskResult{
+				Success: false,
+				Error:   "master 角色拒绝更新:主 Agent 设计为永不更新(保证救援能力)。如需更新主,请手动替换二进制。",
+			}
+		} else {
+			result = updateExec.execUpdate(task.Payload)
+		}
 	} else {
 		result = a.disp.Dispatch(ctx, task, progress)
 	}

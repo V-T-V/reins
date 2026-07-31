@@ -621,7 +621,7 @@ func runOpsTask(cfg config, agentID, cmd string, timeout int) (string, error) {
 			} `json:"result"`
 		}
 		if err := apiGet(cfg, "/api/tasks/"+taskID, &r); err == nil && r.Task != nil {
-			if r.Task.Status == "completed" || r.Task.Status == "failed" {
+			if r.Task.Status == proto.StatusCompleted || r.Task.Status == proto.StatusFailed {
 				if r.Result != nil {
 					if !r.Result.Success {
 						return "", fmt.Errorf("%s", r.Result.Error)

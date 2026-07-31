@@ -76,6 +76,8 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/scripts/", r.handleScriptRun)
 	// D1:Agent 二进制下载（一行安装用）
 	r.registerDownloadDir(mux)
+	// B2:部署引导(一行安装命令)
+	mux.HandleFunc("GET /api/bootstrap", r.handleBootstrap)
 }
 
 // GET /healthz —— 深度健康检查(D8 / P3-1)。
@@ -1094,11 +1096,19 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 
 	// 2. 发 init
 	sha256sum := req.URL.Query().Get("sha256")
+	// FT 修复:大文件经 nginx 反代时,Content-Length 可能不可靠或 -1(chunked)。
+	// 优先用 query 参数 size(CLI 显式传),其次用 ContentLength。
+	fileSize := req.ContentLength
+	if sizeStr := req.URL.Query().Get("size"); sizeStr != "" {
+		if parsed, err := strconv.ParseInt(sizeStr, 10, 64); err == nil && parsed > 0 {
+			fileSize = parsed
+		}
+	}
 	init := proto.FileTransferInit{
 		TransferID: transferID,
 		Direction:  "upload",
 		Path:       path,
-		Size:       req.ContentLength,
+		Size:       fileSize,
 		SHA256:     sha256sum,
 	}
 	initEnv, _ := proto.NewEnvelope(proto.TypeFileTransferInit, "relay", agentID, init)

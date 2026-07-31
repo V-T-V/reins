@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/QiuShichang/go-rmm/proto"
 )
 
 // cmdLogs logs 子命令入口。
@@ -136,7 +138,7 @@ func waitAndPrint(cfg config, taskID string, timeout int) error {
 			} `json:"result"`
 		}
 		if err := apiGet(cfg, "/api/tasks/"+taskID, &r); err == nil && r.Task != nil {
-			if r.Task.Status == "completed" || r.Task.Status == "failed" {
+			if r.Task.Status == proto.StatusCompleted || r.Task.Status == proto.StatusFailed {
 				if r.Result != nil {
 					fmt.Print(r.Result.Stdout)
 				}

@@ -175,6 +175,10 @@ func run(args []string) error {
 		return cmdCompletion(cfg, posArgs[1:])
 	case "status":
 		return cmdStatus(cfg, posArgs[1:])
+	case "bootstrap":
+		return cmdBootstrap(cfg, posArgs[1:])
+	case "rescue":
+		return cmdRescue(cfg, posArgs[1:])
 	case "version":
 		fmt.Println("go-rmm", version)
 		return nil
@@ -718,6 +722,13 @@ func cmdFile(cfg config, args []string) error {
 // P0-#1:上传用 TeeReader 边读边算 hash,只读一次文件
 // P0-#3:URL 参数用 QueryEscape 编码
 // A7:支持 - 作为 localPath,从 stdin 读(管道: cat f | go-rmm file upload -a x - remote)
+//
+// FT 分片上传:文件 > chunkThreshold(50MB)时自动走分片模式:
+//   - 切成 chunkSize(10MB)的独立分片
+//   - 每片用现有 upload 端点传到 <name>.ftpart<NN>
+//   - 已传的分片跳过(断点续传,查目标机文件是否存在)
+//   - 全部传完后发 powershell 合并 + 校验 SHA256
+// 解决单请求传 1GB 经 nginx 504 超时的问题。
 func fileUpload(cfg config, args []string) error {
 	agentID := extractArg(args, "-a")
 	localPath, remotePath, rest := extractTwoPos(args, "-a", agentID)
@@ -726,6 +737,13 @@ func fileUpload(cfg config, args []string) error {
 	}
 	if localPath == "" || remotePath == "" {
 		return errors.New("用法: go-rmm file upload -a <agent> <local-path|-> <remote-path>")
+	}
+
+	// 管道模式不支持分片(stdin 无大小)
+	if localPath != "-" {
+		if fi, err := os.Stat(localPath); err == nil && fi.Size() > chunkThreshold {
+			return fileUploadChunked(cfg, agentID, localPath, remotePath, fi.Size())
+		}
 	}
 	if agentID == "" {
 		return errors.New("-a <agent_id> 必填")
@@ -771,6 +789,12 @@ func fileUpload(cfg config, args []string) error {
 	q.Set("agent_id", agentID)
 	q.Set("path", remotePath)
 	q.Set("transfer_id", transferID)
+	// FT 修复:大文件经 nginx 反代时 Content-Length 会卡死(nginx 对超大 CL 处理异常)。
+	// 改用 chunked encoding(req.ContentLength=-1)+ 通过 query 显式传 size,
+	// Relay 端优先读 query.size 作为文件大小。
+	if totalSize > 0 {
+		q.Set("size", fmt.Sprintf("%d", totalSize))
+	}
 	u := cfg.relay + "/api/transfer/upload?" + q.Encode()
 
 	fmt.Printf("上传 %s → %s:%s\n", localPath, agentID, remotePath)
@@ -780,7 +804,9 @@ func fileUpload(cfg config, args []string) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.token)
-	req.ContentLength = totalSize // -1 时表示未知
+	// FT 修复:强制 chunked(不设 ContentLength),避免大 CL 经 nginx 卡死。
+	// Go http client 对 NewRequest 带 reader 的,ContentLength=0 时自动用 chunked。
+	req.ContentLength = -1
 
 	resp, err := streamingClient.Do(req) // C1:共享连接池
 	if err != nil {
@@ -1456,10 +1482,11 @@ func printUsage() {
 
 退出码: 0=成功 | 1=错误 | 2=任务失败 | 3=超时 | 4=未找到 | 5=策略拦截
 
-══════════════════════════════════════════════
+ ══════════════════════════════════════════════
  诊断 (Diagnostics)
 ══════════════════════════════════════════════
   status                         Relay 状态(healthz+metrics+agents)
+  bootstrap [--host IP]          生成一行远程部署命令(复制到目标机执行)
   sysinfo -a <agent>             远端系统体检(CPU/内存/磁盘/网络)
   topology                       多 Agent 拓扑视图(按 tag 分组)
   diagnose --tag <tag>           批量诊断(并行体检+告警汇总)
@@ -1491,6 +1518,14 @@ func printUsage() {
   deploy validate <playbook>     校验 playbook
   tunnel -L <port>:<h>:<p> -a <a> 端口转发(SSH -L 体验)
   update push -a <agent> --ver <v> Agent 自更新(rename+copy+重启)
+
+══════════════════════════════════════════════
+ 主从救援 (Master-Slave Rescue)
+══════════════════════════════════════════════
+  rescue status -a <master>      查主监控的从的状态
+  rescue restart -a <master>     经主重启从服务
+  rescue rollback -a <master>    经主 .bak 回滚从
+  rescue update -a <slave> -v V  经 Relay 推版本救援从
 
 ══════════════════════════════════════════════
  配置与搜索 (Config & Search)

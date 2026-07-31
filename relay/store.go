@@ -39,14 +39,17 @@ type TaskStore interface {
 //	acknowledged—— Agent 已 ACK（收到）
 //	completed   —— Agent 已回结果（终态）
 //	failed      —— 执行失败（终态）
-//	cancelled   —— 被取消（终态）
+//cancelled   —— 被取消(终态)
+//
+// R1 修复:Status 常量统一用 proto 包定义(单一真相源)。
+// relay 包通过 alias 引用,消除双份定义的漂移风险。
 const (
-	StatusPending      = "pending"
-	StatusDispatched   = "dispatched"
-	StatusAcknowledged = "acknowledged"
-	StatusCompleted    = "completed"
-	StatusFailed       = "failed"
-	StatusCancelled    = "cancelled"
+	StatusPending      = proto.StatusPending
+	StatusDispatched   = proto.StatusDispatched
+	StatusAcknowledged = proto.StatusAcknowledged
+	StatusCompleted    = proto.StatusCompleted
+	StatusFailed       = proto.StatusFailed
+	StatusCancelled    = proto.StatusCancelled
 )
 
 // bbolt bucket 名。
@@ -218,20 +221,6 @@ type Store struct {
 	mu   sync.Mutex // 保护 Close(防并发 Close)
 	path string
 }
-
-// dbOrClosed 返回当前 db,已关闭则返回 ErrStoreClosed。
-//
-// 注:Close 与读方法理论上存在 data race(裸读 s.db),
-// 但 Relay 生命周期中 Close 仅在 shutdown 时调用(此时 HTTP server 已 Shutdown,无并发读),
-// 生产中无实际风险。bbolt 内部事务自身并发安全。
-// 严格 race-free 需要 atomic.Pointer,但会显著增加所有方法的样板代码,权衡后保留现状。
-func (s *Store) dbOrClosed() (*bolt.DB, error) {
-	if s.db == nil {
-		return nil, ErrStoreClosed
-	}
-	return s.db, nil
-}
-
 // OpenStore 打开（或创建）持久化存储。path 为 .db 文件路径。
 func OpenStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

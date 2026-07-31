@@ -169,7 +169,7 @@ func countLines(v interface{}) int {
 	if !ok || s == "" {
 		return 0
 	}
-	return len(splitNewlinesSNAP(s))
+	return len(splitNewlines(s))
 }
 
 func countPorts(v interface{}) int {
@@ -182,30 +182,13 @@ func countPorts(v interface{}) int {
 
 func stringToSet(s string) map[string]bool {
 	set := make(map[string]bool)
-	for _, line := range splitNewlinesSNAP(s) {
+	for _, line := range splitNewlines(s) {
 		line = trimSpace(line)
 		if line != "" {
 			set[line] = true
 		}
 	}
 	return set
-}
-
-func splitNewlinesSNAP(s string) []string {
-	result := []string{}
-	current := ""
-	for _, c := range s {
-		if c == '\n' {
-			result = append(result, current)
-			current = ""
-		} else {
-			current += string(c)
-		}
-	}
-	if current != "" {
-		result = append(result, current)
-	}
-	return result
 }
 
 func splitComma(s string) []string {

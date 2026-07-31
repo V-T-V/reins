@@ -26,3 +26,14 @@ config.local.json
 # OS
 Thumbs.db
 .DS_Store
+
+# 传输测试残留(本地产物,勿入库)
+test*.bin
+ft-sim-*.bin
+test-resume.bin
+test60-resume.bin
+DigitalHuman-*.zip
+dist/
+d4-test.txt
+remote-test.txt
+test-local.md
