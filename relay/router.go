@@ -1251,6 +1251,18 @@ func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request)
 		Direction:  "download",
 		Path:       path,
 	}
+	// O3:分片下载支持。offset > 0 时 Agent Seek 到指定偏移;
+	// limit > 0 时只读 limit 字节(Size 字段在分片模式下复用为本次长度)。
+	if v := req.URL.Query().Get("offset"); v != "" {
+		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed > 0 {
+			init.Offset = parsed
+		}
+	}
+	if v := req.URL.Query().Get("limit"); v != "" {
+		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed > 0 {
+			init.Size = parsed
+		}
+	}
 	initEnv, _ := proto.NewEnvelope(proto.TypeFileTransferInit, "relay", agentID, init)
 	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Minute)
 	defer cancel()

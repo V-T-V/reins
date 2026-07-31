@@ -81,6 +81,7 @@ type transferSession struct {
 	hash      hash.Hash // C2:增量 SHA256(每次 Write 时更新,isLast 时直接 Sum)
 	bytesDone int64
 	total     int64
+	limit     int64 // O3:download 分片模式本次最多读取的字节数(0=读到 EOF)
 	expectedSHA256 string // M8: Console 预算的摘要,完成时比对
 	startTime time.Time
 	lastProg  time.Time // 进度限流
@@ -168,15 +169,30 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 			ready.Reason = "打开文件失败: " + err.Error()
 			return ready
 		}
+		// O3:分片下载支持。
+		// - Offset > 0 时 Seek 到指定偏移开始读
+		// - limit > 0 时只读 limit 字节(Size 字段复用为本次长度),否则读到 EOF
+		//   注意:offset=0 + limit>0(第一分片)也要限长,不能只在 offset>0 时设 limit
+		var limit int64
+		if init.Size > 0 {
+			limit = init.Size
+		}
+		if init.Offset > 0 {
+			if _, err := f.Seek(init.Offset, 0); err != nil {
+				f.Close()
+				ready.Reason = "Seek 失败: " + err.Error()
+				return ready
+			}
+		}
 		te.mu.Lock()
 		te.sessions[init.TransferID] = &transferSession{
 			id: init.TransferID, direction: "download", path: init.Path,
-			file: f, total: info.Size(), startTime: time.Now(),
+			file: f, total: info.Size(), limit: limit, startTime: time.Now(),
 		}
 		te.mu.Unlock()
 		ready.Accepted = true
 		ready.Size = info.Size()
-		log.Printf("[xfer] 下载会话 %s 就绪: path=%s size=%d", init.TransferID, init.Path, info.Size())
+		log.Printf("[xfer] 下载会话 %s 就绪: path=%s size=%d offset=%d limit=%d", init.TransferID, init.Path, info.Size(), init.Offset, limit)
 	}
 
 	return ready
@@ -322,8 +338,16 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 	h := sha256.New()
 	buf := make([]byte, TransferBufferSize)
 	for {
+		// O3:分片模式 limit > 0 时,只读到 limit 字节就停(而非文件 EOF)
+		if sess.limit > 0 && sess.bytesDone >= sess.limit {
+			break
+		}
 		n, err := sess.file.Read(buf)
 		if n > 0 {
+			// 分片模式:最后一帧可能超过 limit,截断
+			if sess.limit > 0 && sess.bytesDone+int64(n) > sess.limit {
+				n = int(sess.limit - sess.bytesDone)
+			}
 			h.Write(buf[:n])
 			// 构造二进制帧：[transferID_len u8][transferID][isLast u8][data]
 			frame := proto.BuildBinaryFrame(transferID, false, buf[:n])
@@ -341,6 +365,10 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 				sess.lastProg = now
 				progressCb(te.makeProgress(sess))
 			}
+		}
+		// 分片模式:达到 limit 不算 EOF 错误,正常结束
+		if sess.limit > 0 && sess.bytesDone >= sess.limit {
+			break
 		}
 		if err == io.EOF {
 			break

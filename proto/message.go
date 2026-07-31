@@ -358,6 +358,7 @@ type FileTransferInit struct {
 	Path       string `json:"path"`                // Agent 侧绝对路径
 	Size       int64  `json:"size"`                // upload 时已知；download 时 Agent 回填
 	SHA256     string `json:"sha256,omitempty"`    // upload: Console 预算的摘要；download: Agent 算完回填
+	Offset     int64  `json:"offset,omitempty"`    // O3:download 分片起始偏移(Agent Seek 到此处开始读),upload 忽略
 }
 
 // FileTransferReady Agent 就绪（含续传偏移）。

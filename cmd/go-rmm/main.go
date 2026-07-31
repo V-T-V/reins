@@ -730,13 +730,35 @@ func cmdFile(cfg config, args []string) error {
 //   - 全部传完后发 powershell 合并 + 校验 SHA256
 // 解决单请求传 1GB 经 nginx 504 超时的问题。
 func fileUpload(cfg config, args []string) error {
+	// O4:先剥离分片参数 flag(--concurrency/--chunk-size/--chunk-retry 及其值),
+	// 避免 extractTwoPos 把 flag 的值误当位置参数。
+	args = stripValueFlags(args, "--concurrency", "--chunk-size", "--chunk-retry")
+
 	agentID := extractArg(args, "-a")
 	localPath, remotePath, rest := extractTwoPos(args, "-a", agentID)
+
+	// O4:分片参数 flag(可选,在 -a 前后均可)
+	if v := flagVal(args, "--concurrency"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			concurrencyArg = n
+		}
+	}
+	if v := flagVal(args, "--chunk-size"); v != "" {
+		if n, err := parseSize(v); err == nil && n > 0 {
+			chunkSizeArg = n
+		}
+	}
+	if v := flagVal(args, "--chunk-retry"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			chunkMaxRetryArg = n
+		}
+	}
+
 	if len(rest) > 0 {
 		_ = rest
 	}
 	if localPath == "" || remotePath == "" {
-		return errors.New("用法: go-rmm file upload -a <agent> <local-path|-> <remote-path>")
+		return errors.New("用法: go-rmm file upload -a <agent> [--concurrency N] [--chunk-size 10M] [--chunk-retry 3] <local-path|-> <remote-path>")
 	}
 
 	// 管道模式不支持分片(stdin 无大小)
@@ -856,14 +878,41 @@ func fileUpload(cfg config, args []string) error {
 // P0-#2:下载 ContentLength=-1 时降级显示已写字节数 + 速率
 // P0-#3:URL 参数用 QueryEscape 编码
 // A7:支持 - 作为 localPath,写 stdout(管道: go-rmm file download -a x remote - | gzip > f.gz)
+// O3:大文件(>50MB)自动走分片下载(并发 + 断点续传),经 nginx 不再依赖单连接超时
 func fileDownload(cfg config, args []string) error {
+	// O4:剥离分片参数 flag,避免 extractTwoPos 把值误当位置参数
+	args = stripValueFlags(args, "--concurrency", "--chunk-size", "--chunk-retry")
+	if v := flagVal(args, "--concurrency"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			concurrencyArg = n
+		}
+	}
+	if v := flagVal(args, "--chunk-size"); v != "" {
+		if n, err := parseSize(v); err == nil && n > 0 {
+			chunkSizeArg = n
+		}
+	}
+	if v := flagVal(args, "--chunk-retry"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			chunkMaxRetryArg = n
+		}
+	}
+
 	agentID := extractArg(args, "-a")
 	remotePath, localPath, _ := extractTwoPos(args, "-a", agentID)
 	if remotePath == "" || localPath == "" {
-		return errors.New("用法: go-rmm file download -a <agent> <remote-path> <local-path|->")
+		return errors.New("用法: go-rmm file download -a <agent> [--concurrency N] [--chunk-size 10M] <remote-path> <local-path|->")
 	}
 	if agentID == "" {
 		return errors.New("-a <agent_id> 必填")
+	}
+
+	// O3:管道模式(stdout)不分片(无法切片写 stdout);非管道大文件走分片
+	if localPath != "-" {
+		// 先查远端文件大小(powershell 任务)
+		if sz, err := remoteFileSize(cfg, agentID, remotePath); err == nil && sz > chunkThreshold {
+			return fileDownloadChunked(cfg, agentID, remotePath, localPath, sz)
+		}
 	}
 
 	transferID := "xfer-" + fmt.Sprint(time.Now().UnixNano())
@@ -1310,6 +1359,66 @@ func extractTwoPos(args []string, skipFlag string, skipVal string) (string, stri
 		return pos[0], "", nil
 	}
 	return "", "", nil
+}
+
+// stripValueFlags 从 args 中移除指定的"带值 flag"及其值(如 --concurrency 4 → 都移除)。
+// 用于 fileUpload 在 extractTwoPos 之前清理,避免 flag 的值被误当位置参数。
+// 同时支持 --flag value 和 --flag=value 两种写法。
+func stripValueFlags(args []string, flags ...string) []string {
+	flagSet := make(map[string]bool, len(flags))
+	for _, f := range flags {
+		flagSet[f] = true
+	}
+	var out []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		// --flag=value 形式
+		if eq := strings.IndexByte(a, '='); eq > 0 && flagSet[a[:eq]] {
+			continue
+		}
+		// --flag value 形式
+		if flagSet[a] {
+			i++ // 跳过值
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// flagVal 取 flag 的值(支持 --flag value 和 --flag=value),不存在返回空。
+func flagVal(args []string, name string) string {
+	for i := 0; i < len(args); i++ {
+		if args[i] == name && i+1 < len(args) {
+			return args[i+1]
+		}
+		if strings.HasPrefix(args[i], name+"=") {
+			return args[i][len(name)+1:]
+		}
+	}
+	return ""
+}
+
+// parseSize 解析带单位的大小字符串("10M"/"1G"/"5242880"),返回字节数。
+func parseSize(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("空")
+	}
+	mult := int64(1)
+	switch s[len(s)-1] {
+	case 'k', 'K':
+		mult, s = 1024, s[:len(s)-1]
+	case 'm', 'M':
+		mult, s = 1024*1024, s[:len(s)-1]
+	case 'g', 'G':
+		mult, s = 1024*1024*1024, s[:len(s)-1]
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return n * mult, nil
 }
 
 // === 进度跟踪(上传/下载共用,P0-#2 修复 ContentLength=-1 降级)===

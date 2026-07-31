@@ -63,8 +63,8 @@ func base64Decode(s string) ([]byte, error) {
 
 var (
 	httpTransport = &http.Transport{
-		MaxIdleConns:        20,
-		MaxIdleConnsPerHost: 10,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 32,
 		IdleConnTimeout:     90 * time.Second,
 		// Windows 上 ProxyFromEnvironment 会读 HTTP_PROXY/HTTPS_PROXY
 		Proxy: http.ProxyFromEnvironment,
@@ -100,8 +100,8 @@ func applyTLSConfig(cfg config) {
 	}
 	// 重新构造 Transport(仅启动期,无并发)
 	httpTransport = &http.Transport{
-		MaxIdleConns:        20,
-		MaxIdleConnsPerHost: 10,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 32,
 		IdleConnTimeout:     90 * time.Second,
 		Proxy:               http.ProxyFromEnvironment,
 		TLSClientConfig:     tlsCfg,
