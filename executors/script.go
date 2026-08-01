@@ -53,7 +53,14 @@ func (e *ScriptExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFun
 			return fail("", "写 BOM 失败: "+err.Error())
 		}
 	}
-	if _, err := tmpFile.WriteString(task.Content); err != nil {
+	// ps1: 强制 UTF-8 输出编码（与 powershell 执行器一致）。
+	// 否则 PowerShell 5.x 在中文/非英文系统上以 ANSI 代码页(GBK)输出，
+	// 导致 stdout 中文乱码（TestScriptPS1 暴露的回归）。
+	ps1Prefix := ""
+	if lang == "ps1" {
+		ps1Prefix = "[Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8; "
+	}
+	if _, err := tmpFile.WriteString(ps1Prefix + task.Content); err != nil {
 		tmpFile.Close()
 		return fail("", "写脚本失败: "+err.Error())
 	}
