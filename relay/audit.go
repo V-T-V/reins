@@ -28,6 +28,7 @@ type AuditLog struct {
 	prevHash string // 上一条记录的 hash(链式)
 	ch       chan AuditEntry
 	closeCh  chan struct{}
+	closeOnce sync.Once // 幂等 close(防重复 close panic,round 6 修复)
 	closed   bool
 }
 
@@ -133,13 +134,16 @@ func (a *AuditLog) Log(entry AuditEntry) {
 }
 
 // Close 优雅关闭(排空 channel 后关闭文件)。
+// 幂等:多次调用安全(round 6 修复,防 close 已关闭 channel 的 panic)。
 func (a *AuditLog) Close() error {
 	if a == nil || a.file == nil {
 		return nil
 	}
-	a.closed = true
-	close(a.closeCh) // 触发 writeLoop 排空退出
-	time.Sleep(100 * time.Millisecond) // 给 writeLoop 排空时间
+	a.closeOnce.Do(func() {
+		a.closed = true
+		close(a.closeCh) // 触发 writeLoop 排空退出
+		time.Sleep(100 * time.Millisecond) // 给 writeLoop 排空时间
+	})
 	return a.file.Close()
 }
 
