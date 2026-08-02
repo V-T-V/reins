@@ -151,6 +151,8 @@ func fileDownloadChunked(cfg config, agentID, remotePath, localPath string, tota
 	// 3. 并发下载
 	startTime := time.Now()
 	var downloaded atomic.Int64
+	var dlTotalRetries atomic.Int64  // R3:重试统计
+	var dlRetriedChunks atomic.Int64 // R3:发生过重试的片数
 	for i := 0; i < totalChunks; i++ {
 		if completed[i] {
 			off := int64(i) * chunkSz
@@ -213,6 +215,11 @@ func fileDownloadChunked(cfg config, agentID, remotePath, localPath string, tota
 					}
 					if err := downloadSingleChunk(cfg, agentID, remotePath, partFile, off, thisSize, j.idx); err != nil {
 						lastErr = err
+						// R3:重试统计
+						dlTotalRetries.Add(1)
+						if retry == 0 {
+							dlRetriedChunks.Add(1)
+						}
 						// R4 指数退避:1s/2s/4s,上限 30s
 						backoff := time.Duration(1<<retry) * time.Second
 						if backoff > 30*time.Second {
@@ -301,6 +308,12 @@ outer:
 	fmt.Printf("✅ 分片下载完成: %s\n", formatSize(totalSize))
 	fmt.Printf("   耗时: %s (%.2f MB/s)\n", elapsed.Truncate(time.Second), float64(totalSize)/elapsed.Seconds()/1024/1024)
 	fmt.Printf("   本地 SHA256: %s\n", localSHA)
+	// R3:重试/断点续传统计摘要
+	retries := dlTotalRetries.Load()
+	chunks := dlRetriedChunks.Load()
+	if retries > 0 || len(completed) > 0 {
+		fmt.Printf("   下载统计: 重试 %d 片共 %d 次 | 断点续传 %d 片\n", chunks, retries, len(completed))
+	}
 	if remoteSHA != "" {
 		if localSHA == remoteSHA {
 			fmt.Printf("   ✅ SHA256 一致\n")

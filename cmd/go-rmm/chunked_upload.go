@@ -40,6 +40,7 @@ var (
 	chunkSizeArg    int64 = 10 * 1024 * 1024 // --chunk-size,每片大小
 	concurrencyArg  int   = 4                // --concurrency,并发上传数
 	chunkMaxRetryArg int  = 3                // --chunk-retry,每片重试次数
+	fileMaxRetryArg int   = 2                // 整文件级重试次数(应对 Relay 重启/网络抖动)
 )
 
 // fileUploadChunked 分片上传大文件。
@@ -64,7 +65,7 @@ func fileUploadChunked(cfg config, agentID, localPath, remotePath string, totalS
 
 	fmt.Printf("📦 分片上传: %s (%s, %d 片 × %s) → %s:%s\n",
 		localPath, formatSize(totalSize), totalChunks, formatSize(chunkSz), agentID, remotePath)
-	fmt.Printf("   并发: %d 路,重试: %d 次/片\n", conc, chunkMaxRetryArg)
+	fmt.Printf("   并发: %d 路,重试: %d 次/片,整文件重试: %d 次\n", conc, chunkMaxRetryArg, fileMaxRetryArg)
 
 	// 1. 本地算整文件 SHA256
 	fmt.Printf("   计算 SHA256...\n")
@@ -74,22 +75,106 @@ func fileUploadChunked(cfg config, agentID, localPath, remotePath string, totalS
 	}
 	fmt.Printf("   SHA256: %s\n", localSHA)
 
-	// 2. 文件存在性检查(实际打开在每个 worker 内,各自独立 fd)
-	if _, err := os.Stat(localPath); err != nil {
+	// R2:源文件变更检测基线(传输前后 mtime+size 比对,防传输期间被改导致无限重试)
+	baseStat, err := os.Stat(localPath)
+	if err != nil {
 		return err
 	}
 
-	// 3. 查已传分片(断点续传)
+	// R1:整文件级重试(应对 Relay 重启/网络抖动),配合断点续传只重传未完成片
+	var totalStats xferStats // 累计统计(跨重试轮次)
+	startTime := time.Now()
+	for attempt := 0; attempt <= fileMaxRetryArg; attempt++ {
+		if attempt > 0 {
+			// R2:重试前检测源文件变更(变了就不再重试,避免死循环)
+			curStat, err := os.Stat(localPath)
+			if err != nil {
+				return fmt.Errorf("重试时源文件不可访问: %w", err)
+			}
+			if !sameFile(baseStat, curStat) {
+				return fmt.Errorf("源文件在传输期间被修改(mtime/size 变化),放弃重试(防止无限失败)")
+			}
+			fmt.Printf("\n🔄 整文件第 %d/%d 次重试(配合断点续传)...\n", attempt, fileMaxRetryArg)
+			// 重试时重新算 SHA(文件可能变了,虽然上面检测了但 SHA 是权威)
+			localSHA, err = computeFileSHA256(localPath)
+			if err != nil {
+				return fmt.Errorf("重算 SHA256 失败: %w", err)
+			}
+		}
+
+		err := uploadOnce(cfg, agentID, localPath, remotePath, totalSize, totalChunks, chunkSz, conc, localSHA, &totalStats)
+		if err == nil {
+			// 成功:输出累计统计
+			elapsed := time.Since(startTime)
+			fmt.Printf("✅ 分片上传完成: %s\n", formatSize(totalSize))
+			fmt.Printf("   耗时: %s (%.2f MB/s)\n", elapsed.Truncate(time.Second), float64(totalSize)/elapsed.Seconds()/1024/1024)
+			fmt.Printf("   Agent SHA256: %s\n", localSHA)
+			fmt.Printf("   ✅ SHA256 一致\n")
+			totalStats.print("上传")
+			return nil
+		}
+		// 失败:判断是否可重试
+		if !isRetryableXferErr(err) || attempt == fileMaxRetryArg {
+			fmt.Fprintf(os.Stderr, "   ❌ %v\n", err)
+			if attempt == fileMaxRetryArg {
+				fmt.Fprintf(os.Stderr, "   整文件重试 %d 次后仍失败,放弃\n", fileMaxRetryArg)
+			}
+			totalStats.print("上传(失败)")
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "   ⚠️ 第 %d 轮失败(可重试): %v\n", attempt+1, err)
+	}
+	return nil
+}
+
+// xferStats 累计统计(R3:重试/断点续传信息可视化)。
+type xferStats struct {
+	totalRetries  atomic.Int64 // 总重试次数(所有片累加)
+	retriedChunks atomic.Int64 // 发生过重试的片数
+	resumeCount   int          // 断点续传跳过的片数(非原子,单 goroutine 设)
+}
+
+func (s *xferStats) print(label string) {
+	retries := s.totalRetries.Load()
+	chunks := s.retriedChunks.Load()
+	if retries > 0 || s.resumeCount > 0 {
+		fmt.Printf("   %s统计: 重试 %d 片共 %d 次 | 断点续传 %d 片\n", label, chunks, retries, s.resumeCount)
+	}
+}
+
+// isRetryableXferErr 判断错误是否值得整文件重试(网络/Relay/SHA 不符)。
+// 用户 Ctrl+C(ctx canceled)不重试。
+func isRetryableXferErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// context canceled(用户 Ctrl+C)不重试
+	if strings.Contains(msg, "context canceled") || strings.Contains(msg, "interrupt") {
+		return false
+	}
+	return true // 其他错误(网络/Relay/SHA/超时)都可重试
+}
+
+// sameFile 判断两次 os.Stat 是否指向同一文件(mtime+size 一致)。
+func sameFile(a, b os.FileInfo) bool {
+	return a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
+}
+
+// uploadOnce 执行一次完整的"查已完成片 → 并发上传 → 合并校验"流程。
+// stats 指针由调用方传入,跨重试轮次累加统计。失败时返回 error,调用方据 isRetryableXferErr 决定是否重试。
+func uploadOnce(cfg config, agentID, localPath, remotePath string, totalSize int64, totalChunks int, chunkSz int64, conc int, localSHA string, stats *xferStats) error {
+
+	// 查已传分片(断点续传)——每次重试都重新查,跳过已完成的
 	completed := checkCompletedChunks(cfg, agentID, remotePath, totalChunks, totalSize)
-	skipCount := len(completed)
-	if skipCount > 0 {
-		fmt.Printf("   断点续传:跳过 %d/%d 片已完成\n", skipCount, totalChunks)
+	stats.resumeCount = len(completed)
+	if stats.resumeCount > 0 {
+		fmt.Printf("   断点续传:跳过 %d/%d 片已完成\n", stats.resumeCount, totalChunks)
 	}
 
-	// 4. 并发上传(worker pool)
+	// 并发上传(worker pool)
 	startTime := time.Now()
 	var uploaded atomic.Int64
-	// 先把跳过的片计入进度
 	for i := 0; i < totalChunks; i++ {
 		if completed[i] {
 			off := int64(i) * chunkSz
@@ -170,10 +255,15 @@ func fileUploadChunked(cfg config, agentID, localPath, remotePath string, totalS
 					// R3 流式:用 SectionReader 边读边传(不再 make 10MB slice)。
 					// 内存从 10MB/worker 降到 ~64KB/worker,且 ContentLength 正确。
 					section := io.NewSectionReader(wf, off, thisSize)
-					if err := uploadSingleChunk(cfg, agentID, chunkName, section, thisSize, localPath, j.idx); err != nil {
-						lastErr = err
-						// R4 指数退避:1s/2s/4s,上限 30s;"占用冲突"用更长退避让前一个传输完成
-						backoff := time.Duration(1<<retry) * time.Second
+						if err := uploadSingleChunk(cfg, agentID, chunkName, section, thisSize, localPath, j.idx); err != nil {
+							lastErr = err
+							// R3 统计:重试计数(首次失败也算,供最终摘要输出)
+							stats.totalRetries.Add(1)
+							if retry == 0 {
+								stats.retriedChunks.Add(1) // 该片首次重试
+							}
+							// R4 指数退避:1s/2s/4s,上限 30s;"占用冲突"用更长退避让前一个传输完成
+							backoff := time.Duration(1<<retry) * time.Second
 						if backoff > 30*time.Second {
 							backoff = 30 * time.Second
 						}
@@ -284,16 +374,9 @@ outer:
 		return fmt.Errorf("合并完成但未获取到 SHA256, raw result: %s", string(b))
 	}
 
-	// 比对
-	elapsed := time.Since(startTime)
-	fmt.Printf("✅ 分片上传完成: %s\n", formatSize(totalSize))
-	fmt.Printf("   耗时: %s (%.2f MB/s)\n", elapsed.Truncate(time.Second), float64(totalSize)/elapsed.Seconds()/1024/1024)
-	fmt.Printf("   Agent SHA256: %s\n", remoteSHA)
-	if remoteSHA == localSHA {
-		fmt.Printf("   ✅ SHA256 一致\n")
-	} else {
-		fmt.Fprintf(os.Stderr, "   ⚠️  校验不一致!本地=%s\n", localSHA)
-		return fmt.Errorf("SHA256 校验失败")
+	// 比对(成功时返回,外层 fileUploadChunked 负责输出统计)
+	if remoteSHA != localSHA {
+		return fmt.Errorf("SHA256 校验失败: 远端=%s 本地=%s(可能源文件被修改或网络损坏)", remoteSHA[:16], localSHA[:16])
 	}
 	return nil
 }
