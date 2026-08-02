@@ -19,6 +19,9 @@ type Config struct {
 	CertFile    string // Relay 服务器 TLS 证书（mTLS 模式）
 	KeyFile     string // Relay 服务器 TLS 私钥（mTLS 模式）
 	ExternalURL string // 外部访问地址(经 nginx/反代/TLS 终端时用),如 https://203.0.113.99/rmm
+	// P1 生产硬化:/metrics 与 /debug/pprof 的访问控制(防指标/内存侦察泄露)
+	MetricsToken string // /metrics 独立 token(空则回退 Token;都空才真无鉴权,生产不推荐)
+	DebugPprof   bool   // 启用 /debug/pprof 调试端点(默认关,生产关闭防 heap/goroutine 泄露)
 }
 
 // parseFlags 解析命令行参数。
@@ -33,6 +36,9 @@ func parseFlags() Config {
 	flag.StringVar(&c.CertFile, "tls-cert", getEnv("GO_RMM_RELAY_TLS_CERT", ""), "Relay TLS 证书文件（mTLS/HTTPS 用）")
 	flag.StringVar(&c.KeyFile, "tls-key", getEnv("GO_RMM_RELAY_TLS_KEY", ""), "Relay TLS 私钥文件（mTLS/HTTPS 用）")
 	flag.StringVar(&c.ExternalURL, "external-url", getEnv("GO_RMM_EXTERNAL_URL", ""), "外部访问地址(经 nginx 反代/TLS 终端时用),如 https://host/rmm")
+	// P1 生产硬化:metrics/pprof 访问控制
+	flag.StringVar(&c.MetricsToken, "metrics-token", getEnv("GO_RMM_METRICS_TOKEN", ""), "/metrics 独立 token(空则回退主 Token;生产推荐配独立低权 token 或 nginx IP 白名单)")
+	flag.BoolVar(&c.DebugPprof, "debug-pprof", getEnv("GO_RMM_DEBUG_PPROF", "") != "", "启用 /debug/pprof(默认关,生产关闭防内存侦察;dev 模式自动开)")
 	flag.Parse()
 	return c
 }

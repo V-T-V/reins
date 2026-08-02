@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -84,6 +85,65 @@ func TestPromMetricsIncludesXfer(t *testing.T) {
 	if !strings.Contains(promText, "gormmm_xfer_upload_bytes_total 1024") {
 		t.Errorf("Prometheus 输出应包含 upload_bytes=1024, got:\n%s", promText)
 	}
+}
+
+// TestPromMetricsAuth 验证 P1 生产硬化:有 Token 时 /metrics 拒绝无 token 请求。
+func TestPromMetricsAuth(t *testing.T) {
+	metrics = &Metrics{StartedAt: time.Now()}
+	// stub agents/console 避免 handlePromMetrics 访问 nil
+	stubAgents := NewRegistry()
+	stubConsole := NewEventBus()
+
+	t.Run("有主Token_无Authorization_拒绝", func(t *testing.T) {
+		r := &Relay{cfg: Config{Token: "secret123"}, agents: stubAgents, console: stubConsole}
+		req := httptest.NewRequest("GET", "/metrics", nil)
+		rec := httptest.NewRecorder()
+		r.handlePromMetrics(rec, req)
+		if rec.Code != 401 {
+			t.Errorf("无 Authorization 应 401, got %d", rec.Code)
+		}
+	})
+
+	t.Run("有主Token_正确Bearer_通过", func(t *testing.T) {
+		r := &Relay{cfg: Config{Token: "secret123"}, agents: stubAgents, console: stubConsole}
+		req := httptest.NewRequest("GET", "/metrics", nil)
+		req.Header.Set("Authorization", "Bearer secret123")
+		rec := httptest.NewRecorder()
+		r.handlePromMetrics(rec, req)
+		if rec.Code != 200 {
+			t.Errorf("正确 Bearer 应 200, got %d", rec.Code)
+		}
+	})
+
+	t.Run("MetricsToken优先于主Token", func(t *testing.T) {
+		r := &Relay{cfg: Config{Token: "main", MetricsToken: "metrics-only"}, agents: stubAgents, console: stubConsole}
+		// 主 token 应被拒绝
+		req1 := httptest.NewRequest("GET", "/metrics", nil)
+		req1.Header.Set("Authorization", "Bearer main")
+		rec1 := httptest.NewRecorder()
+		r.handlePromMetrics(rec1, req1)
+		if rec1.Code != 401 {
+			t.Errorf("MetricsToken 配置时主 Token 应被拒, got %d", rec1.Code)
+		}
+		// metrics token 应通过
+		req2 := httptest.NewRequest("GET", "/metrics", nil)
+		req2.Header.Set("Authorization", "Bearer metrics-only")
+		rec2 := httptest.NewRecorder()
+		r.handlePromMetrics(rec2, req2)
+		if rec2.Code != 200 {
+			t.Errorf("MetricsToken 应通过, got %d", rec2.Code)
+		}
+	})
+
+	t.Run("都无Token_放行(仅内网)", func(t *testing.T) {
+		r := &Relay{cfg: Config{}, agents: stubAgents, console: stubConsole}
+		req := httptest.NewRequest("GET", "/metrics", nil)
+		rec := httptest.NewRecorder()
+		r.handlePromMetrics(rec, req)
+		if rec.Code != 200 {
+			t.Errorf("都无 Token 时应放行(靠 nginx IP 白名单兜底), got %d", rec.Code)
+		}
+	})
 }
 
 // TestMetricsConcurrentInc 验证并发自增安全(无 data race)。

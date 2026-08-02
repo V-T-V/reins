@@ -130,11 +130,24 @@ func (r *Relay) handleMetrics(w http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(w).Encode(metrics.Snapshot())
 }
 
-// handlePromMetrics GET /metrics —— Prometheus 文本格式(无需鉴权,供 Prometheus scraper)。
-// S6:零依赖手写 Prometheus exposition 格式(text 0.0.4)。
+// handlePromMetrics GET /metrics —— Prometheus 文本格式。
+// P1 生产硬化:鉴权策略——
+//   - 配了 MetricsToken:校验 Bearer(独立低权 token,供 Prometheus 专用)
+//   - 没配 MetricsToken 但有主 Token:校验主 Token(回退兼容)
+//   - 都没配:无鉴权(仅适合内网/nginx IP 白名单兜底,生产不推荐)
 func (r *Relay) handlePromMetrics(w http.ResponseWriter, req *http.Request) {
-	// metrics 端点通常不需鉴权(Prometheus 无法带 Bearer),
-	// 但可配置 --metrics-token 保护
+	// 鉴权:优先 MetricsToken,回退主 Token
+	expectedToken := r.cfg.MetricsToken
+	if expectedToken == "" {
+		expectedToken = r.cfg.Token // 回退主 Token(兼容)
+	}
+	if expectedToken != "" {
+		got := req.Header.Get("Authorization")
+		if got != "Bearer "+expectedToken {
+			writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("metrics 端点需要 Bearer token")))
+			return
+		}
+	}
 	metrics.SetAgentsOnline(len(r.agents.Snapshot()))
 	metrics.SetEventsDropped(r.console.Dropped())
 	snap := metrics.Snapshot()

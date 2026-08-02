@@ -52,10 +52,18 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/updates/apply", r.handleUpdateApply)
 	// 电源操作(标签白名单鉴权)
 	mux.HandleFunc("POST /api/power", r.handlePower)
-	// S6:Prometheus 文本格式(无需鉴权,供 Prometheus scraper)
+	// S6:Prometheus 文本格式(供 Prometheus scraper)
+	// P1:有 MetricsToken 时校验(独立于主 Token),都空才真无鉴权
 	mux.HandleFunc("GET /metrics", r.handlePromMetrics)
-	// S6:pprof 调试端点(net/http/pprof 注册到 DefaultServeMux)
-	mux.Handle("/debug/pprof/", http.DefaultServeMux)
+	// S6:pprof 调试端点。P1 生产硬化:仅 dev 模式或显式 -debug-pprof 才注册,
+	// 默认不注册(防 heap/goroutine/内存侦察泄露)。注册到独立 mux 不污染 DefaultServeMux。
+	if r.cfg.DebugPprof || r.cfg.Dev {
+		mux.Handle("/debug/pprof/", http.DefaultServeMux)
+		mux.Handle("/debug/pprof/cmdline", http.DefaultServeMux)
+		mux.Handle("/debug/pprof/profile", http.DefaultServeMux)
+		mux.Handle("/debug/pprof/symbol", http.DefaultServeMux)
+		mux.Handle("/debug/pprof/trace", http.DefaultServeMux)
+	}
 	// XL1:Secret Management(凭据下发不落 audit)
 	mux.HandleFunc("POST /api/secrets", r.handleSecretPut)
 	mux.HandleFunc("GET /api/secrets/", r.handleSecretGet)
