@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -168,6 +169,10 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	}
 	// 3. 启动心跳 goroutine
 	go a.heartbeatLoop(connCtx, wc)
+	// S1:启动死连接检测 watchdog。半开连接(NAT 超时/防火墙变更)时 recvLoop 永久阻塞,
+	// 心跳写在 TCP 缓冲未满时可能"成功",要等 TCP 重传超时(~15 分钟)才报错。
+	// watchdog 检查 lastRecv:2×Heartbeat 无收包则 closeNow 强制断开重连。
+	go a.deadConnWatchdog(connCtx, wc)
 	// 4. 启动进程级后台 sweep(幂等缓存清理 + shell 回收)
 	// P1-A4 修复:用 sync.Once 保证只启动一次,绑定进程级 ctx(不随连接起伏)
 	startBackgroundSweeps(ctx)
@@ -184,6 +189,7 @@ func startBackgroundSweeps(ctx context.Context) {
 	sweepsOnce.Do(func() {
 		go idempotencySweepLoop(ctx)
 		go sessionsReapLoop(ctx)
+		go transfers.SweepOrphanPartsLoop(ctx) // S3:孤儿分片清理
 	})
 }
 
@@ -209,6 +215,9 @@ func (a *Agent) sendRegister(ctx context.Context, wc *wsConn) error {
 	if sessions.available() {
 		caps = append(caps, "shell")
 	}
+	// S4:文件传输能力协商。新版 Agent 支持分片下载(offset/limit),
+	// 注册 xfer_offset 让 Relay/CLI 据此决定是否走分片(旧 Agent 无此能力 → 显式拒绝)。
+	caps = append(caps, "xfer_offset")
 	// M1 主从架构:Tags 自动加 role 标识,便于 Relay/CLI 按 role 筛选。
 	// 不修改原 cfg.Tags(避免污染配置),构造副本。
 	tags := make(map[string]string, len(a.cfg.Tags)+1)
@@ -257,6 +266,35 @@ func (a *Agent) heartbeatLoop(ctx context.Context, wc *wsConn) {
 	}
 }
 
+// deadConnWatchdog 死连接检测(S1 修复)。
+// 半开连接(TCP 黑洞)时,recvLoop 的 Read 永久阻塞,心跳 Write 在缓冲未满时可能成功,
+// 要等 TCP 重传超时(~15 分钟)才报错。watchdog 按 Heartbeat 周期检查 lastRecv 时间戳,
+// 超过 2×Heartbeat 无收包则 closeNow 强制断开,让 Run 循环重连。
+func (a *Agent) deadConnWatchdog(ctx context.Context, wc *wsConn) {
+	// 检查间隔 = Heartbeat,容忍度 = 2×Heartbeat(给一次心跳往返的余量)
+	interval := a.cfg.Heartbeat
+	if interval < 5*time.Second {
+		interval = 5 * time.Second
+	}
+	threshold := 2 * interval
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			last := time.UnixMilli(wc.lastRecvMs())
+			if time.Since(last) > threshold {
+				log.Printf("[agent] 死连接检测: %s 无收包,强制断开重连",
+					time.Since(last).Truncate(time.Second))
+				wc.closeNow()
+				return
+			}
+		}
+	}
+}
+
 // recvLoop 接收并处理消息（task/shell/file_transfer 控制信令 + 二进制数据帧）。
 func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 	for {
@@ -289,7 +327,8 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
-							log.Printf("[agent] handleUploadData panic(已恢复): %v", r)
+							// S5:输出 stack trace 便于排查(之前只有错误信息无堆栈)
+							log.Printf("[agent] handleUploadData panic(已恢复): %v\n%s", r, debug.Stack())
 						}
 					}()
 					a.handleUploadData(ctx, wc, data)

@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -519,9 +520,82 @@ func (te *TransferEngine) CloseAll() {
 		ids = append(ids, id)
 	}
 	te.sessions = make(map[string]*transferSession)
+	te.pathInUse = make(map[string]struct{}) // R1:清空占用标记
 	te.mu.Unlock()
 	if len(ids) > 0 {
 		log.Printf("[xfer] 关闭 %d 个传输会话", len(ids))
+	}
+}
+
+// SweepOrphanPartsLoop 周期扫描 workspace,删除孤儿分片(S3:防磁盘泄漏)。
+// CLI 分片上传崩溃/网络断时,.ftpartNN 残留无清理,长期堆积占满磁盘。
+// 策略:mtime > 2 小时 且 path 不在 pathInUse 中(非活跃传输)的 *.ftpart* 删除。
+func (te *TransferEngine) SweepOrphanPartsLoop(ctx context.Context) {
+	interval := 30 * time.Minute
+	threshold := 2 * time.Hour
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			te.sweepOrphanParts(threshold)
+		}
+	}
+}
+
+// sweepOrphanParts 执行一次扫描清理(可独立测试)。
+func (te *TransferEngine) sweepOrphanParts(threshold time.Duration) {
+	ws := te.workspace
+	if ws == "" {
+		return
+	}
+	entries, err := os.ReadDir(ws)
+	if err != nil {
+		return
+	}
+	// 收集活跃 path(排除这些 path 对应的分片)
+	te.mu.Lock()
+	activePaths := make(map[string]struct{}, len(te.pathInUse))
+	for p := range te.pathInUse {
+		activePaths[p] = struct{}{}
+	}
+	te.mu.Unlock()
+
+	cutoff := time.Now().Add(-threshold)
+	removed := 0
+	for _, e := range entries {
+		name := e.Name()
+		// 只关心分片文件(.ftpartNN / .ftpartNN.part / .part)
+		if !strings.Contains(name, ".ftpart") && !strings.HasSuffix(name, ".part") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue // 未过期
+		}
+		// 排除活跃传输的 path(分片名是 path 的前缀)
+		fullPath := filepath.Join(ws, name)
+		busy := false
+		for ap := range activePaths {
+			if strings.HasPrefix(name, filepath.Base(ap)) {
+				busy = true
+				break
+			}
+		}
+		if busy {
+			continue
+		}
+		if err := os.Remove(fullPath); err == nil {
+			removed++
+		}
+	}
+	if removed > 0 {
+		log.Printf("[xfer] 孤儿分片清理: 删除 %d 个(阈值 %s)", removed, threshold)
 	}
 }
 

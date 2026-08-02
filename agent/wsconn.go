@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -17,12 +19,20 @@ import (
 // 帧仍可能交错损坏。此封装用 writeMu 串行化业务写入。
 //
 // 同时封装 Envelope 的构造与序列化，避免业务代码重复样板。
+//
+// S1 修复:lastRecv 记录最后一次成功读取的 monotonic 时间戳,
+// watchdog 据此检测半开连接(TCP 黑洞),强制断开重连。
 type wsConn struct {
-	conn    *websocket.Conn
-	writeMu sync.Mutex
+	conn     *websocket.Conn
+	writeMu  sync.Mutex
+	lastRecv atomic.Int64 // monotonic 毫秒时间戳(read 成功时更新)
 }
 
-func newWSConn(c *websocket.Conn) *wsConn { return &wsConn{conn: c} }
+func newWSConn(c *websocket.Conn) *wsConn {
+	w := &wsConn{conn: c}
+	w.lastRecv.Store(time.Now().UnixMilli())
+	return w
+}
 
 // writeJSON 把 v 序列化为 JSON 并串行化写入。
 func (w *wsConn) writeJSON(ctx context.Context, v any) error {
@@ -60,10 +70,17 @@ func marshalEnvelope(typ, to string, payload any) ([]byte, error) {
 	return json.Marshal(env)
 }
 
-// read 透传到底层 conn。
+// read 透传到底层 conn,成功时更新 lastRecv(watchdog 检测半开连接用)。
 func (w *wsConn) read(ctx context.Context) (websocket.MessageType, []byte, error) {
-	return w.conn.Read(ctx)
+	mt, data, err := w.conn.Read(ctx)
+	if err == nil {
+		w.lastRecv.Store(time.Now().UnixMilli())
+	}
+	return mt, data, err
 }
+
+// lastRecvMs 返回最后一次成功读取的毫秒时间戳。
+func (w *wsConn) lastRecvMs() int64 { return w.lastRecv.Load() }
 
 // closeNow 透传。
 func (w *wsConn) closeNow() error { return w.conn.CloseNow() }

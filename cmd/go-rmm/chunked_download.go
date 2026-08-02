@@ -287,19 +287,15 @@ outer:
 	default:
 	}
 
-	// 4. 本地合并 + 校验
+	// 4. 本地合并 + 校验(S2:合并时流式算 SHA256,省一次全量读)
 	fmt.Printf("   合并分片 + 校验...\n")
-	if err := mergePartsLocal(partPrefix, localPath, totalChunks); err != nil {
+	localSHA, err := mergePartsLocal(partPrefix, localPath, totalChunks)
+	if err != nil {
 		return fmt.Errorf("合并失败: %w", err)
 	}
 	// 清理分片
 	for i := 0; i < totalChunks; i++ {
 		os.Remove(fmt.Sprintf("%s%02d", partPrefix, i))
-	}
-	// 算本地 SHA256
-	localSHA, err := computeLocalFileSHA256(localPath)
-	if err != nil {
-		return fmt.Errorf("算本地 SHA256 失败: %w", err)
 	}
 
 	elapsed := time.Since(startTime)
@@ -371,27 +367,31 @@ func downloadSingleChunk(cfg config, agentID, remotePath, partFile string, off, 
 	return nil
 }
 
-// mergePartsLocal 本地合并分片,返回合并后文件的 SHA256。
-func mergePartsLocal(partPrefix, dstFile string, totalChunks int) error {
+// mergePartsLocal 本地合并分片,边合并边算 SHA256(S2:省一次全量读)。
+// 返回合并后文件的 SHA256 hex。
+func mergePartsLocal(partPrefix, dstFile string, totalChunks int) (string, error) {
 	f, err := os.Create(dstFile)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer f.Close()
+	// S2:MultiWriter 让 io.Copy 同时写文件 + 喂 hasher,合并完直接得到 hash
+	hasher := sha256.New()
+	mw := io.MultiWriter(f, hasher)
 	buf := make([]byte, 64*1024)
 	for i := 0; i < totalChunks; i++ {
 		partFile := fmt.Sprintf("%s%02d", partPrefix, i)
 		pf, err := os.Open(partFile)
 		if err != nil {
-			return fmt.Errorf("打开分片 %d 失败: %w", i, err)
+			return "", fmt.Errorf("打开分片 %d 失败: %w", i, err)
 		}
-		if _, err := io.CopyBuffer(f, pf, buf); err != nil {
+		if _, err := io.CopyBuffer(mw, pf, buf); err != nil {
 			pf.Close()
-			return fmt.Errorf("合并分片 %d 失败: %w", i, err)
+			return "", fmt.Errorf("合并分片 %d 失败: %w", i, err)
 		}
 		pf.Close()
 	}
-	return nil
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 // computeLocalFileSHA256 计算本地文件 SHA256(供下载校验后用)。

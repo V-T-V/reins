@@ -1135,7 +1135,7 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 			}
 			log.Printf("[xfer] 续传 %s: 跳过 %d 字节", transferID, ready.ResumeOffset)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(30 * time.Second): // S5:10s→30s,慢 Agent 初始化/已满快路径算 hash
 		writeJSON(w, http.StatusGatewayTimeout, errMap(fmt.Errorf("等待 Agent ready 超时")))
 		return
 	case <-ctx.Done():
@@ -1263,6 +1263,12 @@ func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request)
 			init.Size = parsed
 		}
 	}
+	// S4:能力协商。分片下载(offset>0)需要 Agent 支持 xfer_offset。
+	// 旧 Agent 无此能力 → 显式拒绝(而非静默从头读返回错误内容,导致 CLI 死循环重试)。
+	if init.Offset > 0 && !r.agents.Supports(agentID, "xfer_offset") {
+		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("agent 不支持分片下载(xfer_offset),请升级 Agent")))
+		return
+	}
 	initEnv, _ := proto.NewEnvelope(proto.TypeFileTransferInit, "relay", agentID, init)
 	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Minute)
 	defer cancel()
@@ -1278,7 +1284,7 @@ func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request)
 			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("Agent 拒绝: %s", ready.Reason)))
 			return
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(30 * time.Second): // S5:10s→30s
 		writeJSON(w, http.StatusGatewayTimeout, errMap(fmt.Errorf("等待 Agent 就绪超时")))
 		return
 	}
