@@ -3,15 +3,76 @@
 > 企业级零信任远程访问 + 自动化运维平台 — Go 实现
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev)
-[![Version](https://img.shields.io/badge/version-4.1.0-blue)]()
+[![Version](https://img.shields.io/badge/version-4.3.0-blue)]()
 [![License](https://img.shields.io/badge/license-MIT-green)]()
-[![Tests](https://img.shields.io/badge/tests-216-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-309-brightgreen)]()
 [![CLI](https://img.shields.io/badge/CLI-51%20commands-blue)]()
-[![Coverage](https://img.shields.io/badge/proto%20coverage-91.3%25-brightgreen)]()
+[![API](https://img.shields.io/badge/API-42%20endpoints-blue)]()
 
-远程控制 Windows/Linux 主机:命令执行、文件传输、交互式 Shell、端口转发、多步编排、系统监控、告警、自更新。
+远程控制 Windows/Linux 主机:命令执行、文件传输、交互式 Shell、端口转发、多步编排、系统监控、告警、自更新。通过反向 WebSocket 中继穿透 NAT,支持一对多批量分发、多租户隔离与审计防篡改。
 
-## ✨ 核心特性
+---
+
+## 目录
+
+- [架构总览](#架构总览)
+- [核心特性](#核心特性)
+- [快速开始](#快速开始)
+- [部署](#部署)
+- [配置](#配置)
+- [安全](#安全)
+- [多租户与 RBAC](#多租户与-rbac)
+- [批量任务分发](#批量任务分发)
+- [API](#api)
+- [AI Agent 接入](#ai-agent-接入)
+- [指标](#指标)
+- [文档](#文档)
+
+---
+
+## 架构总览
+
+```
+                        ┌─────────────────────────────────────────────────────────────┐
+                        │                     Relay 中继服务器                          │
+   CLI / AI SDK         │  HTTP REST (42 端点) + 内嵌 Web 控制台 + SSE 事件流          │
+   ┌──────────┐  HTTPS  │  ┌────────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+   │ go-rmm   │────────►│  │  Router    │─►│ Policy   │─►│  RBAC    │─►│  Audit   │   │
+   │ (51 cmd) │         │  │  (REST)    │  │ (黑名单) │  │ (多租户) │  │(hash链) │   │
+   └──────────┘         │  └─────┬──────┘  └──────────┘  └──────────┘  └──────────┘   │
+                        │        │ dispatch                                              │
+   Web 控制台           │  ┌─────▼──────────────────────────────────────────────────┐  │
+   (内嵌前端)           │  │            EventBus + BatchDispatcher(批量分发)         │  │
+                        │  │  TaskStore(bbolt/Redis) + Reaper(超时回收) + Scheduler│  │
+                        │  └──────────────────────┬────────────────────────────────┘  │
+                        │        反向 WS 长连接    │ 智能调度(负载均衡选最优 Agent)    │
+                        │  mTLS + 内置 CA + CRL   │ Prometheus /metrics + pprof        │
+                        └────────────────────────┼─────────────────────────────────────┘
+                                                 │ 反向 WebSocket(穿透 NAT)
+            ┌────────────────────────────────────┼────────────────────────────────────┐
+            │                                    │                                    │
+       ┌────▼─────┐                        ┌────▼─────┐                        ┌────▼─────┐
+       │  Agent 1 │                        │  Agent 2 │                        │  Agent N │
+       │ Windows  │                        │ Windows  │                        │  Linux   │
+       │ 服务     │                        │ 服务     │                        │  (预留)  │
+       ├──────────┤                        ├──────────┤                        ├──────────┤
+       │powershell│                        │powershell│                        │ script   │
+       │ script   │                        │ file     │                        │ file     │
+       │ file     │                        │ power    │                        │ monitor  │
+       │screenshot│                        │ update   │                        └──────────┘
+       │ browse   │                        └──────────┘
+       │ guiclick │      9 类任务执行器 / Agent 自更新(rename+copy+SCM 重启) / Session 录屏
+       │ monitor  │
+       └──────────┘
+```
+
+**数据流**:CLI/Web → HTTP REST → Relay 路由 → 命令策略校验 → RBAC 多租户鉴权 → 审计 hash chain → EventBus 投递 → 反向 WS → Agent 执行 → 结果回流(SSE/轮询)。
+
+**水平扩展**:多 Relay 通过 Redis 共享 `TaskStore` + Pub/Sub 事件联邦,Agent 多 Relay 故障切换。
+
+---
+
+## 核心特性
 
 ### 远程操作(15 命令)
 | 能力 | 命令 |
@@ -20,7 +81,7 @@
 | 流式执行 | `task stream -a <agent> -c "ping -t 8.8.8.8"` (SSE 实时 stdout) |
 | 多 Agent 并行 | `exec -a a1,a2,a3 -c "hostname"` |
 | 交互式 Shell | `shell open -a <agent>` (asciinema 录屏) |
-| 文件传输 | `file upload/download` (SHA256 + 断点续传) |
+| 文件传输 | `file upload/download` (SHA256 + 断点续传 + 并发分片) |
 | 目录同步 | `sync push/pull` |
 | 端口转发 | `tunnel -L 3306:db:3306` (SSH -L) |
 
@@ -57,8 +118,9 @@
 ### 企业级能力
 | 能力 | 说明 |
 |------|------|
-| **多租户 RBAC** | `tenant:role:secret` token 格式 |
-| **审计防篡改** | hash chain + SIEM 导出(CEF/Syslog) |
+| **多租户 RBAC** | `tenant:role:secret` token,组织/角色/权限/配额 |
+| **审计防篡改** | hash chain + SIEM 导出(CEF/Syslog/JSON) |
+| **批量分发** | 一对多分发 + 结果聚合 + 指数退避重试 + 实时进度 |
 | **Secret 管理** | 凭据 TTL+一次性,不落 audit |
 | **Session 录屏** | asciinema v2,可回放 |
 | **可观测性** | slog + Prometheus + pprof |
@@ -66,14 +128,16 @@
 | **水平扩展** | TaskStore interface + Redis + Pub/Sub |
 | **AI Agent SDK** | `client.New()` → 45+ 方法 + 流式执行 |
 
-## 🚀 快速开始
+---
+
+## 快速开始
 
 ```bash
-# 1. 服务端(一台机器)
-./go-rmm-relay                    # 零配置启动,自动生成 token
-# → 浏览器打开 http://localhost:7780
+# 1. 服务端(一台机器)——零配置启动,自动生成 token
+./go-rmm-relay
+# → 浏览器打开 http://localhost:7780(内嵌 Web 控制台)
 
-# 2. 被控端(每台目标机)
+# 2. 被控端(每台目标机)——复制一行命令即可
 ./go-rmm-agent run -relay ws://server:7780/agent -token <token>
 
 # 3. 操作(你的电脑)
@@ -82,7 +146,11 @@ go-rmm --relay http://server:7780 --token <token> task run -a <agent> -c "hostna
 go-rmm --relay http://server:7780 --token <token> monitor top -a <agent>
 ```
 
-## 📦 部署
+> 零配置:Relay 首次启动若未设 `-token` 会自动生成一个并打印;Agent 也可用 `GET /api/bootstrap` 拿到一行 PowerShell 安装命令(`iex (irm ...)`),复制粘贴到目标机即可。
+
+---
+
+## 部署
 
 | 方式 | 命令 |
 |------|------|
@@ -91,8 +159,120 @@ go-rmm --relay http://server:7780 --token <token> monitor top -a <agent>
 | Docker | `docker build -f Dockerfile.relay -t go-rmm . && docker run -p 7780:7780 go-rmm` |
 | K8s | `helm install rmm deploy/helm/go-rmm` |
 | 服务器 | `./scripts/deploy-to-server.sh` |
+| Nginx 反代 | 见 `nginx-rmm.conf`(子路径部署 + TLS 终端) |
 
-## 🔌 AI Agent 接入
+详细操作见 [DEPLOYMENT.md](./DEPLOYMENT.md)。生产建议:Nginx/Traefik 做 TLS 终端,Relay 后端;Agent 通过 `wss://` 连接;多 Relay 共享 Redis。
+
+---
+
+## 配置
+
+Relay 配置优先级:**命令行 flag > 环境变量 > 默认值**。
+
+| Flag | 环境变量 | 默认 | 说明 |
+|------|----------|------|------|
+| `-addr` | `GO_RMM_RELAY_ADDR` | `:7780` | HTTP 监听地址 |
+| `-token` | `GO_RMM_RELAY_TOKEN` | (自动生成) | Agent/Console 鉴权 token;空则不校验 |
+| `-dev` | `GO_RMM_RELAY_DEV` | off | 开发模式(详细日志、放宽校验) |
+| `-mtls` | `GO_RMM_RELAY_MTLS` | off | 启用 mTLS(需内置 CA + Agent 客户端证书) |
+| `-tls-cert` | `GO_RMM_RELAY_TLS_CERT` | — | Relay TLS 证书文件 |
+| `-tls-key` | `GO_RMM_RELAY_TLS_KEY` | — | Relay TLS 私钥文件 |
+| `-external-url` | `GO_RMM_EXTERNAL_URL` | — | 外部访问地址(经反代/TLS 终端时用),如 `https://host/rmm` |
+
+配置校验(`Config.Validate()`):`addr` 不能为空;mTLS 模式必须配证书;token 长度建议 ≥8。
+
+CLI 全局 flag:`--relay`(默认 `http://127.0.0.1:7780`)、`--token`、`--output text|json`、`--insecure`(跳过自签证书校验)、`--cacert`。
+
+---
+
+## 安全
+
+| 层 | 机制 |
+|----|------|
+| **传输** | 反向 WS(wss://)+ mTLS 双向认证 + 内置 CA + CRL 吊销 |
+| **鉴权** | `tenant:role:secret` token;空 token 配置 = 不校验(仅 dev) |
+| **授权** | RBAC 三角色(admin/operator/viewer)+ 细粒度 action |
+| **命令策略** | 黑名单拦截高危命令(Format-Volume 等),批量下发也校验 |
+| **审计** | hash chain 防篡改 + 异步落盘 + SIEM 导出(CEF/Syslog) |
+| **Secret** | 引用式凭据(TTL + 一次性),不落 audit |
+| **隔离** | 租户只能看自己的 Agent(tags["tenant"] 过滤) |
+
+> 深度防御:命令策略为 best-effort(黑名单可绕过),Agent 侧二次校验兜底。生产务必配 mTLS + 强 token + 审计导出。
+
+---
+
+## 多租户与 RBAC
+
+token 格式(向后兼容):
+
+| 格式 | 含义 |
+|------|------|
+| `secret123` | 旧格式,无租户,全权限(admin) |
+| `tenant:role:secret` | 租户隔离 + 角色,如 `acme:operator:s3cr3t` |
+
+**角色**:
+- `admin` — 全权限(默认,旧 token 等效)
+- `operator` — 可下发任务/管理 Agent,不可 revoke/电源
+- `viewer` — 只读(查看 agents/tasks/metrics)
+
+**组织(Organization)**:每个租户一个组织实体,含名称、Agent 配额(`Quota`,0=不限)、启停(`Enabled`,禁用后该租户所有操作被拒)。
+
+**隔离规则**:`tenant=acme` 的 token 只能看到 `Tags["tenant"]="acme"` 的 Agent;旧 token(无 tenant)看全部。
+
+**可配置策略**:`RolePolicy` 可在启动时从配置注入角色→action 映射,也可运行期 `GrantRole` 动态加权限(替代硬编码)。
+
+---
+
+## 批量任务分发
+
+一对多任务下发 + 结果聚合 + 失败重试 + 实时进度(`relay/batchdispatch.go`)。
+
+**请求**:`POST /api/tasks/batch`
+```json
+{"tag": "env=prod", "type": "powershell", "payload": {...}, "timeout": 30}
+```
+按标签匹配在线 Agent,并行投递,返回 `{dispatched, offline, task_ids}`。
+
+**BatchDispatcher(增强 API)**:
+
+| 能力 | 说明 |
+|------|------|
+| 一对多分发 | 并发投递所有目标,`dispatchFn` 抽象便于注入 mock |
+| 结果聚合 | `BatchResult` 含每目标成功/失败/输出,`SuccessRate()`/`Succeeded()`/`Failed()` |
+| 指数退避重试 | 失败目标按 `100ms * 2^n`(封顶 1s)重投,`MaxRetries` 可配 |
+| 幂等 | 已成功目标不重投;taskID 含 `batchID-agentID-attempt` 去重 |
+| 实时进度 | `BatchProgress` 线程安全快照:`Total/Dispatched/Succeeded/Failed/Pending/Percent/ETA` |
+
+**进度状态机**:`pending → running → (succeeded | failed)`,重试时 `failed → running → ...`。
+
+```go
+d := newBatchDispatcher(dispatchFn)
+req := BatchRequest{BatchID: "b1", AgentIDs: ids, MaxRetries: 3}
+br, progress := d.DispatchWithRetryTracked(ctx, req)
+// 分发期间可并发调 progress.Snapshot() 拿实时进度
+fmt.Printf("进度 %.0f%%, 成功 %d, 失败 %d\n",
+    progress.Snapshot().Percent, progress.Snapshot().Succeeded, progress.Snapshot().Failed)
+```
+
+---
+
+## API
+
+42 个 REST 端点(`relay/router.go`),完整契约见 [deploy/openapi.yaml](./deploy/openapi.yaml)。分类:
+
+| 类别 | 代表端点 |
+|------|----------|
+| 任务 | `POST /api/tasks`、`GET /api/tasks/:id`、`POST /api/tasks/batch`、`POST /api/tasks/:id/cancel` |
+| Agent | `GET /api/agents`、`GET /api/bootstrap`、`POST /api/agents/revoke` |
+| 文件 | `POST /api/files/upload`、`GET /api/files/download` |
+| 监控 | `GET /api/sysinfo/:agent`、`GET /api/snapshot/:agent` |
+| 事件 | `GET /api/events`(SSE:agent上线/任务结果/策略拦截) |
+| 安全 | `GET /api/audit`、`GET /api/audit/export`、`POST /api/power` |
+| 运维 | `GET /metrics`(Prometheus)、`GET /debug/pprof/*` |
+
+---
+
+## AI Agent 接入
 
 ```go
 import "github.com/QiuShichang/go-rmm/client"
@@ -114,20 +294,25 @@ result, _ := c.StreamCommand(ctx, "agent-1", "ping 8.8.8.8", 30, func(event stri
 info, _ := c.Sysinfo("agent-1")
 ```
 
-## 📊 指标
+---
+
+## 指标
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 154 |
-| 代码行 | 28,000+ |
+| Go 文件 | 169 |
+| 代码行 | 31,800+ |
 | CLI 命令 | 51 |
 | API 端点 | 42 |
 | SDK 方法 | 45+ |
-| 测试用例 | 216 |
+| 测试用例 | 309 |
 | 基准测试 | 22 |
+| 任务类型 | 9 |
 | 性能优化 | 8 项 (55x~1940x) |
 
-## 📄 文档
+---
+
+## 文档
 - [部署指南](./DEPLOYMENT.md)
 - [性能基线](./BENCHMARK.md)
 - [API 文档](./deploy/openapi.yaml)
