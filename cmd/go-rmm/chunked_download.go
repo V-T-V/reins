@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -213,7 +214,16 @@ func fileDownloadChunked(cfg config, agentID, remotePath, localPath string, tota
 					}
 					if err := downloadSingleChunk(cfg, agentID, remotePath, partFile, off, thisSize, j.idx); err != nil {
 						lastErr = err
-						time.Sleep(2 * time.Second)
+						// R4 指数退避:1s/2s/4s,上限 30s
+						backoff := time.Duration(1<<retry) * time.Second
+						if backoff > 30*time.Second {
+							backoff = 30 * time.Second
+						}
+						select {
+						case <-time.After(backoff):
+						case <-ctx.Done():
+							return
+						}
 						continue
 					}
 					downloaded.Add(thisSize)
@@ -231,7 +241,9 @@ func fileDownloadChunked(cfg config, agentID, remotePath, localPath string, tota
 		}()
 	}
 
-	// 进度
+	// 进度(R6:瞬时速率 + ETA)
+	var lastSample int64
+	lastSampleTime := startTime
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -246,10 +258,25 @@ outer:
 		case <-ticker.C:
 			dl := downloaded.Load()
 			elapsed := time.Since(startTime).Seconds()
-			rate := float64(dl) / 1024 / 1024 / elapsed
+			avgRate := float64(dl) / 1024 / 1024 / elapsed
+			now := time.Now()
+			dt := now.Sub(lastSampleTime).Seconds()
+			instRate := avgRate
+			if dt > 0.1 {
+				instRate = float64(dl-lastSample) / 1024 / 1024 / dt
+			}
+			lastSample = dl
+			lastSampleTime = now
 			pct := dl * 100 / totalSize
-			fmt.Printf("\r   进度: %d%% (%s / %s) | %.2f MB/s | %d 路   ",
-				pct, formatSize(dl), formatSize(totalSize), rate, conc)
+			eta := ""
+			if instRate > 0.01 {
+				remain := float64(totalSize-dl) / 1024 / 1024 / instRate
+				if remain > 0 {
+					eta = "| ETA " + formatDuration(int64(remain))
+				}
+			}
+			fmt.Printf("\r   进度: %d%% (%s / %s) | %.2f MB/s %s | %d 路   ",
+				pct, formatSize(dl), formatSize(totalSize), instRate, eta, conc)
 		}
 	}
 	fmt.Println()
@@ -314,6 +341,12 @@ func downloadSingleChunk(cfg config, agentID, remotePath, partFile string, off, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
+		// R4:读错误 body 前 512 字节
+		errSnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		msg := strings.TrimSpace(string(errSnippet))
+		if msg != "" {
+			return fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+		}
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 

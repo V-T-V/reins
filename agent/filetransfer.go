@@ -31,6 +31,7 @@ type TransferEngine struct {
 	sessions map[string]*transferSession
 	policy   *fileTransferPolicy // B3 修复：路径校验
 	workspace string              // FT:相对路径解析基准(避免落到 SYSTEM CWD)
+	pathInUse map[string]struct{} // R1 修复:upload path 互斥,防并发同 path 双写 .part
 }
 
 // fileTransferPolicy 复用 executors.FilePolicy 的路径校验逻辑。
@@ -41,8 +42,9 @@ type fileTransferPolicy struct {
 
 // 全局实例。
 var transfers = &TransferEngine{
-	sessions: make(map[string]*transferSession),
-	policy:   &fileTransferPolicy{check: allowAllPaths}, // 默认放行，由 Agent 初始化时注入
+	sessions:  make(map[string]*transferSession),
+	pathInUse: make(map[string]struct{}),
+	policy:    &fileTransferPolicy{check: allowAllPaths}, // 默认放行，由 Agent 初始化时注入
 }
 
 // allowAllPaths 默认放行（向后兼容）。
@@ -58,6 +60,42 @@ func (te *TransferEngine) SetPolicy(check func(string) error) {
 // 相对路径会落到系统目录。注入 workspace 后,相对路径统一解析到 workspace。
 func (te *TransferEngine) SetWorkspace(ws string) {
 	te.workspace = ws
+}
+
+// releasePath 释放 path 占用标记(R1 互斥的配套释放)。
+// 所有 upload session 退出路径(成功/失败/取消)都应调用。
+func (te *TransferEngine) releasePath(path string) {
+	te.mu.Lock()
+	delete(te.pathInUse, path)
+	te.mu.Unlock()
+}
+
+// tryCompleteFullPart 是 R2 已满快路径:当 .part 文件已达到声明大小,
+// 直接算 hash → 校验 → rename 成正式文件,返回 (sha256Hex, 是否成功)。
+// 成功后 .part 已清理(renamed),调用方需释放 pathInUse 并发 complete。
+// 失败时 .part 被删除(校验/rename 失败),返回 ("", false) 让调用方从头开始。
+func (te *TransferEngine) tryCompleteFullPart(init proto.FileTransferInit, partPath string, size int64) (string, bool) {
+	h := sha256.New()
+	if err := feedExistingToHash(partPath, size, h); err != nil {
+		log.Printf("[xfer] 已满快路径 hash 失败 %s: %v", init.TransferID, err)
+		os.Remove(partPath)
+		return "", false
+	}
+	hashHex := hex.EncodeToString(h.Sum(nil))
+	// 校验(若 Console 提供了 expectedSHA256)
+	if init.SHA256 != "" && hashHex != init.SHA256 {
+		log.Printf("[xfer] 已满快路径校验失败 %s: 期望 %s 实际 %s", init.TransferID, init.SHA256[:16], hashHex[:16])
+		os.Remove(partPath)
+		return "", false
+	}
+	// rename 成正式文件
+	if err := os.Rename(partPath, init.Path); err != nil {
+		log.Printf("[xfer] 已满快路径 rename 失败 %s: %v(删除 .part 强制重传)", init.TransferID, err)
+		os.Remove(partPath) // 强制删除,避免死循环(下次重传从头开始)
+		return "", false
+	}
+	log.Printf("[xfer] 已满快路径完成 %s: %d bytes sha256=%s", init.TransferID, size, hashHex[:16])
+	return hashHex, true
 }
 
 // resolveToWorkspace 把相对路径解析到 workspace(而非 CWD)。
@@ -113,6 +151,19 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 	}
 
 	if init.Direction == "upload" {
+		// R1 修复:path 互斥。session map 以 transferID 为 key,但 .part 文件以 path 为 key。
+		// CLI 重试换新 transferID 但相同 path,两个 session 同时 O_APPEND 同一 .part →
+		// 数据双写 → SHA256 不匹配 → HTTP 500。这里用 pathInUse 拒绝并发同 path。
+		te.mu.Lock()
+		if _, inUse := te.pathInUse[init.Path]; inUse {
+			te.mu.Unlock()
+			ready.Reason = "该路径正在被另一个传输占用,请稍后重试"
+			log.Printf("[xfer] 拒绝并发同 path %s(被占用)", init.Path)
+			return ready
+		}
+		te.pathInUse[init.Path] = struct{}{}
+		te.mu.Unlock()
+
 		// 上传:检查 .part 文件是否存在(续传)
 		partPath := init.Path + ".part"
 		var resumeOffset int64 = 0
@@ -120,9 +171,30 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 			resumeOffset = info.Size()
 			log.Printf("[xfer] 续传 %s: 从 offset=%d 继续", init.TransferID, resumeOffset)
 		}
+
+		// R2 修复:已满快路径。.part 已满(resumeOffset >= init.Size)时,
+		// 直接算 hash → 校验 → rename → 发 complete,不再等 sender 跳过全部字节 + 发 isLast。
+		// 之前等 sender 走完整流程,跨网络时序脆弱(实测"跳过 10485760 字节"后间歇 500)。
+		// 成功后 ready 带上 actualSHA256,handleTransferInit 据此直接发 complete(不建 session)。
+		if init.Size > 0 && resumeOffset >= init.Size {
+			actualSHA, ok := te.tryCompleteFullPart(init, partPath, resumeOffset)
+			if ok {
+				te.releasePath(init.Path) // 已满快路径不建 session,手动释放
+				ready.Accepted = true
+				ready.ResumeOffset = resumeOffset
+				ready.Size = init.Size
+				ready.Reason = "ALREADY_COMPLETE:" + actualSHA // 约定前缀,携带 SHA
+				log.Printf("[xfer] 已满快路径 %s: .part=%d 直接完成 sha256=%s", init.TransferID, resumeOffset, actualSHA[:16])
+				return ready
+			}
+			// 快路径失败(hash 校验失败等):.part 已被清理,从头开始
+			resumeOffset = 0
+		}
+
 		// 打开/创建 .part 文件(追加模式)
 		f, err := os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
+			te.releasePath(init.Path)
 			ready.Reason = "打开文件失败: " + err.Error()
 			return ready
 		}
@@ -138,6 +210,7 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 				os.Truncate(partPath, 0)
 				f, err = os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 				if err != nil {
+					te.releasePath(init.Path)
 					ready.Reason = "重置续传文件失败: " + err.Error()
 					return ready
 				}
@@ -164,18 +237,32 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 			ready.Reason = "文件不存在: " + err.Error()
 			return ready
 		}
+		// R5:offset 边界检查。offset 超过文件大小直接拒绝,避免读到 EOF 返回不完整数据。
+		if init.Offset > 0 && init.Offset > info.Size() {
+			ready.Reason = fmt.Sprintf("offset %d 超过文件大小 %d", init.Offset, info.Size())
+			return ready
+		}
 		f, err := os.Open(init.Path)
 		if err != nil {
 			ready.Reason = "打开文件失败: " + err.Error()
 			return ready
 		}
-		// O3:分片下载支持。
+		// O3+R5:分片下载支持 + limit 收敛。
 		// - Offset > 0 时 Seek 到指定偏移开始读
 		// - limit > 0 时只读 limit 字节(Size 字段复用为本次长度),否则读到 EOF
-		//   注意:offset=0 + limit>0(第一分片)也要限长,不能只在 offset>0 时设 limit
+		// - offset+limit 超过文件大小时,收敛 limit 到剩余可读长度
 		var limit int64
 		if init.Size > 0 {
 			limit = init.Size
+			// R5:offset+limit 超界时收敛,避免读到 EOF 返回不足
+			if init.Offset+limit > info.Size() {
+				limit = info.Size() - init.Offset
+				if limit < 0 {
+					limit = 0
+				}
+				log.Printf("[xfer] limit 收敛 %s: offset=%d + limit=%d > size=%d → limit=%d",
+					init.TransferID, init.Offset, init.Size, info.Size(), limit)
+			}
 		}
 		if init.Offset > 0 {
 			if _, err := f.Seek(init.Offset, 0); err != nil {
@@ -300,10 +387,14 @@ func (te *TransferEngine) ReceiveUploadData(transferID string, data []byte, isLa
 }
 
 // completeUpload 完成上传会话。失败时清理 .part 文件（M1 修复）。
+// R1 修复:统一释放 pathInUse(所有 upload 出口的汇聚点)。
 func (te *TransferEngine) completeUpload(id string, success bool, bytes int64, hashOrError string, cb func(proto.FileTransferComplete)) {
 	te.mu.Lock()
 	sess, hadSession := te.sessions[id]
 	delete(te.sessions, id)
+	if hadSession && sess.path != "" {
+		delete(te.pathInUse, sess.path) // R1:释放 path 占用
+	}
 	te.mu.Unlock()
 	if !success && hadSession {
 		// M1 修复：上传失败删 .part 文件，防磁盘泄漏
@@ -400,6 +491,9 @@ func (te *TransferEngine) Cancel(transferID string) {
 	sess, ok := te.sessions[transferID]
 	if ok {
 		delete(te.sessions, transferID)
+		if sess.path != "" {
+			delete(te.pathInUse, sess.path) // R1:释放 path 占用
+		}
 	}
 	te.mu.Unlock()
 	if ok {

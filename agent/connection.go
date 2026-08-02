@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -527,6 +528,20 @@ func (a *Agent) handleTransferInit(ctx context.Context, wc *wsConn, env proto.En
 	ready := transfers.HandleInit(init)
 	// 发 ready 回 Relay
 	_ = wc.writeEnvelope(ctx, proto.TypeFileTransferReady, "relay", ready)
+
+	// R2 已满快路径:.part 已满且校验通过时,HandleInit 在 Reason 里带 "ALREADY_COMPLETE:<sha>"
+	// 约定前缀。此时不建 session,直接发 complete 让 Relay 立即返回成功(不等 sender 发数据)。
+	if ready.Accepted && strings.HasPrefix(ready.Reason, "ALREADY_COMPLETE:") {
+		actualSHA := strings.TrimPrefix(ready.Reason, "ALREADY_COMPLETE:")
+		comp := proto.FileTransferComplete{
+			TransferID: init.TransferID, Success: true,
+			SHA256Actual: actualSHA, Bytes: ready.Size,
+		}
+		cctx, ccancel := contextWithTimeout(5 * time.Second)
+		defer ccancel()
+		_ = wc.writeEnvelope(cctx, proto.TypeFileTransferComplete, "relay", comp)
+		return
+	}
 
 	// 如果是下载，Agent 主动开始推数据
 	if ready.Accepted && init.Direction == "download" {

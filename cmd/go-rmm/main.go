@@ -745,6 +745,10 @@ func fileUpload(cfg config, args []string) error {
 	}
 	if v := flagVal(args, "--chunk-size"); v != "" {
 		if n, err := parseSize(v); err == nil && n > 0 {
+			// R3:上限 128MB,防 OOM(流式上传后内存占用小,但仍需限制单片大小)
+			if n > 128*1024*1024 {
+				return fmt.Errorf("--chunk-size 超过上限 128M: %s", v)
+			}
 			chunkSizeArg = n
 		}
 	}
@@ -889,6 +893,10 @@ func fileDownload(cfg config, args []string) error {
 	}
 	if v := flagVal(args, "--chunk-size"); v != "" {
 		if n, err := parseSize(v); err == nil && n > 0 {
+			// R3:上限 128MB,防 OOM(流式上传后内存占用小,但仍需限制单片大小)
+			if n > 128*1024*1024 {
+				return fmt.Errorf("--chunk-size 超过上限 128M: %s", v)
+			}
 			chunkSizeArg = n
 		}
 	}

@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -166,19 +167,24 @@ func fileUploadChunked(cfg config, agentID, localPath, remotePath string, totalS
 					if ctx.Err() != nil {
 						return
 					}
-					// 独立 fd 上 Seek+ReadFull,无并发交错风险
-					if _, err := wf.Seek(off, 0); err != nil {
-						lastErr = fmt.Errorf("seek 片 %d: %w", j.idx, err)
-						continue
-					}
-					chunkData := make([]byte, thisSize)
-					if _, err := io.ReadFull(wf, chunkData); err != nil {
-						lastErr = fmt.Errorf("读片 %d: %w", j.idx, err)
-						continue
-					}
-					if err := uploadSingleChunk(cfg, agentID, chunkName, chunkData, localPath, j.idx); err != nil {
+					// R3 流式:用 SectionReader 边读边传(不再 make 10MB slice)。
+					// 内存从 10MB/worker 降到 ~64KB/worker,且 ContentLength 正确。
+					section := io.NewSectionReader(wf, off, thisSize)
+					if err := uploadSingleChunk(cfg, agentID, chunkName, section, thisSize, localPath, j.idx); err != nil {
 						lastErr = err
-						time.Sleep(2 * time.Second)
+						// R4 指数退避:1s/2s/4s,上限 30s;"占用冲突"用更长退避让前一个传输完成
+						backoff := time.Duration(1<<retry) * time.Second
+						if backoff > 30*time.Second {
+							backoff = 30 * time.Second
+						}
+						if strings.Contains(err.Error(), "占用") {
+							backoff = 5 * time.Second // 占用冲突等更久
+						}
+						select {
+						case <-time.After(backoff):
+						case <-ctx.Done():
+							return
+						}
 						continue
 					}
 					uploaded.Add(thisSize)
@@ -197,6 +203,9 @@ func fileUploadChunked(cfg config, agentID, localPath, remotePath string, totalS
 	}
 
 	// 进度刷新(主 goroutine,避免多 goroutine 交错输出)
+	// R6:瞬时速率(滑动窗口最近 2s)+ ETA
+	var lastSample int64
+	lastSampleTime := startTime
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -214,10 +223,27 @@ outer:
 		case <-ticker.C:
 			up := uploaded.Load()
 			elapsed := time.Since(startTime).Seconds()
-			rate := float64(up) / 1024 / 1024 / elapsed
+			avgRate := float64(up) / 1024 / 1024 / elapsed
+			// R6:瞬时速率 = 最近采样窗口的 Δbytes / Δt
+			now := time.Now()
+			dt := now.Sub(lastSampleTime).Seconds()
+			instRate := avgRate
+			if dt > 0.1 {
+				instRate = float64(up-lastSample) / 1024 / 1024 / dt
+			}
+			lastSample = up
+			lastSampleTime = now
 			pct := up * 100 / totalSize
-			fmt.Printf("\r   进度: %d%% (%s / %s) | %.2f MB/s | %d 路   ",
-				pct, formatSize(up), formatSize(totalSize), rate, conc)
+			// ETA = 剩余字节 / 瞬时速率
+			eta := ""
+			if instRate > 0.01 {
+				remain := float64(totalSize-up) / 1024 / 1024 / instRate
+				if remain > 0 {
+					eta = "| ETA " + formatDuration(int64(remain))
+				}
+			}
+			fmt.Printf("\r   进度: %d%% (%s / %s) | %.2f MB/s %s | %d 路   ",
+				pct, formatSize(up), formatSize(totalSize), instRate, eta, conc)
 		}
 	}
 	fmt.Println()
@@ -273,24 +299,24 @@ outer:
 }
 
 // uploadSingleChunk 上传单个分片(复用现有 upload 端点)。
-// chunkData 是分片内容,chunkName 是目标文件名。
-func uploadSingleChunk(cfg config, agentID, chunkName string, chunkData []byte, srcFile string, idx int) error {
-	transferID := fmt.Sprintf("chunk-%s-%d", srcFile, idx)
-	transferID = fmt.Sprintf("xfer-%d-chunk%d", time.Now().UnixNano(), idx)
+// R3 流式:body 是分片内容 reader(SectionReader),length 是精确字节数。
+// R4:失败时读取错误 body 前 512 字节拼进错误信息(区分磁盘满/路径拒绝/占用)。
+func uploadSingleChunk(cfg config, agentID, chunkName string, body io.Reader, length int64, srcFile string, idx int) error {
+	transferID := fmt.Sprintf("xfer-%d-chunk%d", time.Now().UnixNano(), idx)
 
 	q := url.Values{}
 	q.Set("agent_id", agentID)
 	q.Set("path", chunkName)
 	q.Set("transfer_id", transferID)
-	q.Set("size", fmt.Sprintf("%d", len(chunkData)))
+	q.Set("size", fmt.Sprintf("%d", length))
 	u := cfg.relay + "/api/transfer/upload?" + q.Encode()
 
-	req, err := newPostRequest(u, chunkData)
+	req, err := http.NewRequest("POST", u, body)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.token)
-	req.ContentLength = -1 // chunked,避免大 CL 问题
+	req.ContentLength = length // R3:精确 CL(不再 -1),nginx/Agent 更稳
 
 	resp, err := streamingClient.Do(req)
 	if err != nil {
@@ -299,6 +325,12 @@ func uploadSingleChunk(cfg config, agentID, chunkName string, chunkData []byte, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
+		// R4:读错误 body 前 512 字节,拼进错误信息
+		errSnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		msg := strings.TrimSpace(string(errSnippet))
+		if msg != "" {
+			return fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+		}
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	return nil
