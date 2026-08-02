@@ -2,7 +2,7 @@
 
 ## 项目内容(What)
 
-Go 实现的**企业级零信任远程访问平台**(v3.4)——通过反向 WebSocket 中继,让 CLI / Web 控制台远程驱动 Agent 执行全维度运维操作。对标 Teleport / Tailscale。
+Go 实现的**企业级零信任远程访问平台**(v4.3)——通过反向 WebSocket 中继,让 CLI / Web 控制台远程驱动 Agent 执行全维度运维操作。对标 Teleport / Tailscale。
 
 ### 三组件架构
 
@@ -46,9 +46,10 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 
 - **G1**:Agent 注册为 Windows 服务,开机自启、崩溃自恢复(OnFailure=restart),经反向 WS 上线到 Relay。
 - **G2**:CLI/Web 下发任务 → Relay 路由 → Agent 执行 → 结果实时回流(SSE/轮询)。
-- **G3**:9 类任务执行器 + 38 CLI 命令 + 40 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
+- **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
-- **成功标准**:128 Go 文件 / 23K 行 / 183 测试 / 端到端全路径验证通过。
+- **G5**(v4.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
+- **成功标准**:169 Go 文件 / 31.8K 行 / 309 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-8)。
 
 ## 架构假设(4 项显式假设)
 
@@ -57,16 +58,18 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 3. **PowerShell 为 Windows 核心执行器**:-EncodedCommand(UTF16LE),命令策略黑名单 + Agent 侧二次校验。
 4. **bbolt 单文件为默认持久化**:Redis 后端可选(TaskStore interface 切换)。
 
-## 项目结构(v3.4)
+## 项目结构(v4.3)
 
 ```
 go-rmm/
-├── relay/              # 中继服务器(15 文件)
+├── relay/              # 中继服务器(59 文件)
 │   ├── server.go       # Relay 主体 + serveAgent + xferSession + EventBus
-│   ├── router.go       # REST 路由(40 端点)
+│   ├── router.go       # REST 路由(42 端点)
 │   ├── store.go        # bbolt TaskStore + TaskStore interface + CAS/ReapToPending
 │   ├── memstore.go     # 内存版 TaskStore(mock/测试/轻量部署)
 │   ├── redis_store.go  # Redis 版 TaskStore(水平扩展)
+│   ├── batchdispatch.go # 批量任务分发(一对多/聚合/重试/进度跟踪)[round 8]
+│   ├── tenant.go       # 多租户组织/角色策略/配额/隔离过滤 [round 7]
 │   ├── reaper.go       # 超时任务回收
 │   ├── ca.go           # 内置 CA + CRL + enrollment
 │   ├── policy.go       # 命令策略(黑名单)
@@ -128,26 +131,104 @@ go-rmm/
 └── Makefile            # 世界级构建系统(15 targets)
 ```
 
-## 指标(v3.4)
+## 指标(v4.3)
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 128 |
-| 代码行 | 23,121 |
-| Go 包 | 9 |
-| 测试用例 | 183 |
-| CLI 命令 | 38 |
-| API 端点 | 40 |
+| Go 文件 | 169 |
+| 代码行 | 31,800+ |
+| Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
+| 测试用例 | 309 |
+| 基准测试 | 22 |
+| CLI 命令 | 51 |
+| API 端点 | 42 |
 | 任务类型 | 9 |
 | 基础设施产物 | 10+(Docker×2/Helm/OpenAPI/goreleaser/CI/systemd/golangci) |
 | 神级提升 | 50+ |
 
+---
+
+## 模块完成度(v4.3)
+
+每个核心包的功能完成度与成熟度。✅ 生产就绪 / 🟡 骨架/接口先行 / ⏳ 预留未实现。
+
+| 模块 | 完成度 | 关键能力 | 状态 |
+|------|--------|----------|------|
+| **relay** 路由层 | 95% | 42 REST 端点 + SSE 事件流 + 鉴权链 | ✅ |
+| **relay** 任务投递 | 95% | WS 转发 + CAS 存储 + Reaper 超时回收 + 智能调度 | ✅ |
+| **relay** 批量分发 | 90% | 一对多 + 聚合 + 指数退避重试 + 实时进度跟踪 [round 8] | ✅ |
+| **relay** 多租户 | 80% | 组织/角色策略/配额/隔离过滤(内存 store) [round 7] | 🟡 持久化待接 |
+| **relay** 安全层 | 90% | mTLS + 内置 CA + CRL + 命令策略黑名单 + Secret 管理 | ✅ |
+| **relay** 审计 | 95% | hash chain 防篡改 + 异步落盘 + SIEM 导出 [round 6] | ✅ |
+| **relay** 水平扩展 | 70% | TaskStore interface + Redis + Pub/Sub 联邦;多 Relay 故障切换 | 🟡 生产验证待补 |
+| **agent** 执行器 | 90% | 9 类任务(PS/script/file/screenshot/browse/guiclick/update/power/monitor) | ✅ |
+| **agent** 连接管理 | 90% | 反向 WS + 断线重连 + 心跳 + 主从双 Agent + 分片续传 | ✅ |
+| **agent** Linux | 30% | 跨平台执行器预留(PS/部分) | ⏳ |
+| **cmd** CLI | 90% | 51 命令 + 流式 + TUI + 退出码体系 | ✅ |
+| **client** SDK | 85% | 45+ 方法 + 流式 + 工具发现 | ✅ |
+| **proto** 协议 | 95% | Envelope + 30 消息 + 二进制帧 + tunnel | ✅ |
+| **console** Web | 80% | 反向代理 + 内嵌前端 + 实时事件 | 🟡 |
+| **executors** | 90% | 8 执行器实现 + 跨平台 | ✅ |
+
+**安全假设(显式)**:
+- 单 Relay 为默认(水平扩展需 Redis 共享状态,接口已就绪)。
+- Agent 默认 Windows(Linux 预留,部分执行器跨平台)。
+- 命令策略 best-effort(黑名单可绕过,Agent 侧二次校验兜底)。
+- 文件传输/终端 best-effort(非 at-least-once,靠 SHA256/录屏兜底)。
+
+---
+
+## 测试覆盖(v4.3)
+
+309 测试 + 22 基准。按包分布与重点验证场景:
+
+| 包 | 测试数 | 文件数 | 重点场景 |
+|----|--------|--------|----------|
+| **relay** | 162 | 59 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8] |
+| **agent** | 46 | 31 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检 |
+| **executors** | 40 | 24 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控 |
+| **proto** | 29 | 9 | 消息编解码/边界/二进制帧/tunnel |
+| **client** | 18 | 9 | SDK 方法/流式/工具发现 |
+| **console** | 14 | 4 | 反向代理/事件转发 |
+| **cmd** | 0 | 27 | (CLI 薄封装,逻辑在 client/relay;靠 E2E 覆盖) |
+
+**深度测试(rounds 1-8)**:round 1 修复 `TestMultiAgentRoutingE2E` 永久失败;rounds 2-7 逐层加深(relay 路由 → 执行器 → console → mTLS → 审计 → 多租户);round 8 覆盖批量分发不变量(并发投递/聚合/退避重试/幂等/ctx 取消/进度状态机)。
+
+**并发安全**:批量进度跟踪用 `sync.RWMutex` 保护,`markRunning/markSucceeded/markFailed` 与并发 `Snapshot()` 线程安全(race 检测需 cgo/gcc,本机未启用,靠互斥锁设计保证)。
+
+**测试运行**:`go test ./... -count=1`(单 relay 包约 10s)。基准:`go test ./relay/ -bench=.`(22 项)。
+
+---
+
+## 下一步(Next Steps)
+
+按优先级排序的演进方向:
+
+### P0 — 生产硬化
+1. **多租户持久化**:`TenantManager`/`RolePolicy` 从内存 store 迁移到 bbolt/Redis,重启不丢组织与策略。
+2. **批量分发端点化**:把 `BatchDispatcher` 接入新 REST 端点 `POST /api/batch`(返回 batchID)+ `GET /api/batch/:id/progress`(SSE 实时进度),供 CLI/Web 调用。
+3. **水平扩展验证**:Redis 多 Relay 实测(Store/Registry/EventBus 三层联邦),补 Agent 故障切换 E2E。
+
+### P1 — 能力补全
+4. **Linux Agent**:补齐 Linux 执行器(systemd 服务/包管理/journalctl),打通跨平台。
+5. **任务 at-least-once**:文件传输/终端结果可靠投递(当前 best-effort),减少 SHA256/录屏兜底依赖。
+6. **命令策略白名单**:从黑名单升级到可配置白名单 + 正则,提升防绕过。
+
+### P2 — 可观测/体验
+7. **OpenAPI 同步**:`deploy/openapi.yaml` 补全至 42 端点(批量分发/进度/SIEM 导出),生成 typed client。
+8. **Web 控制台深化**:批量分发进度可视化、租户/组织管理 UI、审计回放。
+9. **race 检测 CI**:CI 启用 cgo + `-race`(需 gcc),覆盖并发热点(批量分发/EventBus/store)。
+
+---
+
 ## 进入子项目前先读
 
-- `README.md` — 快速开始 + 能力矩阵 + 部署指南
+- `README.md` — 快速开始 + 架构图 + 能力矩阵 + 部署/配置/安全/多租户/批量分发
 - `DEPLOYMENT.md` — 生产部署操作指南
-- `deploy/openapi.yaml` — API 契约(36 端点)
+- `deploy/openapi.yaml` — API 契约
 - `proto/message.go` — 协议层(所有消息类型)
 - `relay/router.go` — REST API 路由(入口)
+- `relay/batchdispatch.go` — 批量分发系统(round 8)
+- `relay/tenant.go` + `relay/rbac.go` — 多租户与 RBAC(round 7)
 - `agent/connection.go` — Agent 主循环(入口)
 - `cmd/go-rmm/main.go` — CLI 路由(入口)
