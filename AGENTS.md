@@ -155,6 +155,7 @@ go-rmm/
 | 模块 | 完成度 | 关键能力 | 状态 |
 |------|--------|----------|------|
 | **relay** 路由层 | 95% | 42 REST 端点 + SSE 事件流 + 鉴权链 | ✅ |
+| **relay** 可观测性 | 90% | /api/metrics(JSON)+ /metrics(Prom)+ xfer 传输指标(M1)+ pprof | ✅ |
 | **relay** 任务投递 | 95% | WS 转发 + CAS 存储 + Reaper 超时回收 + 智能调度 | ✅ |
 | **relay** 批量分发 | 90% | 一对多 + 聚合 + 指数退避重试 + 实时进度跟踪 [round 8] | ✅ |
 | **relay** 多租户 | 80% | 组织/角色策略/配额/隔离过滤(内存 store) [round 7] | 🟡 持久化待接 |
@@ -219,7 +220,7 @@ go-rmm/
 7. **OpenAPI 同步**:`deploy/openapi.yaml` 补全至 42 端点(批量分发/进度/SIEM 导出),生成 typed client。
 8. **Web 控制台深化**:批量分发进度可视化、租户/组织管理 UI、审计回放。
 9. **race 检测 CI**:CI 启用 cgo + `-race`(需 gcc),覆盖并发热点(批量分发/EventBus/store)。
-10. **Agent Prometheus 指标端点**:暴露 `xfer_sessions_active`/`xfer_bytes_total`/`xfer_failures_total`/`reconnect_count`(Q4 计数器已就绪,只缺 HTTP 端点 + 采集配置)。
+10. **Agent Prometheus 指标端点**:暴露 `xfer_sessions_active`/`xfer_bytes_total`/`xfer_failures_total`/`reconnect_count`(Q4 计数器已就绪,Relay 侧 M1 已暴露 xfer 指标,Agent 侧 HTTP 端点待补)。
 11. **文件传输 per-chunk SHA256 强制**:当前单片 `.ftpartNN` 无 hash 校验(合并后整文件校验兜底),加 per-chunk 强制可提前发现损坏,但需协议改动(滚动升级兼容性风险)。
 12. **Relay 速率限制**:按 agentID 维度令牌桶(`golang.org/x/time/rate`),防并发上传吃满 Agent 上行带宽影响心跳。
 
