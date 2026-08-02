@@ -13,6 +13,7 @@ import (
 // Metrics Relay 运行指标（C10 可观测性）。
 //
 // D7 扩展：新增 events_dropped / tasks_cancelled / tasks_acked / tasks_nacked / tasks_reaped。
+// M1 扩展：新增文件传输指标(uploads/downloads/bytes/failures),Relay 作转发中枢天然能统计。
 // 用原子计数器（无锁），通过 GET /api/metrics 暴露。
 type Metrics struct {
 	AgentsOnline    int64 // 当前在线 Agent 数
@@ -27,6 +28,13 @@ type Metrics struct {
 	TasksNacked    int64 // 收到 NACK 数
 	TasksReaped    int64 // 被 reaper 回退的任务数
 	EventsDropped  int64 // SSE 丢弃事件数（慢消费者）
+	// M1 文件传输指标(Relay 转发时统计,Agent 侧也有自己的计数器但无 HTTP server 暴露)
+	UploadsTotal      int64 // 累计上传次数(成功)
+	DownloadsTotal    int64 // 累计下载次数(含部分成功)
+	UploadBytes       int64 // 累计上传字节(Agent 校验通过的)
+	DownloadBytes     int64 // 累计下载字节(发给 Console 的)
+	UploadFailures    int64 // 上传失败次数(Agent 校验失败/中断)
+	DownloadFailures  int64 // 下载失败次数(ctx 超时/连接断)
 	StartedAt      time.Time
 }
 
@@ -59,22 +67,47 @@ func (m *Metrics) Inc(field string) {
 // SetAgentsOnline 设置在线 Agent 数。
 func (m *Metrics) SetAgentsOnline(n int) { atomic.StoreInt64(&m.AgentsOnline, int64(n)) }
 
+// IncXfer 文件传输计数器自增(M1)。field 取值:
+// upload_success / download_success / upload_bytes / download_bytes / upload_fail / download_fail
+func (m *Metrics) IncXfer(field string, n int64) {
+	switch field {
+	case "upload_success":
+		atomic.AddInt64(&m.UploadsTotal, n)
+	case "download_success":
+		atomic.AddInt64(&m.DownloadsTotal, n)
+	case "upload_bytes":
+		atomic.AddInt64(&m.UploadBytes, n)
+	case "download_bytes":
+		atomic.AddInt64(&m.DownloadBytes, n)
+	case "upload_fail":
+		atomic.AddInt64(&m.UploadFailures, n)
+	case "download_fail":
+		atomic.AddInt64(&m.DownloadFailures, n)
+	}
+}
+
 // Snapshot 返回指标快照。
 func (m *Metrics) Snapshot() map[string]any {
 	return map[string]any{
-		"agents_online":    atomic.LoadInt64(&m.AgentsOnline),
-		"tasks_submitted":  atomic.LoadInt64(&m.TasksSubmitted),
-		"tasks_dispatched": atomic.LoadInt64(&m.TasksDispatched),
-		"tasks_completed":  atomic.LoadInt64(&m.TasksCompleted),
-		"tasks_failed":     atomic.LoadInt64(&m.TasksFailed),
-		"tasks_blocked":    atomic.LoadInt64(&m.TasksBlocked),
-		"tasks_cancelled":  atomic.LoadInt64(&m.TasksCancelled),
-		"tasks_acked":      atomic.LoadInt64(&m.TasksAcked),
-		"tasks_nacked":     atomic.LoadInt64(&m.TasksNacked),
-		"tasks_reaped":     atomic.LoadInt64(&m.TasksReaped),
-		"events_dropped":   atomic.LoadInt64(&m.EventsDropped),
-		"uptime_seconds":   int(time.Since(m.StartedAt).Seconds()),
-		"goroutines":       runtime.NumGoroutine(),
+		"agents_online":        atomic.LoadInt64(&m.AgentsOnline),
+		"tasks_submitted":      atomic.LoadInt64(&m.TasksSubmitted),
+		"tasks_dispatched":     atomic.LoadInt64(&m.TasksDispatched),
+		"tasks_completed":      atomic.LoadInt64(&m.TasksCompleted),
+		"tasks_failed":         atomic.LoadInt64(&m.TasksFailed),
+		"tasks_blocked":        atomic.LoadInt64(&m.TasksBlocked),
+		"tasks_cancelled":      atomic.LoadInt64(&m.TasksCancelled),
+		"tasks_acked":          atomic.LoadInt64(&m.TasksAcked),
+		"tasks_nacked":         atomic.LoadInt64(&m.TasksNacked),
+		"tasks_reaped":         atomic.LoadInt64(&m.TasksReaped),
+		"events_dropped":       atomic.LoadInt64(&m.EventsDropped),
+		"xfer_uploads_total":   atomic.LoadInt64(&m.UploadsTotal),
+		"xfer_downloads_total": atomic.LoadInt64(&m.DownloadsTotal),
+		"xfer_upload_bytes":    atomic.LoadInt64(&m.UploadBytes),
+		"xfer_download_bytes":  atomic.LoadInt64(&m.DownloadBytes),
+		"xfer_upload_failures": atomic.LoadInt64(&m.UploadFailures),
+		"xfer_download_failures": atomic.LoadInt64(&m.DownloadFailures),
+		"uptime_seconds":       int(time.Since(m.StartedAt).Seconds()),
+		"goroutines":           runtime.NumGoroutine(),
 	}
 }
 
@@ -122,6 +155,13 @@ func (r *Relay) handlePromMetrics(w http.ResponseWriter, req *http.Request) {
 	writeProm("gormmm_tasks_cancelled_total", "被取消的任务数", "counter", toInt64(snap["tasks_cancelled"]))
 	writeProm("gormmm_tasks_reaped_total", "被 reaper 回退的任务数", "counter", toInt64(snap["tasks_reaped"]))
 	writeProm("gormmm_events_dropped_total", "SSE 丢弃事件数", "counter", toInt64(snap["events_dropped"]))
+	// M1 文件传输指标
+	writeProm("gormmm_xfer_uploads_total", "累计上传次数(成功)", "counter", toInt64(snap["xfer_uploads_total"]))
+	writeProm("gormmm_xfer_downloads_total", "累计下载次数", "counter", toInt64(snap["xfer_downloads_total"]))
+	writeProm("gormmm_xfer_upload_bytes_total", "累计上传字节", "counter", toInt64(snap["xfer_upload_bytes"]))
+	writeProm("gormmm_xfer_download_bytes_total", "累计下载字节", "counter", toInt64(snap["xfer_download_bytes"]))
+	writeProm("gormmm_xfer_upload_failures_total", "上传失败次数", "counter", toInt64(snap["xfer_upload_failures"]))
+	writeProm("gormmm_xfer_download_failures_total", "下载失败次数", "counter", toInt64(snap["xfer_download_failures"]))
 	writeProm("gormmm_uptime_seconds", "Relay 运行时长(秒)", "gauge", toInt64(snap["uptime_seconds"]))
 	writeProm("gormmm_goroutines", "Goroutine 数", "gauge", toInt64(snap["goroutines"]))
 }

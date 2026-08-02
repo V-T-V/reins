@@ -1197,6 +1197,9 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 			rate := float64(complete.Bytes) / 1024 / 1024 / elapsed.Seconds()
 			log.Printf("[xfer] 上传完成 %s agent=%s: %d bytes %.2f MB/s %s sha=%s",
 				transferID, agentID, complete.Bytes, rate, elapsed.Truncate(time.Millisecond), complete.SHA256Actual[:16])
+			// M1:文件传输指标埋点(成功次数 + 字节)
+			metrics.IncXfer("upload_success", 1)
+			metrics.IncXfer("upload_bytes", complete.Bytes)
 			if r.audit != nil {
 				r.audit.Log(AuditEntry{Event: "file_upload", AgentID: agentID, Detail: fmt.Sprintf("%s %d bytes sha=%s", transferID, complete.Bytes, complete.SHA256Actual)})
 			}
@@ -1208,6 +1211,7 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 			})
 		} else {
 			log.Printf("[xfer] 上传失败 %s agent=%s %s: %s", transferID, agentID, elapsed.Truncate(time.Millisecond), complete.Error)
+			metrics.IncXfer("upload_fail", 1) // M1:失败计数
 			writeJSON(w, http.StatusInternalServerError, errMap(fmt.Errorf("Agent 校验失败: %s", complete.Error)))
 		}
 	case <-ctx.Done():
@@ -1329,6 +1333,13 @@ done:
 	if elapsed.Seconds() > 0 && totalWritten > 0 {
 		log.Printf("[xfer] 下载完成 %s agent=%s: %d bytes %.2f MB/s %s",
 			transferID, agentID, totalWritten, rate, elapsed.Truncate(time.Millisecond))
+	}
+	// M1:下载指标埋点。totalWritten>0 算成功(可能部分),=0 且 ctx 超时算失败
+	if totalWritten > 0 {
+		metrics.IncXfer("download_success", 1)
+		metrics.IncXfer("download_bytes", totalWritten)
+	} else {
+		metrics.IncXfer("download_fail", 1)
 	}
 	if r.audit != nil {
 		r.audit.Log(AuditEntry{Event: "file_download", AgentID: agentID, Detail: fmt.Sprintf("%s %d bytes", transferID, totalWritten)})
