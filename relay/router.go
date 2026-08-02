@@ -1068,6 +1068,7 @@ func (r *Relay) handleShellClose(w http.ResponseWriter, req *http.Request) {
 // 4. Agent 收完算 SHA256 + 回 complete
 // Relay 不落盘，仅 256KB 缓冲转发。
 func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
+	xferStart := time.Now() // Q4:传输耗时日志
 	if err := r.authorize(req); err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
@@ -1191,7 +1192,11 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 	// P1-P10:加 ctx.Done() 让客户端断开及时取消
 	select {
 	case complete := <-completeCh:
+		elapsed := time.Since(xferStart) // Q4:传输耗时
 		if complete.Success {
+			rate := float64(complete.Bytes) / 1024 / 1024 / elapsed.Seconds()
+			log.Printf("[xfer] 上传完成 %s agent=%s: %d bytes %.2f MB/s %s sha=%s",
+				transferID, agentID, complete.Bytes, rate, elapsed.Truncate(time.Millisecond), complete.SHA256Actual[:16])
 			if r.audit != nil {
 				r.audit.Log(AuditEntry{Event: "file_upload", AgentID: agentID, Detail: fmt.Sprintf("%s %d bytes sha=%s", transferID, complete.Bytes, complete.SHA256Actual)})
 			}
@@ -1202,6 +1207,7 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 				"status":      "uploaded",
 			})
 		} else {
+			log.Printf("[xfer] 上传失败 %s agent=%s %s: %s", transferID, agentID, elapsed.Truncate(time.Millisecond), complete.Error)
 			writeJSON(w, http.StatusInternalServerError, errMap(fmt.Errorf("Agent 校验失败: %s", complete.Error)))
 		}
 	case <-ctx.Done():
@@ -1218,6 +1224,7 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 
 // handleTransferDownload 下载：Agent 读文件 → 二进制帧 → Relay → Console HTTP response。
 func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request) {
+	xferStart := time.Now() // Q4:传输耗时
 	if err := r.authorize(req); err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
@@ -1317,6 +1324,12 @@ func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request)
 		}
 	}
 done:
+	elapsed := time.Since(xferStart) // Q4:下载耗时日志
+	rate := float64(totalWritten) / 1024 / 1024 / elapsed.Seconds()
+	if elapsed.Seconds() > 0 && totalWritten > 0 {
+		log.Printf("[xfer] 下载完成 %s agent=%s: %d bytes %.2f MB/s %s",
+			transferID, agentID, totalWritten, rate, elapsed.Truncate(time.Millisecond))
+	}
 	if r.audit != nil {
 		r.audit.Log(AuditEntry{Event: "file_download", AgentID: agentID, Detail: fmt.Sprintf("%s %d bytes", transferID, totalWritten)})
 	}

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -33,6 +34,12 @@ type TransferEngine struct {
 	policy   *fileTransferPolicy // B3 修复：路径校验
 	workspace string              // FT:相对路径解析基准(避免落到 SYSTEM CWD)
 	pathInUse map[string]struct{} // R1 修复:upload path 互斥,防并发同 path 双写 .part
+	// Q4:文件传输累计计数器(原子操作,无锁)。供未来 metrics 端点/健康检查读取。
+	uploadBytes   atomic.Int64
+	downloadBytes atomic.Int64
+	uploadCount   atomic.Int64
+	downloadCount atomic.Int64
+	failedCount   atomic.Int64
 }
 
 // fileTransferPolicy 复用 executors.FilePolicy 的路径校验逻辑。
@@ -130,9 +137,6 @@ type transferSession struct {
 	// 此锁保证 file.Write + hash.Write + bytesDone 串行化,杜绝乱序写入与 data race。
 	mu sync.Mutex
 }
-
-// hashWriter 包装 sha256 使其实现 io.Writer。
-type hashWriter struct{ sum [32]byte; w io.Writer; h bool }
 
 // HandleInit 处理 file_xfer_init：准备文件，返回 ready（含续传偏移）。
 func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTransferReady {
@@ -238,9 +242,10 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 			ready.Reason = "文件不存在: " + err.Error()
 			return ready
 		}
-		// R5:offset 边界检查。offset 超过文件大小直接拒绝,避免读到 EOF 返回不完整数据。
-		if init.Offset > 0 && init.Offset > info.Size() {
-			ready.Reason = fmt.Sprintf("offset %d 超过文件大小 %d", init.Offset, info.Size())
+		// R5+Q5:offset 边界检查。
+		// offset 超过文件大小直接拒绝(用 >= 而非 >,offset==size 是空下载,静默成功易误导)。
+		if init.Offset > 0 && init.Offset >= info.Size() {
+			ready.Reason = fmt.Sprintf("offset %d 超过或等于文件大小 %d(无数据可读)", init.Offset, info.Size())
 			return ready
 		}
 		f, err := os.Open(init.Path)
@@ -260,6 +265,13 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 				limit = info.Size() - init.Offset
 				if limit < 0 {
 					limit = 0
+				}
+				// Q5:收敛到 0 说明 offset 已在文件末尾,拒绝而非静默返回空数据
+				if limit == 0 {
+					f.Close()
+					ready.Reason = fmt.Sprintf("offset %d + limit %d 越界(文件大小 %d),无可读数据",
+						init.Offset, init.Size, info.Size())
+					return ready
 				}
 				log.Printf("[xfer] limit 收敛 %s: offset=%d + limit=%d > size=%d → limit=%d",
 					init.TransferID, init.Offset, init.Size, info.Size(), limit)
@@ -407,9 +419,15 @@ func (te *TransferEngine) completeUpload(id string, success bool, bytes int64, h
 	}
 	if success {
 		cb(proto.FileTransferComplete{TransferID: id, Success: true, SHA256Actual: hashOrError, Bytes: bytes})
+		// Q4:累加成功计数(只对真正的成功传输计数,非 ALREADY_COMPLETE 快路径)
+		if hashOrError != "" && len(hashOrError) >= 32 { // sha256 hex 才算真正完成
+			te.uploadBytes.Add(bytes)
+			te.uploadCount.Add(1)
+		}
 		log.Printf("[xfer] 上传完成 %s: %d bytes sha256=%s", id, bytes, hashOrError[:16])
 	} else {
 		cb(proto.FileTransferComplete{TransferID: id, Success: false, Bytes: bytes, Error: hashOrError})
+		te.failedCount.Add(1) // Q4:失败计数
 		log.Printf("[xfer] 上传失败 %s: %s", id, hashOrError)
 	}
 }
@@ -482,6 +500,8 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 	delete(te.sessions, transferID)
 	te.mu.Unlock()
 	completeCb(proto.FileTransferComplete{TransferID: transferID, Success: true, SHA256Actual: hash, Bytes: sess.bytesDone})
+	te.downloadBytes.Add(sess.bytesDone) // Q4:下载字节计数
+	te.downloadCount.Add(1)              // Q4:下载次数计数
 	log.Printf("[xfer] 下载完成 %s: %d bytes sha256=%s", transferID, sess.bytesDone, hash[:16])
 }
 

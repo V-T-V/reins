@@ -160,7 +160,7 @@ func fileUploadChunked(cfg config, agentID, localPath, remotePath string, totalS
 				}
 				off := int64(j.idx) * chunkSz
 				thisSize := chunkLen(j.idx)
-				chunkName := fmt.Sprintf("%s.ftpart%02d", remotePath, j.idx)
+				chunkName := fmt.Sprintf("%s.ftpart%04d", remotePath, j.idx)
 
 				var lastErr error
 				for retry := 0; retry < chunkMaxRetryArg; retry++ {
@@ -432,7 +432,7 @@ foreach ($d in @("$env:ProgramFiles\go-rmm-master","$env:ProgramFiles\go-rmm-sla
 $wsCandidates = $wsCandidates | Select-Object -Unique
 $ws = $null
 foreach ($w in $wsCandidates) {
-    if (Test-Path (Join-Path $w '%s.ftpart00')) { $ws = $w; break }
+    if (Test-Path (Join-Path $w '%s.ftpart0000')) { $ws = $w; break }
 }
 if (-not $ws) { $ws = (Get-Location).Path }
 `
@@ -448,7 +448,7 @@ func buildMergeCommand(remotePath string, totalChunks int) string {
 # 1. 探测 workspace(分片所在目录)
 $partsDir = $ws
 $base = '%s'
-$first = Join-Path $partsDir ($base + '.ftpart00')
+$first = Join-Path $partsDir ($base + '.ftpart0000')
 if (-not (Test-Path $first)) {
     Write-Output "MERGE_FAIL partsdir=$partsDir notfound"
     exit 1
@@ -457,7 +457,7 @@ if (-not (Test-Path $first)) {
 $dst = Join-Path $partsDir $base
 $parts = @()
 for ($i = 0; $i -lt %d; $i++) {
-    $part = Join-Path $partsDir ($base + '.ftpart' + $i.ToString('00'))
+    $part = Join-Path $partsDir ($base + '.ftpart' + $i.ToString('0000'))
     # 兜底:正式名不存在时,尝试 .part 后缀(Agent rename 偶尔未完成的临时文件)
     if (-not (Test-Path $part)) { $part = $part + '.part' }
     if (Test-Path $part) { $parts += $part }
@@ -562,25 +562,4 @@ func splitBy(s, sep string) []string {
 	}
 	parts = append(parts, cur)
 	return parts
-}
-
-// newPostRequest 构造 POST 请求(避免主文件 import bytes 冲突)。
-func newPostRequest(u string, body []byte) (*http.Request, error) {
-	return http.NewRequest("POST", u, bytesReader(body))
-}
-
-func bytesReader(b []byte) io.Reader { return &byteReader{data: b} }
-
-type byteReader struct {
-	data []byte
-	pos  int
-}
-
-func (r *byteReader) Read(p []byte) (int, error) {
-	if r.pos >= len(r.data) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.data[r.pos:])
-	r.pos += n
-	return n, nil
 }

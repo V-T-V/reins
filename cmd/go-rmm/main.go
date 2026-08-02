@@ -730,34 +730,15 @@ func cmdFile(cfg config, args []string) error {
 //   - 全部传完后发 powershell 合并 + 校验 SHA256
 // 解决单请求传 1GB 经 nginx 504 超时的问题。
 func fileUpload(cfg config, args []string) error {
-	// O4:先剥离分片参数 flag(--concurrency/--chunk-size/--chunk-retry 及其值),
-	// 避免 extractTwoPos 把 flag 的值误当位置参数。
-	args = stripValueFlags(args, "--concurrency", "--chunk-size", "--chunk-retry")
+	// Q3:统一解析分片 flag(剥离 + 应用 + 校验上限)
+	var flagErr error
+	args, flagErr = applyChunkFlags(args)
+	if flagErr != nil {
+		return flagErr
+	}
 
 	agentID := extractArg(args, "-a")
 	localPath, remotePath, rest := extractTwoPos(args, "-a", agentID)
-
-	// O4:分片参数 flag(可选,在 -a 前后均可)
-	if v := flagVal(args, "--concurrency"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			concurrencyArg = n
-		}
-	}
-	if v := flagVal(args, "--chunk-size"); v != "" {
-		if n, err := parseSize(v); err == nil && n > 0 {
-			// R3:上限 128MB,防 OOM(流式上传后内存占用小,但仍需限制单片大小)
-			if n > 128*1024*1024 {
-				return fmt.Errorf("--chunk-size 超过上限 128M: %s", v)
-			}
-			chunkSizeArg = n
-		}
-	}
-	if v := flagVal(args, "--chunk-retry"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			chunkMaxRetryArg = n
-		}
-	}
-
 	if len(rest) > 0 {
 		_ = rest
 	}
@@ -884,26 +865,11 @@ func fileUpload(cfg config, args []string) error {
 // A7:支持 - 作为 localPath,写 stdout(管道: go-rmm file download -a x remote - | gzip > f.gz)
 // O3:大文件(>50MB)自动走分片下载(并发 + 断点续传),经 nginx 不再依赖单连接超时
 func fileDownload(cfg config, args []string) error {
-	// O4:剥离分片参数 flag,避免 extractTwoPos 把值误当位置参数
-	args = stripValueFlags(args, "--concurrency", "--chunk-size", "--chunk-retry")
-	if v := flagVal(args, "--concurrency"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			concurrencyArg = n
-		}
-	}
-	if v := flagVal(args, "--chunk-size"); v != "" {
-		if n, err := parseSize(v); err == nil && n > 0 {
-			// R3:上限 128MB,防 OOM(流式上传后内存占用小,但仍需限制单片大小)
-			if n > 128*1024*1024 {
-				return fmt.Errorf("--chunk-size 超过上限 128M: %s", v)
-			}
-			chunkSizeArg = n
-		}
-	}
-	if v := flagVal(args, "--chunk-retry"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			chunkMaxRetryArg = n
-		}
+	// Q3:统一解析分片 flag(剥离 + 应用 + 校验上限)
+	var flagErr error
+	args, flagErr = applyChunkFlags(args)
+	if flagErr != nil {
+		return flagErr
 	}
 
 	agentID := extractArg(args, "-a")
@@ -1427,6 +1393,34 @@ func parseSize(s string) (int64, error) {
 		return 0, err
 	}
 	return n * mult, nil
+}
+
+// applyChunkFlags 解析并应用分片相关的三个 flag(--concurrency/--chunk-size/--chunk-retry),
+// 同时从 args 中剥离它们(避免 extractTwoPos 把 flag 的值误当位置参数)。
+// Q3:抽公共函数消除 fileUpload/fileDownload 的重复解析逻辑(两处逐字相同)。
+// 返回剥离 flag 后的 args;chunk-size 超过 128MB 上限返回 error。
+func applyChunkFlags(args []string) ([]string, error) {
+	args = stripValueFlags(args, "--concurrency", "--chunk-size", "--chunk-retry")
+	if v := flagVal(args, "--concurrency"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			concurrencyArg = n
+		}
+	}
+	if v := flagVal(args, "--chunk-size"); v != "" {
+		if n, err := parseSize(v); err == nil && n > 0 {
+			// R3:上限 128MB,防 OOM(流式上传后内存占用小,但仍需限制单片大小)
+			if n > 128*1024*1024 {
+				return args, fmt.Errorf("--chunk-size 超过上限 128M: %s", v)
+			}
+			chunkSizeArg = n
+		}
+	}
+	if v := flagVal(args, "--chunk-retry"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			chunkMaxRetryArg = n
+		}
+	}
+	return args, nil
 }
 
 // === 进度跟踪(上传/下载共用,P0-#2 修复 ContentLength=-1 降级)===

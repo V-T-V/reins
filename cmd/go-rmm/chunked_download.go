@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -132,7 +131,7 @@ func fileDownloadChunked(cfg config, agentID, remotePath, localPath string, tota
 	partPrefix := localPath + ".ftpart"
 	completed := make(map[int]bool)
 	for i := 0; i < totalChunks; i++ {
-		partFile := fmt.Sprintf("%s%02d", partPrefix, i)
+		partFile := fmt.Sprintf("%s%04d", partPrefix, i)
 		if info, err := os.Stat(partFile); err == nil {
 			// 校验大小:已完成的片应有完整 chunkSz(最后一片可能更小)
 			expected := chunkSz
@@ -205,7 +204,7 @@ func fileDownloadChunked(cfg config, agentID, remotePath, localPath string, tota
 				}
 				off := int64(j.idx) * chunkSz
 				thisSize := chunkLen(j.idx)
-				partFile := fmt.Sprintf("%s%02d", partPrefix, j.idx)
+				partFile := fmt.Sprintf("%s%04d", partPrefix, j.idx)
 
 				var lastErr error
 				for retry := 0; retry < chunkMaxRetryArg; retry++ {
@@ -295,7 +294,7 @@ outer:
 	}
 	// 清理分片
 	for i := 0; i < totalChunks; i++ {
-		os.Remove(fmt.Sprintf("%s%02d", partPrefix, i))
+		os.Remove(fmt.Sprintf("%s%04d", partPrefix, i))
 	}
 
 	elapsed := time.Since(startTime)
@@ -380,7 +379,7 @@ func mergePartsLocal(partPrefix, dstFile string, totalChunks int) (string, error
 	mw := io.MultiWriter(f, hasher)
 	buf := make([]byte, 64*1024)
 	for i := 0; i < totalChunks; i++ {
-		partFile := fmt.Sprintf("%s%02d", partPrefix, i)
+		partFile := fmt.Sprintf("%s%04d", partPrefix, i)
 		pf, err := os.Open(partFile)
 		if err != nil {
 			return "", fmt.Errorf("打开分片 %d 失败: %w", i, err)
@@ -393,20 +392,3 @@ func mergePartsLocal(partPrefix, dstFile string, totalChunks int) (string, error
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
-
-// computeLocalFileSHA256 计算本地文件 SHA256(供下载校验后用)。
-func computeLocalFileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.CopyBuffer(h, f, make([]byte, 64*1024)); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// 保留 unused 引用避免编译报错(json 在错误路径用到)
-var _ = json.Marshal
