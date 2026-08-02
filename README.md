@@ -256,6 +256,54 @@ fmt.Printf("进度 %.0f%%, 成功 %d, 失败 %d\n",
 
 ---
 
+## 文件传输
+
+大文件传输走**并发分片 + 断点续传**,经 nginx 反代不再依赖单连接超时,跨 NAT 稳定可靠。
+
+### 能力概览
+
+| 特性 | 说明 |
+|------|------|
+| 并发分片 | `>50MB` 自动切 10MB/片 × 4 路并发(可调),重叠 RTT 提速 |
+| 断点续传 | 中断重跑自动跳过已传分片(按文件名+大小校验) |
+| 流式低内存 | SectionReader 边读边传,每 worker ~64KB(非整片缓冲) |
+| SHA256 双边校验 | Agent 算 hash 回传 + CLI 本地比对,合并后整文件校验 |
+| 进度 ETA | 瞬时速率(滑动窗口)+ 剩余时间预估 |
+| path 互斥 | 同 path 并发上传自动拒绝(防双写 `.part` 致 SHA256 不匹配) |
+| 已满快路径 | `.part` 已满时直接 rename + complete,不等 sender 跳字节 |
+| 孤儿分片 sweep | Agent 每 30 分钟清理 2 小时前的残留 `.ftpart*` |
+| 死连接 watchdog | 半开连接(NAT 超时)2×心跳无收包则强制重连,秒级恢复 |
+| 能力协商 | 分片下载需 Agent `xfer_offset` 能力,旧 Agent 显式拒绝 |
+
+### 用法
+
+```bash
+# 上传(大文件自动分片)
+go-rmm file upload -a <agent> <local> <remote>
+go-rmm file upload -a <agent> --concurrency 8 --chunk-size 20M --chunk-retry 5 <local> <remote>
+
+# 下载(大文件自动分片)
+go-rmm file download -a <agent> <remote> <local>
+go-rmm file download -a <agent> --concurrency 8 <remote> <local>
+```
+
+| flag | 默认 | 说明 |
+|------|------|------|
+| `--concurrency` | 4 | 并发上传/下载路数 |
+| `--chunk-size` | 10M | 每片大小(上限 128M,防 OOM) |
+| `--chunk-retry` | 3 | 每片失败重试次数(指数退避 1s/2s/4s) |
+
+### 实测性能
+
+| 场景 | 文件 | 速率 | 说明 |
+|------|------|------|------|
+| 本机(loopback) | 500MB | ~30 MB/s | 磁盘瓶颈,并发无明显优势(RTT≈0) |
+| 跨网络(家庭上行) | 1GB | ~0.54 MB/s | 带宽硬瓶颈,并发提速 ~22% |
+
+> 注:并发收益在**高延迟链路**(卫星/跨境/移动网络)最明显;家庭上行带宽瓶颈下收益有限。
+
+---
+
 ## API
 
 42 个 REST 端点(`relay/router.go`),完整契约见 [deploy/openapi.yaml](./deploy/openapi.yaml)。分类:

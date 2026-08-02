@@ -2,7 +2,7 @@
 
 ## 项目内容(What)
 
-Go 实现的**企业级零信任远程访问平台**(v4.3)——通过反向 WebSocket 中继,让 CLI / Web 控制台远程驱动 Agent 执行全维度运维操作。对标 Teleport / Tailscale。
+Go 实现的**企业级零信任远程访问平台**(v4.3.3)——通过反向 WebSocket 中继,让 CLI / Web 控制台远程驱动 Agent 执行全维度运维操作。对标 Teleport / Tailscale。
 
 ### 三组件架构
 
@@ -48,7 +48,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G2**:CLI/Web 下发任务 → Relay 路由 → Agent 执行 → 结果实时回流(SSE/轮询)。
 - **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
-- **G5**(v4.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
+- **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
 - **成功标准**:169 Go 文件 / 31.8K 行 / 309 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-8)。
 
 ## 架构假设(4 项显式假设)
@@ -58,7 +58,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 3. **PowerShell 为 Windows 核心执行器**:-EncodedCommand(UTF16LE),命令策略黑名单 + Agent 侧二次校验。
 4. **bbolt 单文件为默认持久化**:Redis 后端可选(TaskStore interface 切换)。
 
-## 项目结构(v4.3)
+## 项目结构(v4.3.3)
 
 ```
 go-rmm/
@@ -131,7 +131,7 @@ go-rmm/
 └── Makefile            # 世界级构建系统(15 targets)
 ```
 
-## 指标(v4.3)
+## 指标(v4.3.3)
 
 | 项目 | 数值 |
 |------|------|
@@ -148,7 +148,7 @@ go-rmm/
 
 ---
 
-## 模块完成度(v4.3)
+## 模块完成度(v4.3.3)
 
 每个核心包的功能完成度与成熟度。✅ 生产就绪 / 🟡 骨架/接口先行 / ⏳ 预留未实现。
 
@@ -162,7 +162,8 @@ go-rmm/
 | **relay** 审计 | 95% | hash chain 防篡改 + 异步落盘 + SIEM 导出 [round 6] | ✅ |
 | **relay** 水平扩展 | 70% | TaskStore interface + Redis + Pub/Sub 联邦;多 Relay 故障切换 | 🟡 生产验证待补 |
 | **agent** 执行器 | 90% | 9 类任务(PS/script/file/screenshot/browse/guiclick/update/power/monitor) | ✅ |
-| **agent** 连接管理 | 90% | 反向 WS + 断线重连 + 心跳 + 主从双 Agent + 分片续传 | ✅ |
+| **agent** 连接管理 | 95% | 反向 WS + 断线重连 + 心跳 + 主从双 Agent + 死连接 watchdog(S1)+ 孤儿分片 sweep(S3) | ✅ |
+| **agent** 文件传输 | 90% | 并发分片 + 断点续传 + path 互斥(R1)+ 已满快路径(R2)+ 流式低内存(R3)+ 能力协商(S4) | ✅ |
 | **agent** Linux | 30% | 跨平台执行器预留(PS/部分) | ⏳ |
 | **cmd** CLI | 90% | 51 命令 + 流式 + TUI + 退出码体系 | ✅ |
 | **client** SDK | 85% | 45+ 方法 + 流式 + 工具发现 | ✅ |
@@ -178,19 +179,19 @@ go-rmm/
 
 ---
 
-## 测试覆盖(v4.3)
+## 测试覆盖(v4.3.3)
 
 309 测试 + 22 基准。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
 | **relay** | 162 | 59 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8] |
-| **agent** | 46 | 31 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检 |
+| **agent** | 51 | 32 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog) |
 | **executors** | 40 | 24 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控 |
 | **proto** | 29 | 9 | 消息编解码/边界/二进制帧/tunnel |
 | **client** | 18 | 9 | SDK 方法/流式/工具发现 |
 | **console** | 14 | 4 | 反向代理/事件转发 |
-| **cmd** | 0 | 27 | (CLI 薄封装,逻辑在 client/relay;靠 E2E 覆盖) |
+| **cmd** | 12 | 28 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3 新增测试] |
 
 **深度测试(rounds 1-8)**:round 1 修复 `TestMultiAgentRoutingE2E` 永久失败;rounds 2-7 逐层加深(relay 路由 → 执行器 → console → mTLS → 审计 → 多租户);round 8 覆盖批量分发不变量(并发投递/聚合/退避重试/幂等/ctx 取消/进度状态机)。
 
@@ -218,6 +219,9 @@ go-rmm/
 7. **OpenAPI 同步**:`deploy/openapi.yaml` 补全至 42 端点(批量分发/进度/SIEM 导出),生成 typed client。
 8. **Web 控制台深化**:批量分发进度可视化、租户/组织管理 UI、审计回放。
 9. **race 检测 CI**:CI 启用 cgo + `-race`(需 gcc),覆盖并发热点(批量分发/EventBus/store)。
+10. **Agent Prometheus 指标端点**:暴露 `xfer_sessions_active`/`xfer_bytes_total`/`xfer_failures_total`/`reconnect_count`(Q4 计数器已就绪,只缺 HTTP 端点 + 采集配置)。
+11. **文件传输 per-chunk SHA256 强制**:当前单片 `.ftpartNN` 无 hash 校验(合并后整文件校验兜底),加 per-chunk 强制可提前发现损坏,但需协议改动(滚动升级兼容性风险)。
+12. **Relay 速率限制**:按 agentID 维度令牌桶(`golang.org/x/time/rate`),防并发上传吃满 Agent 上行带宽影响心跳。
 
 ---
 

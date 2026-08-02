@@ -1400,7 +1400,8 @@ func parseSize(s string) (int64, error) {
 // Q3:抽公共函数消除 fileUpload/fileDownload 的重复解析逻辑(两处逐字相同)。
 // 返回剥离 flag 后的 args;chunk-size 超过 128MB 上限返回 error。
 func applyChunkFlags(args []string) ([]string, error) {
-	args = stripValueFlags(args, "--concurrency", "--chunk-size", "--chunk-retry")
+	// 先从原始 args 解析 flag 值(此时 flag 还在),再做剥离(给 extractTwoPos 用)。
+	// 顺序不能反:strip 后 flag 消失,flagVal 就找不到了。
 	if v := flagVal(args, "--concurrency"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			concurrencyArg = n
@@ -1420,6 +1421,7 @@ func applyChunkFlags(args []string) ([]string, error) {
 			chunkMaxRetryArg = n
 		}
 	}
+	args = stripValueFlags(args, "--concurrency", "--chunk-size", "--chunk-retry")
 	return args, nil
 }
 
