@@ -175,9 +175,16 @@ type Register struct {
 }
 
 // Heartbeat 心跳载荷。Seq 为递增序号，用于检测丢包。
+// V1 可观测性:可选携带 Agent 传输计数器(全 omitempty,旧版 Agent 不填=不上报,Relay 零兼容成本)。
 type Heartbeat struct {
 	AgentID string `json:"agent_id"`
 	Seq     int64  `json:"seq"`
+	// V1:Agent 传输累计计数器(由 transfers.SnapshotStats 填充)
+	UploadBytes   int64 `json:"ub,omitempty"` // 累计上传字节
+	DownloadBytes int64 `json:"db,omitempty"` // 累计下载字节
+	UploadCount   int64 `json:"uc,omitempty"` // 上传次数
+	DownloadCount int64 `json:"dc,omitempty"` // 下载次数
+	FailedCount   int64 `json:"fc,omitempty"` // 失败次数
 }
 
 // --- 任务请求与结果 ---

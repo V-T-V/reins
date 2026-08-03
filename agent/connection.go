@@ -252,6 +252,8 @@ func (a *Agent) heartbeatLoop(ctx context.Context, wc *wsConn) {
 		case <-ticker.C:
 			seq++
 			hb := proto.Heartbeat{AgentID: a.cfg.AgentID, Seq: seq}
+			// V1:心跳携带 Agent 传输计数器(供 Relay 聚合,打通 per-agent 可观测性)
+			hb.UploadBytes, hb.DownloadBytes, hb.UploadCount, hb.DownloadCount, hb.FailedCount = transfers.SnapshotStats()
 			wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
 			if err := wc.writeEnvelope(wctx, proto.TypeHeartbeat, "relay", hb); err != nil {
 				log.Printf("[agent] 心跳发送失败: %v", err)

@@ -70,6 +70,13 @@ func (te *TransferEngine) SetWorkspace(ws string) {
 	te.workspace = ws
 }
 
+// SnapshotStats 读取传输计数器快照(V1:心跳上报给 Relay)。
+// 返回 5 个累计值,原子读无锁。
+func (te *TransferEngine) SnapshotStats() (ub, db, uc, dc, fc int64) {
+	return te.uploadBytes.Load(), te.downloadBytes.Load(),
+		te.uploadCount.Load(), te.downloadCount.Load(), te.failedCount.Load()
+}
+
 // releasePath 释放 path 占用标记(R1 互斥的配套释放)。
 // 所有 upload session 退出路径(成功/失败/取消)都应调用。
 func (te *TransferEngine) releasePath(path string) {

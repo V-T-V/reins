@@ -477,7 +477,7 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 		case proto.TypeHeartbeat:
 			var hb proto.Heartbeat
 			if err := env.Decode(&hb); err == nil {
-				r.agents.Touch(hb.AgentID, hb.Seq)
+				r.agents.TouchWithStats(hb) // V1:存心跳 + 传输计数器
 			}
 
 		case proto.TypeTaskAck:

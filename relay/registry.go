@@ -16,6 +16,7 @@ type agentEntry struct {
 	lastBeat   time.Time        // 最近一次心跳时间
 	lastSeq    int64            // 最近心跳序号
 	registeredAt time.Time      // 注册时间
+	xferStats  proto.Heartbeat  // V1:最近一次心跳携带的传输计数器(ub/db/uc/dc/fc)
 }
 
 // Registry 维护在线 Agent 注册表。
@@ -82,6 +83,31 @@ func (r *Registry) Touch(agentID string, seq int64) bool {
 	e.lastBeat = time.Now()
 	e.lastSeq = seq
 	return true
+}
+
+// TouchWithStats 更新心跳 + 存储传输计数器(V1:Agent 心跳上报的 per-agent 画像)。
+func (r *Registry) TouchWithStats(hb proto.Heartbeat) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.agents[hb.AgentID]
+	if !ok {
+		return false
+	}
+	e.lastBeat = time.Now()
+	e.lastSeq = hb.Seq
+	e.xferStats = hb // 存完整心跳(含 ub/db/uc/dc/fc)
+	return true
+}
+
+// XferStatsOf 返回指定 Agent 的传输计数器快照(V1:/api/agents 输出用)。
+func (r *Registry) XferStatsOf(agentID string) (proto.Heartbeat, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	e, ok := r.agents[agentID]
+	if !ok {
+		return proto.Heartbeat{}, false
+	}
+	return e.xferStats, true
 }
 
 // Conn 取 Agent 的连接（用于转发任务）。不存在返回 nil。

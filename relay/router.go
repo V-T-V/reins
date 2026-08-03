@@ -104,6 +104,13 @@ func (r *Relay) handleHealthz(w http.ResponseWriter, req *http.Request) {
 		"agents":   len(r.agents.Snapshot()),
 		"uptime_s": int(time.Since(metrics.StartedAt).Seconds()),
 	}
+	// V5:附带文件传输指标(快速判断传输健康度)
+	snap := metrics.Snapshot()
+	status["xfer_uploads"] = snap["xfer_uploads_total"]
+	status["xfer_downloads"] = snap["xfer_downloads_total"]
+	status["xfer_upload_bytes"] = snap["xfer_upload_bytes"]
+	status["xfer_download_bytes"] = snap["xfer_download_bytes"]
+	status["xfer_failures"] = snap["xfer_upload_failures"].(int64) + snap["xfer_download_failures"].(int64)
 	httpStatus := http.StatusOK
 	if r.store != nil {
 		// 探测 store：能否查询（不实际读数据）
@@ -352,9 +359,31 @@ func (r *Relay) handleListAgents(w http.ResponseWriter, req *http.Request) {
 	}
 	// P2-10 修复：只调一次 Snapshot（原双次调用有 2x 拷贝开销 + 可能不一致）
 	list := r.agents.Snapshot()
+	// V1:为每个 agent 附带传输画像(ub/db/uc/dc/fc,来自心跳上报)
+	agentsWithStats := make([]map[string]any, 0, len(list))
+	for _, a := range list {
+		entry := map[string]any{
+			"agent_id":     a.AgentID,
+			"hostname":     a.Hostname,
+			"os":           a.OS,
+			"version":      a.Version,
+			"capabilities": a.Capabilities,
+			"tags":         a.Tags,
+		}
+		if stats, ok := r.agents.XferStatsOf(a.AgentID); ok {
+			entry["xfer_stats"] = map[string]any{
+				"upload_bytes":   stats.UploadBytes,
+				"download_bytes": stats.DownloadBytes,
+				"upload_count":   stats.UploadCount,
+				"download_count": stats.DownloadCount,
+				"failed_count":   stats.FailedCount,
+			}
+		}
+		agentsWithStats = append(agentsWithStats, entry)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"agents": list,
-		"count":  len(list),
+		"agents": agentsWithStats,
+		"count":  len(agentsWithStats),
 	})
 }
 
