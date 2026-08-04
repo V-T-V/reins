@@ -159,7 +159,8 @@ func (r *Relay) handlePromMetrics(w http.ResponseWriter, req *http.Request) {
 		fmt.Fprintf(w, "# TYPE %s %s\n", name, typ)
 		fmt.Fprintf(w, "%s %d\n", name, val)
 	}
-	writeProm("gormm_agents_online", "当前在线 Agent 数", "gauge", toInt64(snap["agents_online"]))
+	// 注:曾为 gormm_agents_online(两 m),与其他 gormmm_* 前缀不一致,破坏 PromQL 命名空间匹配。
+	writeProm("gormmm_agents_online", "当前在线 Agent 数", "gauge", toInt64(snap["agents_online"]))
 	writeProm("gormmm_tasks_submitted_total", "累计提交任务数", "counter", toInt64(snap["tasks_submitted"]))
 	writeProm("gormmm_tasks_dispatched_total", "累计投递任务数", "counter", toInt64(snap["tasks_dispatched"]))
 	writeProm("gormmm_tasks_completed_total", "累计完成任务数", "counter", toInt64(snap["tasks_completed"]))

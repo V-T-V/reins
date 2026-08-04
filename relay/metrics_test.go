@@ -173,6 +173,42 @@ func TestMetricsConcurrentInc(t *testing.T) {
 	}
 }
 
+// TestPromMetricsNamespaceConsistency 验证所有 Prom 指标名都用统一 gormmm_ 前缀。
+// 回归:agents_online 曾误写为 gormm_(两 m),破坏 PromQL 命名空间匹配。
+func TestPromMetricsNamespaceConsistency(t *testing.T) {
+	metrics = &Metrics{StartedAt: time.Now()}
+	metrics.SetAgentsOnline(3)
+	r := &Relay{cfg: Config{}, agents: NewRegistry(), console: NewEventBus()}
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	r.handlePromMetrics(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// 1. agents_online 必须以 gormmm_ 暴露(三 m)
+	if !strings.Contains(body, "gormmm_agents_online") {
+		t.Errorf("输出应含 gormmm_agents_online(三 m 前缀):\n%s", body)
+	}
+	// 2. 任何指标名不得使用 gormm_(两 m,后非第三个 m)
+	//    匹配 "gormm_" 但非 "gormmm_" 的行
+	for _, line := range strings.Split(body, "\n") {
+		// 跳过注释行(# HELP / # TYPE)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.Contains(line, "gormm_") && !strings.Contains(line, "gormmm_") {
+			t.Errorf("指标使用了不一致的前缀 gormm_(两 m): %q", line)
+		}
+	}
+	// 3. HELP/TYPE 注释也应一致
+	helpLines := strings.Count(body, "# HELP gormmm_")
+	if helpLines < 10 {
+		t.Errorf("gormmm_ HELP 行数=%d 期望 >=10", helpLines)
+	}
+}
+
 // buildPromForTest 复刻 handlePromMetrics 的 xfer 输出逻辑(避免依赖 Relay 实例)。
 func buildPromForTest(snap map[string]any) string {
 	var sb strings.Builder
