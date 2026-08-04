@@ -350,6 +350,9 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 			continue
 		}
 		switch env.Type {
+		case proto.TypeHeartbeatAck:
+			// S7:Relay 对心跳的确认帧。仅用于证明链路双向可用
+			// (read 已刷新 lastRecv,watchdog 不会误判死连接),无业务动作。
 		case proto.TypeTaskRequest:
 			a.handleTaskWithPool(ctx, wc, env, a.pool)
 		case proto.TypeTaskCancel:

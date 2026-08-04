@@ -25,6 +25,11 @@ const (
 	TypeRegister = "register"
 	// TypeHeartbeat —— Agent→Relay：周期心跳，维持连接与在线判定。
 	TypeHeartbeat = "heartbeat"
+	// TypeHeartbeatAck —— Relay→Agent：心跳确认（S7 修复）。
+	// 背景:watchdog 以 2×Heartbeat 无收包判定死连接,但 Relay 从不向空闲 Agent 回帧,
+	// 导致空闲 Agent 每 30s 被 watchdog 误杀重连(掉线循环,隧道/任务被随机拒绝)。
+	// Relay 收到心跳后回此帧,Agent 收到后仅刷新 lastRecv 不做事,保持连接活性。
+	TypeHeartbeatAck = "heartbeat_ack"
 	// TypeTaskRequest —— Console→Relay→Agent：下发任务。
 	TypeTaskRequest = "task_request"
 	// TypeTaskResult —— Agent→Relay→Console：任务终态结果。

@@ -478,6 +478,15 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			var hb proto.Heartbeat
 			if err := env.Decode(&hb); err == nil {
 				r.agents.TouchWithStats(hb) // V1:存心跳 + 传输计数器
+				// S7:回 heartbeat_ack,防空闲 Agent 被 watchdog 误杀。
+				// watchdog 以 2×Heartbeat 无收包判定死连接并强制重连,
+				// 若 Relay 不回帧,空闲 Agent 每 30s 掉线一次(掉线循环,
+				// 隧道/任务在断线窗口内被随机拒绝,表现为"Agent 拒绝"或超时)。
+				ackCtx, ackCancel := context.WithTimeout(ctx, 5*time.Second)
+				if ackEnv, ackErr := proto.NewEnvelope(proto.TypeHeartbeatAck, "relay", agentID, hb); ackErr == nil {
+					_ = wc.writeJSON(ackCtx, ackEnv)
+				}
+				ackCancel()
 			}
 
 		case proto.TypeTaskAck:

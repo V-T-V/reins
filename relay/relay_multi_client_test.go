@@ -466,3 +466,78 @@ func itoa(i int) string {
 	}
 	return string(buf[pos:])
 }
+
+// TestHeartbeatAckKeepsIdleAgentAlive 验证 S7 修复:Agent 发心跳后
+// Relay 必须回 heartbeat_ack 帧——否则空闲 Agent(无任务下发) 的
+// lastRecv 永远不更新,watchdog(2×Heartbeat 无收包)会周期误杀连接,
+// 表现为 agent 掉线循环 + 隧道/任务被随机拒绝。
+func TestHeartbeatAckKeepsIdleAgentAlive(t *testing.T) {
+	relay := NewRelay(Config{Dev: true, Addr: ":0"})
+	mux := http.NewServeMux()
+	relay.registerHTTP(mux)
+	mux.HandleFunc("/agent", relay.handleAgentWS)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+
+	agentURL := strings.Replace(srv.URL+"/agent", "http://", "ws://", 1)
+	c, _, err := websocket.Dial(ctx, agentURL, nil)
+	if err != nil {
+		t.Fatalf("agent 连接失败: %v", err)
+	}
+	c.SetReadLimit(1 << 20)
+	defer c.CloseNow()
+
+	regEnv, _ := proto.NewEnvelope(proto.TypeRegister, "hb-ack-1", "relay", proto.Register{
+		AgentID: "hb-ack-1", Hostname: "h", Capabilities: []string{proto.TaskPowerShell},
+	})
+	if err := c.Write(ctx, websocket.MessageText, mustJSON(regEnv)); err != nil {
+		t.Fatalf("注册失败: %v", err)
+	}
+
+	// 等上线
+	deadline := time.Now().Add(3 * time.Second)
+	for len(relay.agents.Snapshot()) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("agent 未上线")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 发 3 次心跳,每次应收到 heartbeat_ack
+	for i := 0; i < 3; i++ {
+		hbEnv, _ := proto.NewEnvelope(proto.TypeHeartbeat, "hb-ack-1", "relay",
+			proto.Heartbeat{AgentID: "hb-ack-1", Seq: int64(i + 1)})
+		if err := c.Write(ctx, websocket.MessageText, mustJSON(hbEnv)); err != nil {
+			t.Fatalf("心跳 %d 发送失败: %v", i, err)
+		}
+		type readResult struct {
+			data []byte
+			err  error
+		}
+		readCh := make(chan readResult, 1)
+		go func() {
+			_, data, rerr := c.Read(ctx)
+			readCh <- readResult{data: data, err: rerr}
+		}()
+		var rr readResult
+		select {
+		case rr = <-readCh:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("心跳 %d 后未收到 ack(2s 超时)", i)
+		}
+		if rr.err != nil {
+			t.Fatalf("心跳 %d 后未收到 ack: %v", i, rr.err)
+		}
+		data := rr.data
+		var env proto.Envelope
+		if err := json.Unmarshal(data, &env); err != nil {
+			t.Fatalf("ack 解析失败: %v", err)
+		}
+		if env.Type != proto.TypeHeartbeatAck {
+			t.Fatalf("期望 heartbeat_ack, got %q", env.Type)
+		}
+	}
+}
