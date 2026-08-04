@@ -49,7 +49,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
-- **成功标准**:169 Go 文件 / 31.8K 行 / 309 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-8)。
+- **成功标准**:169 Go 文件 / 31.8K 行 / 373 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
 
 ## 架构假设(4 项显式假设)
 
@@ -138,7 +138,7 @@ go-rmm/
 | Go 文件 | 169 |
 | 代码行 | 31,800+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 309 |
+| 测试用例 | 373 |
 | 基准测试 | 22 |
 | CLI 命令 | 51 |
 | API 端点 | 42 |
@@ -182,19 +182,19 @@ go-rmm/
 
 ## 测试覆盖(v4.3.3)
 
-309 测试 + 22 基准。按包分布与重点验证场景:
+373 测试 + 22 基准。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
-| **relay** | 162 | 59 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8] |
-| **agent** | 51 | 32 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog) |
+| **relay** | 198 | 60 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10] |
+| **agent** | 59 | 32 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9] |
 | **executors** | 40 | 24 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控 |
-| **proto** | 29 | 9 | 消息编解码/边界/二进制帧/tunnel |
+| **proto** | 44 | 9 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
 | **client** | 18 | 9 | SDK 方法/流式/工具发现 |
 | **console** | 14 | 4 | 反向代理/事件转发 |
 | **cmd** | 12 | 28 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3 新增测试] |
 
-**深度测试(rounds 1-8)**:round 1 修复 `TestMultiAgentRoutingE2E` 永久失败;rounds 2-7 逐层加深(relay 路由 → 执行器 → console → mTLS → 审计 → 多租户);round 8 覆盖批量分发不变量(并发投递/聚合/退避重试/幂等/ctx 取消/进度状态机)。
+**深度测试(rounds 1-10)**:round 1 修复 `TestMultiAgentRoutingE2E` 永久失败;rounds 2-7 逐层加深(relay 路由 → 执行器 → console → mTLS → 审计 → 多租户);round 8 覆盖批量分发不变量(并发投递/聚合/退避重试/幂等/ctx 取消/进度状态机);rounds 9-10 工作区深度推进——补 SecretStore/ScriptLibrary/buffer_pool/rQueue/Envelope 等弱测模块,修复空闲 Agent 掉线循环(S7 heartbeat_ack)、脚本库路径穿越漏洞、Prom 指标前缀 typo、审计写盘静默丢记录。
 
 **并发安全**:批量进度跟踪用 `sync.RWMutex` 保护,`markRunning/markSucceeded/markFailed` 与并发 `Snapshot()` 线程安全(race 检测需 cgo/gcc,本机未启用,靠互斥锁设计保证)。
 
@@ -210,6 +210,12 @@ go-rmm/
 1. **多租户持久化**:`TenantManager`/`RolePolicy` 从内存 store 迁移到 bbolt/Redis,重启不丢组织与策略。
 2. **批量分发端点化**:把 `BatchDispatcher` 接入新 REST 端点 `POST /api/batch`(返回 batchID)+ `GET /api/batch/:id/progress`(SSE 实时进度),供 CLI/Web 调用。
 3. **水平扩展验证**:Redis 多 Relay 实测(Store/Registry/EventBus 三层联邦),补 Agent 故障切换 E2E。
+
+**已完成(rounds 9-10,工作区深度推进)**:
+- ✅ **脚本库路径穿越修复**:`GET/DELETE/POST /api/scripts/{name}` 原 `filepath.Join` 清理 `..` 后逃逸脚本目录,可读删目录外任意文件。现已 handler + 库方法(Save/Read/Delete)双层 `validateScriptName` 校验(字符黑名单 + 解析后路径必须位于脚本目录内)。
+- ✅ **空闲 Agent 掉线循环修复(S7)**:Relay 收到心跳后回 `heartbeat_ack` 帧,防空闲 Agent(无任务下发)被 watchdog(2×Heartbeat 无收包)周期误杀重连(隧道/任务随机拒绝)。
+- ✅ **Prometheus 指标前缀统一**:`gormm_agents_online`(两 m)→`gormmm_agents_online`(三 m),与其他 `gormmm_*` 命名空间一致(防 PromQL 匹配遗漏)。
+- ✅ **审计写盘错误加固**:`writeEntry` 原丢弃 `file.Write` 返回值,磁盘满/权限拒绝时审计记录静默丢失;现显式记日志(含 event 名),并补 `VerifyChain` 空文件/缺失/空行回归测试。
 
 ### P1 — 能力补全
 4. **Linux Agent**:补齐 Linux 执行器(systemd 服务/包管理/journalctl),打通跨平台。
