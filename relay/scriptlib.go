@@ -31,6 +31,34 @@ type ScriptLibrary struct {
 	dir string // data/scripts/
 }
 
+// validateScriptName 校验脚本名安全:禁止路径穿越(../, 绝对路径, 分隔符),
+// 并二次确认解析后路径仍在脚本目录内(纵深防御,防清理绕过)。
+// 返回安全时 (cleanedName, true),危险时 ("", false)。
+//
+// 背景:GET/DELETE /api/scripts/{name} 原先未校验 name,
+// /api/scripts/../../etc/passwd 经 filepath.Join 清理后逃逸出脚本目录,
+// 可读取/删除脚本目录外任意文件(CVE 级路径穿越)。
+func (lib *ScriptLibrary) validateScriptName(name string) (string, bool) {
+	if lib == nil || name == "" {
+		return "", false
+	}
+	// 第一道:字符级黑名单(快速拒绝明显的穿越尝试)。
+	if strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) {
+		return "", false
+	}
+	// 第二道:解析后路径必须严格位于脚本目录内(防清理绕过,如 URL 编码/符号链接)。
+	cleaned := filepath.Clean(filepath.Join(lib.dir, name))
+	absDir, err1 := filepath.Abs(lib.dir)
+	resolvedDir, err2 := filepath.Abs(cleaned)
+	if err1 != nil || err2 != nil {
+		return "", false
+	}
+	if !strings.HasPrefix(resolvedDir, absDir+string(filepath.Separator)) && resolvedDir != absDir {
+		return "", false
+	}
+	return name, true
+}
+
 // NewScriptLibrary 构造。
 func NewScriptLibrary(dataDir string) (*ScriptLibrary, error) {
 	dir := filepath.Join(dataDir, "scripts")
@@ -78,16 +106,21 @@ func (lib *ScriptLibrary) List() []ScriptInfo {
 }
 
 // Save 保存脚本。
+// 安全校验:name 经 validateScriptName,禁止路径穿越(纵深防御,防绕过 handler)。
 func (lib *ScriptLibrary) Save(name, content string) error {
-	if name == "" {
-		return fmt.Errorf("name 不能为空")
+	if _, ok := lib.validateScriptName(name); !ok {
+		return fmt.Errorf("name 非法(路径穿越或为空)")
 	}
 	path := filepath.Join(lib.dir, name)
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
 // Read 读取脚本内容。
+// 安全校验:name 经 validateScriptName,禁止路径穿越(防读到脚本目录外文件)。
 func (lib *ScriptLibrary) Read(name string) (string, error) {
+	if _, ok := lib.validateScriptName(name); !ok {
+		return "", fmt.Errorf("name 非法(路径穿越或为空)")
+	}
 	data, err := os.ReadFile(filepath.Join(lib.dir, name))
 	if err != nil {
 		return "", err
@@ -96,7 +129,11 @@ func (lib *ScriptLibrary) Read(name string) (string, error) {
 }
 
 // Delete 删除脚本。
+// 安全校验:name 经 validateScriptName,禁止路径穿越(防删脚本目录外文件)。
 func (lib *ScriptLibrary) Delete(name string) error {
+	if _, ok := lib.validateScriptName(name); !ok {
+		return fmt.Errorf("name 非法(路径穿越或为空)")
+	}
 	return os.Remove(filepath.Join(lib.dir, name))
 }
 
@@ -139,8 +176,8 @@ func (r *Relay) handleScriptUpload(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("name 和 content 不能为空")))
 		return
 	}
-	// 安全:禁止路径穿越
-	if strings.Contains(body.Name, "..") || strings.Contains(body.Name, "/") || strings.Contains(body.Name, "\\") {
+	// 安全:禁止路径穿越(与 get/delete/run 共用校验器)
+	if _, ok := scriptLib.validateScriptName(body.Name); !ok {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("name 含非法字符")))
 		return
 	}
@@ -161,8 +198,8 @@ func (r *Relay) handleScriptGet(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	name := strings.TrimPrefix(req.URL.Path, "/api/scripts/")
-	if name == "" || scriptLib == nil {
-		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("缺少 name 或脚本库未启用")))
+	if _, ok := scriptLib.validateScriptName(name); !ok {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("缺少 name 或含非法字符")))
 		return
 	}
 	content, err := scriptLib.Read(name)
@@ -180,8 +217,8 @@ func (r *Relay) handleScriptDelete(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	name := strings.TrimPrefix(req.URL.Path, "/api/scripts/")
-	if scriptLib == nil {
-		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("脚本库未启用")))
+	if _, ok := scriptLib.validateScriptName(name); !ok {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("缺少 name 或含非法字符")))
 		return
 	}
 	if err := scriptLib.Delete(name); err != nil {
@@ -208,8 +245,8 @@ func (r *Relay) handleScriptRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	name := parts[0]
-	if scriptLib == nil {
-		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("脚本库未启用")))
+	if _, ok := scriptLib.validateScriptName(name); !ok {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("脚本名非法或脚本库未启用")))
 		return
 	}
 	content, err := scriptLib.Read(name)

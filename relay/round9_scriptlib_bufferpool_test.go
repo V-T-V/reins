@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -118,6 +120,67 @@ func TestScriptLibraryOverwrite(t *testing.T) {
 		t.Fatalf("覆盖后应为 v2-longer, 得到 %q", got)
 	}
 }
+
+// === 路径穿越安全测试(D6 修复回归) ===
+// 原漏洞:GET/DELETE /api/scripts/{name} 未校验 name,
+// /api/scripts/../../etc/passwd 经 filepath.Join 清理后逃逸出脚本目录。
+// validateScriptName 必须拒绝所有穿越尝试。
+
+func TestScriptLibraryValidateRejectsTraversal(t *testing.T) {
+	lib := newTestScriptLib(t)
+	bad := []string{
+		"../secret",
+		"../../etc/passwd",
+		"..\\windows\\win.ini",
+		"./hidden",
+		"/etc/passwd",   // 绝对路径
+		"\\windows.ini", // 绝对路径(Windows)
+		"a/b",           // 子目录分隔符
+		"a\\b",
+		"", // 空
+	}
+	for _, name := range bad {
+		if _, ok := lib.validateScriptName(name); ok {
+			t.Errorf("穿越名 %q 应被拒绝", name)
+		}
+	}
+}
+
+func TestScriptLibraryValidateAcceptsLegitimate(t *testing.T) {
+	lib := newTestScriptLib(t)
+	good := []string{
+		"cleanup.ps1",
+		"deploy.sh",
+		"diagnose.bat",
+		"my-script_v2.ps1",
+		"script.with.dots.in.name.ps1", // 文件名内点合法(仅 ".." 被拒)
+	}
+	for _, name := range good {
+		if _, ok := lib.validateScriptName(name); !ok {
+			t.Errorf("合法名 %q 不应被拒绝", name)
+		}
+	}
+}
+
+// TestScriptLibraryReadRefusesTraversal 集成验证:穿越名经 Read 无法逃逸。
+// 先在 lib.dir 的父目录放一个文件,穿越 Read 应失败(而非读到父目录文件)。
+func TestScriptLibraryReadRefusesTraversal(t *testing.T) {
+	parent := t.TempDir()
+	lib, _ := NewScriptLibrary(parent)
+	// 在父目录放敏感文件
+	os.WriteFile(filepath.Join(parent, "SECRET"), []byte("topsecret"), 0644)
+	// 穿越尝试:从 scripts 读 ../SECRET
+	if _, ok := lib.validateScriptName("../SECRET"); ok {
+		t.Fatal("../SECRET 应被 validateScriptName 拒绝")
+	}
+	// 直接 Read(绕过校验)也只是读到不存在/越界,但经校验器后根本走不到 Read
+	got, err := lib.Read("../SECRET")
+	// 注:Read 本身不做校验(由 handler 层 validate),这里仅确认校验器是关键防线
+	if err == nil && strings.Contains(got, "topsecret") {
+		t.Errorf("穿越读到了父目录敏感文件!got=%q", got)
+	}
+}
+
 
 // === buffer_pool 单元测试(此前零覆盖) ===
 // 验证池化 buffer 的容量不变量:Get 返回正确容量,Put 后复用,Put 不同容量不损坏。
