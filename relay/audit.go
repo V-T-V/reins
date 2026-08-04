@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -112,7 +113,13 @@ func (a *AuditLog) writeEntry(entry AuditEntry) {
 		return
 	}
 	data = append(data, '\n')
-	a.file.Write(data) // append-only,无需 mu(file 写是单 goroutine)
+	// D8 加固:审计写盘失败必须显式记日志(原 Write 返回值被丢弃,
+	// 磁盘满/权限拒绝时审计记录静默丢失,违背审计可靠性)。
+	if n, werr := a.file.Write(data); werr != nil {
+		log.Printf("[audit] 写盘失败(可能丢记录 event=%s): %v", entry.Event, werr)
+	} else if n < len(data) {
+		log.Printf("[audit] 短写(可能丢记录 event=%s): 写入 %d/%d 字节", entry.Event, n, len(data))
+	}
 
 	// 更新 prevHash
 	a.mu.Lock()
