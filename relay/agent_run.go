@@ -5,14 +5,15 @@
 //   - go-agent-research/internal/planexec:Planner/Executor/Replanner 三接口 + 步骤模型
 //
 // 循环(Plan-and-Execute):
-//   1. Planner:   LLM 生成步骤列表 {steps:[{goal,tool,args}]}(≤5 步,JSON 约束)
-//   2. Executor:  逐 step 执行工具(内部调用 Relay 逻辑),结果回填
-//   3. Replanner: 步骤失败时 LLM 重规划剩余步骤(≤2 次)
-//   4. Summarizer: 全部完成后 LLM 流式汇总最终答案
+//  1. Planner:   LLM 生成步骤列表 {steps:[{goal,tool,args}]}(≤5 步,JSON 约束)
+//  2. Executor:  逐 step 执行工具(内部调用 Relay 逻辑),结果回填
+//  3. Replanner: 步骤失败时 LLM 重规划剩余步骤(≤2 次)
+//  4. Summarizer: 全部完成后 LLM 流式汇总最终答案
 //
 // SSE 事件(与 /api/events 相同 data 包裹格式):
-//   agent_start / agent_plan / step_start / tool_call / tool_result /
-//   step_done / step_failed / agent_delta / agent_final / agent_error / agent_queued
+//
+//	agent_start / agent_plan / step_start / tool_call / tool_result /
+//	step_done / step_failed / agent_delta / agent_final / agent_error / agent_queued
 package main
 
 import (
@@ -68,9 +69,9 @@ func (r *Relay) handleAgentRun(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var body struct {
-		Task     string `json:"task"`
-		AgentID  string `json:"agent_id,omitempty"`
-		Type     string `json:"type,omitempty"`
+		Task    string `json:"task"`
+		AgentID string `json:"agent_id,omitempty"`
+		Type    string `json:"type,omitempty"`
 	}
 	if err := decodeJSON(req, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errMap(err))
@@ -235,7 +236,10 @@ func (r *Relay) agentPlan(ctx context.Context, run *agentRun, schemas []ToolDef)
 	}
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
-		msg, _, err := r.llmClient.ChatJSON(ctx, messages, schemas)
+		// tools=nil:规划走 system prompt 描述工具 + response_format=json_object,
+		// 避免与 V4 原生 function calling 冲突(否则 V4 强 tool-use 倾向返回 tool_calls 而非计划 JSON)。
+		// schemas 仅用于在 prompt 文本里描述工具清单(下方 agentPlanSystemPrompt)。
+		msg, _, err := r.llmClient.ChatJSON(ctx, messages, nil)
 		if err != nil {
 			lastErr = err
 			continue
@@ -257,7 +261,8 @@ func (r *Relay) agentReplan(ctx context.Context, run *agentRun, schemas []ToolDe
 			"请重新规划剩余步骤(不要重复失败的步骤,换一种方式完成目标),只输出 JSON: {\"steps\":[{\"goal\",\"tool\",\"args\"}]}",
 		run.Task, failed.Index, failed.Tool, failed.Result)
 	messages := append(append([]ChatMessage{}, history...), ChatMessage{Role: "user", Content: prompt})
-	msg, _, err := r.llmClient.ChatJSON(ctx, messages, schemas)
+	// tools=nil:同 agentPlan,规划走 prompt + json_object,避免与 V4 function calling 冲突。
+	msg, _, err := r.llmClient.ChatJSON(ctx, messages, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -343,6 +348,7 @@ func (r *Relay) agentPlanHistory(run *agentRun, schemas []ToolDef) []ChatMessage
 }
 
 // agentPlanSystemPrompt 规划系统提示词(含工具清单,约束 JSON 输出)。
+// 针对 DeepSeek V4(强 agentic / tool-use)优化:结构化工具选择决策树 + 反幻觉规则。
 func agentPlanSystemPrompt(schemas []ToolDef, run *agentRun) string {
 	var toolsDesc strings.Builder
 	for _, t := range schemas {
@@ -352,19 +358,28 @@ func agentPlanSystemPrompt(schemas []ToolDef, run *agentRun) string {
 	if run.UserAgent != "" {
 		agentHint = fmt.Sprintf("用户指定目标 Agent: %s(工具参数中尽量使用它)\n", run.UserAgent)
 	}
-	return fmt.Sprintf(`你是 go-rmm 远程运维平台的智能 Agent。用户会用自然语言描述一个运维任务,你需要:
-1. 把它拆解成 1-5 个可执行步骤
-2. 每个步骤选择一个工具并给出参数
+	return fmt.Sprintf(`你是 go-rmm 远程运维平台的智能 Agent。用户用自然语言描述运维任务,你把它拆解成 1-5 个可执行步骤,每步选一个工具并给出参数。
 
-可用工具:
+【可用工具】
 %s
 
 %s
-规则:
-- 输出必须是合法 JSON,格式: {"steps":[{"goal":"步骤目标","tool":"工具名","args":{...}}]}
-- 不要输出任何解释文字,只输出 JSON
-- 远程执行命令用 run_task 或 shell_exec;不知道选哪个 Agent 先用 list_agents 或 scheduler_best
-- args 必须符合工具参数要求;命令类工具的 command 参数给完整 PowerShell 命令`, toolsDesc.String(), agentHint)
+【工具选择决策树】
+- 不知道有哪些 Agent / 该用哪个 → 第一步用 list_agents(看在线 Agent 与能力);或 scheduler_best(按负载推荐 + 能力/标签过滤)
+- 在 Agent 上执行命令/脚本/截图 → run_task(type=powershell 给 command,type=script 给 content)
+- 快捷跑一条 PowerShell → shell_exec(等价 run_task powershell,更简)
+- 查已下发任务的结果 → get_task_result(task_id 来自 run_task 的返回)
+- 看历史任务 → list_tasks(最近 N 条)
+- 跑 Relay 脚本库里已存的脚本 → run_script(name)
+- 读 Agent 配置(allowed_roots / workspace 等) → read_agent_config
+
+【输出规则】
+- 必须是合法 JSON:{"steps":[{"goal":"步骤目标","tool":"工具名","args":{...}}]}
+- 只输出 JSON,不要任何解释、不要 Markdown 围栏
+- 步骤数 1-5,能一步完成就一步,宁少勿多
+- args 必须符合工具参数;命令类 command 给完整可执行的 PowerShell(例:Get-Process | Select-Object Name,Id -First 10)
+- 不要编造工具名或参数;不要在 args 里塞工具未定义的字段
+- 涉及多 Agent 时每步明确 agent_id`, toolsDesc.String(), agentHint)
 }
 
 // truncateToolArgs 参数脱敏(命令截断,防日志/SSE 泄敏感长命令)。

@@ -248,6 +248,15 @@ go-rmm/
 - ✅ **前端 `web/app.js` + `index.html`**:`apiFetch()` 包装(自动 `credentials:"include"` + 401 弹登录)、`EventSource({withCredentials:true})`、XHR `withCredentials`、`#login-overlay` 登录页 + 登出按钮、`checkSession()` 启动门控。监听随 EventSource 重连重新注册(顺带修了重连丢监听的潜在问题)。
 - ✅ **测试**:`relay/console_auth_test.go` 13 例(login 成功/失败/禁用、session 端点、authorize cookie 通过/无凭证 401/Bearer 回归、logout 失效、TTL 过期、滑动续期、cookie 属性 HttpOnly/Secure/SameSite/Path、X-Forwarded-Proto 自适应、dev 放行回归、审计 login 事件)。
 
+**已完成(2026-08-12,控制台三连 + AI Agent 深度优化)**:
+- ✅ **Agent 任务档案面板**:选中 Agent → 已做/在做/待做 三栏 + cron 定时计划;`/api/tasks` 加 `?agent_id`+`?status` 过滤,`/api/crons` 加 `?agent_id`+`next_run` 运行时计算(`router_tasks_filter_test.go` 6 例)。
+- ✅ **批量任务下发面板**:多选 Agent + 一次性下发 + 实时执行结果表;`/api/tasks/batch` 加 `agent_ids` 选择器(优先于 tag,过滤在线)(`router_batch_test.go` 8 例)。
+- ✅ **🤖 AI Agent 自然语言面板**:`POST /api/agent/run` SSE 流式 → fetch+ReadableStream 按 `\n\n` 分帧解析(POST 不能用 EventSource),渲染 agent_plan/step_start/tool_call/tool_result/agent_delta(逐 token)/agent_final;信封 `{agent_run_id,data,ts}` unwrap。
+- ✅ **DeepSeek V4 深度优化**(网络研究后):
+  - **根因修复**:`agentPlan`/`agentReplan` 原同时传 `tools=schemas` + `response_format=json_object` —— DeepSeek V4(强 tool-use)会倾向返回 `tool_calls` 而非计划 JSON,冲突。改 `ChatJSON(..., nil)`,规划纯走 system prompt 描述工具 + json_object,schemas 仅用于 prompt 文本。
+  - **prompt 针对 V4 重写**:`agentPlanSystemPrompt` 加结构化「工具选择决策树」(不知道 agent→list_agents;执行命令→run_task;...) + 反幻觉规则(不编造工具/参数,命令完整 PowerShell)。
+  - **模型迁移**:`deepseek-chat`(legacy,2026-07-24 退役)→ `deepseek-v4-flash`/`deepseek-v4-pro`(1M 上下文,SOTA agentic)。`config.go` 注释 + 默认说明更新。
+
 ### P1 — 能力补全
 4. **Linux Agent**:补齐 Linux 执行器(systemd 服务/包管理/journalctl),打通跨平台。
 5. **任务 at-least-once**:文件传输/终端结果可靠投递(当前 best-effort),减少 SHA256/录屏兜底依赖。

@@ -54,10 +54,12 @@ func parseFlags() Config {
 	// P1 生产硬化:metrics/pprof 访问控制
 	flag.StringVar(&c.MetricsToken, "metrics-token", getEnv("GO_RMM_METRICS_TOKEN", ""), "/metrics 独立 token(空则回退主 Token;生产推荐配独立低权 token 或 nginx IP 白名单)")
 	flag.BoolVar(&c.DebugPprof, "debug-pprof", getEnv("GO_RMM_DEBUG_PPROF", "") != "", "启用 /debug/pprof(默认关,生产关闭防内存侦察;dev 模式自动开)")
-	// Agent 编排 LLM 配置(Ollama 默认;空 base-url 禁用)
-	flag.StringVar(&c.LLMBaseURL, "llm-base-url", getEnv("GO_RMM_LLM_BASE_URL", ""), "LLM OpenAI 兼容 /v1 地址,如 http://127.0.0.1:11434/v1(空=禁用 Agent 编排)")
-	flag.StringVar(&c.LLMAPIVKey, "llm-api-key", getEnv("GO_RMM_LLM_API_KEY", ""), "LLM API key(可空,Ollama 不需要)")
-	flag.StringVar(&c.LLMModel, "llm-model", getEnv("GO_RMM_LLM_MODEL", "qwen2.5:7b"), "LLM 模型名")
+	// Agent 编排 LLM 配置(空 base-url 禁用)。默认 Ollama 本地;
+	// 云端推荐 DeepSeek V4:base-url https://api.deepseek.com/v1 + model deepseek-v4-flash(或 v4-pro 更强)。
+	// 注:DeepSeek legacy 名 deepseek-chat/deepseek-reasoner 已于 2026-07-24 退役,必须用 v4-* 名。
+	flag.StringVar(&c.LLMBaseURL, "llm-base-url", getEnv("GO_RMM_LLM_BASE_URL", ""), "LLM OpenAI 兼容 /v1 地址,如 http://127.0.0.1:11434/v1 或 https://api.deepseek.com/v1(空=禁用 Agent 编排)")
+	flag.StringVar(&c.LLMAPIVKey, "llm-api-key", getEnv("GO_RMM_LLM_API_KEY", ""), "LLM API key(可空,Ollama 不需要;DeepSeek 在 platform.deepseek.com 创建)")
+	flag.StringVar(&c.LLMModel, "llm-model", getEnv("GO_RMM_LLM_MODEL", "qwen2.5:7b"), "LLM 模型名(Ollama: qwen2.5:7b;DeepSeek: deepseek-v4-flash / deepseek-v4-pro)")
 	flag.IntVar(&c.LLMAgentMax, "llm-agent-max", atoiOr(getEnv("GO_RMM_LLM_AGENT_MAX", "2"), 2), "并发 Agent run 上限(默认 2)")
 	// 控制台会话鉴权(2026-08-12)
 	flag.StringVar(&c.ConsolePassword, "console-password", getEnv("GO_RMM_CONSOLE_PASSWORD", ""), "控制台登录密码(独立于 Relay Token;空=禁用控制台登录,只能用 CLI Bearer)")

@@ -156,9 +156,11 @@ go-rmm --relay http://server:7780 --token <token> monitor top -a <agent>
 ### 🤖 Agent 化任务(Web 控制台自然语言编排)
 
 ```bash
-# 1. 启用 LLM(默认 Ollama 本地,OpenAI 兼容 /v1)
-./go-rmm-relay -llm-base-url http://127.0.0.1:11434/v1 -llm-model qwen2.5:7b
-#    (云 API 亦可:-llm-base-url https://api.deepseek.com/v1 -llm-api-key <key>)
+# 1. 启用 LLM(OpenAI 兼容 /v1)。推荐 DeepSeek V4(国内直连 + 强 agent + 便宜):
+./go-rmm-relay -llm-base-url https://api.deepseek.com/v1 -llm-model deepseek-v4-flash -llm-api-key sk-xxx
+#    DeepSeek V4-flash 性价比;v4-pro 更强 agent(SOTA agentic coding)。1M 上下文。
+#    ⚠️ legacy 名 deepseek-chat/deepseek-reasoner 已于 2026-07-24 退役,必须用 v4-* 名。
+#    或 Ollama 本地:-llm-base-url http://127.0.0.1:11434/v1 -llm-model qwen2.5:7b
 
 # 2. 浏览器打开控制台 → "🤖 Agent 任务" 面板
 #    输入自然语言任务,例如:

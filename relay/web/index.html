@@ -130,6 +130,22 @@
   .batch-row .pend { color: #8b949e; }
   .batch-detail { flex-basis: 100%; margin-top: 6px; padding: 6px; background: #161b22; border-radius: 4px; font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
   .batch-summary { padding: 8px 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; margin-top: 10px; font-size: 12px; color: #c9d1d9; }
+
+  /* 🤖 AI Agent 任务(2026-08-12 自然语言 → LLM 编排) */
+  .agentrun-step { padding: 8px 6px; border-bottom: 1px solid #21262d; font-size: 12px; }
+  .agentrun-step .ar-head { display: flex; align-items: center; gap: 6px; }
+  .agentrun-step .ar-idx { color: #8b949e; font-family: monospace; min-width: 24px; }
+  .agentrun-step .ar-goal { color: #c9d1d9; flex: 1; }
+  .agentrun-step .ar-tool { color: #58a6ff; font-family: "Cascadia Code", Consolas, monospace; font-size: 11px; }
+  .agentrun-step .ar-args { color: #8b949e; font-size: 11px; margin-top: 3px; margin-left: 30px; word-break: break-all; }
+  .agentrun-step .ar-result { background: #0d1117; padding: 4px 8px; border-radius: 3px; margin-top: 4px; margin-left: 30px; font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 140px; overflow-y: auto; border-left: 2px solid #30363d; }
+  .agentrun-step .ok { color: #3fb950; }
+  .agentrun-step .fail { color: #f85149; }
+  .agentrun-step .run { color: #d29922; }
+  .agentrun-step .pend { color: #8b949e; }
+  .agentrun-summary { margin-top: 14px; padding: 10px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+  .agentrun-summary .ar-label { color: #58a6ff; font-size: 12px; margin-bottom: 4px; }
+  .agentrun-status { padding: 6px 4px; font-size: 12px; color: #8b949e; }
 </style>
 </head>
 <body>
@@ -192,6 +208,24 @@
       </span>
     </div>
     <div class="content">
+      <!-- 🤖 AI Agent 任务(2026-08-12 自然语言 → LLM 编排)-->
+      <div class="panel">
+        <div class="panel-header">🤖 AI Agent 任务<span id="agentrun-model" style="color:#8b949e;font-weight:normal;font-size:12px;margin-left:8px"></span></div>
+        <div class="panel-body">
+          <label>用自然语言描述你要做的事(AI 自动规划 + 调用工具执行)</label>
+          <textarea id="agentrun-task" placeholder="如:查看所有 agent 的磁盘空间并汇报&#10;在所有在线 agent 上检查 Chrome 进程&#10;读取某 agent 的配置" style="min-height:70px"></textarea>
+          <div class="row" style="margin-top:8px">
+            <div>
+              <label>目标 Agent(可选,空=AI 自选)</label>
+              <select id="agentrun-agent"><option value="">自动选择</option></select>
+            </div>
+            <div style="display:flex;align-items:flex-end">
+              <button onclick="window.__submitAgentRun()" id="agentrun-btn">执行</button>
+            </div>
+          </div>
+          <div id="agentrun-output" style="margin-top:12px"></div>
+        </div>
+      </div>
       <!-- 任务下发 -->
       <div class="panel">
         <div class="panel-header">下发任务</div>

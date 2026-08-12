@@ -37,6 +37,7 @@
     timelineCrons: [],     // cron 缓存
     taskAgentMap: {},      // task_id → agent_id(SSE 事件按 task_id 定位 agent)
     batchResults: {},      // 批量下发结果:task_id → {agentID, status, progress, result, ts}
+    agentRun: { steps: [], summary: "", status: "", runId: "", model: "" },
   };
 
   // --- 控制台会话鉴权(2026-08-12)---
@@ -799,6 +800,7 @@
   // renderBatchAgentList 渲染在线 agent checkbox,保留已勾选状态。
   function renderBatchAgentList() {
     var host = document.getElementById("batch-agent-list");
+    updateAgentRunAgentSelect(); // 同步更新 AI Agent 面板的 agent 下拉
     if (!host) return;
     var checked = {};
     host.querySelectorAll('input[type="checkbox"]').forEach(function (cb) { checked[cb.value] = cb.checked; });
@@ -970,6 +972,178 @@
       } else { txt += "\n(暂无结果,执行中)"; }
       detail.textContent = txt;
     } catch (e) { detail.textContent = "异常: " + e.message; }
+  }
+
+  // --- 🤖 AI Agent 任务(2026-08-12:自然语言 → LLM 编排,fetch+ReadableStream 解析 SSE)---
+  function updateAgentRunAgentSelect() {
+    var sel = document.getElementById("agentrun-agent");
+    if (!sel) return;
+    var cur = sel.value;
+    var agents = Array.from(state.agents.values());
+    var html = '<option value="">自动选择</option>';
+    agents.forEach(function (a) {
+      html += '<option value="' + esc(a.agent_id) + '">' + esc(a.agent_id) + " (" + esc(a.hostname || "") + ")</option>";
+    });
+    sel.innerHTML = html;
+    if (cur && state.agents.has(cur)) sel.value = cur;
+  }
+
+  // __submitAgentRun: POST /api/agent/run(非 EventSource,因 SSE 是 POST)→ ReadableStream 按 \n\n 分帧。
+  window.__submitAgentRun = async function () {
+    if (state.loginShowing) return;
+    var taskEl = document.getElementById("agentrun-task");
+    var task = (taskEl && taskEl.value || "").trim();
+    var agentID = (document.getElementById("agentrun-agent") || {}).value || "";
+    if (!task) { alert("请描述任务"); return; }
+    var out = document.getElementById("agentrun-output");
+    var btn = document.getElementById("agentrun-btn");
+    if (btn) btn.disabled = true;
+    state.agentRun = { steps: [], summary: "", status: "running", runId: "", model: state.agentRun.model };
+
+    try {
+      var resp = await fetch(api("/api/agent/run"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ task: task, agent_id: agentID }),
+      });
+      var ct = resp.headers.get("Content-Type") || "";
+      if (ct.indexOf("text/event-stream") < 0) {
+        var errData = {};
+        try { errData = await resp.json(); } catch (e) {}
+        var msg = resp.status === 503 ? "Agent 编排未启用(服务器未配置 LLM,需 -llm-base-url)"
+          : resp.status === 401 ? "未登录或会话过期"
+          : (errData.error || ("HTTP " + resp.status));
+        out.innerHTML = '<div class="agentrun-status" style="color:#f85149">✗ ' + esc(msg) + "</div>";
+        if (btn) btn.disabled = false;
+        return;
+      }
+      ensureAgentRunContainers(out);
+      setArStatus("⏳ 思考中(LLM 规划)...");
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+      while (true) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        var idx;
+        while ((idx = buffer.indexOf("\n\n")) >= 0) {
+          handleAgentRunEvent(buffer.slice(0, idx));
+          buffer = buffer.slice(idx + 2);
+        }
+      }
+      if (buffer.trim()) handleAgentRunEvent(buffer);
+    } catch (e) {
+      out.innerHTML += '<div class="agentrun-status" style="color:#f85149">异常: ' + esc(e.message) + "</div>";
+    }
+    if (btn) btn.disabled = false;
+  };
+
+  function ensureAgentRunContainers(out) {
+    if (!out.querySelector("#ar-status")) {
+      out.innerHTML = '<div class="agentrun-status" id="ar-status"></div><div id="ar-steps"></div><div id="ar-summary"></div>';
+    }
+  }
+  function setArStatus(text, cls) {
+    var el = document.getElementById("ar-status");
+    if (el) { el.textContent = text; el.className = "agentrun-status" + (cls ? " " + cls : ""); }
+  }
+
+  // handleAgentRunEvent 解析一帧("event: xxx\ndata: {...}"),unwrap 信封 .data,分发。
+  function handleAgentRunEvent(frame) {
+    var eventName = "", dataLine = "";
+    frame.split("\n").forEach(function (ln) {
+      if (ln.indexOf("event:") === 0) eventName = ln.slice(6).trim();
+      else if (ln.indexOf("data:") === 0) dataLine = ln.slice(5).trim();
+    });
+    if (!eventName || !dataLine) return;
+    var env;
+    try { env = JSON.parse(dataLine); } catch (e) { return; }
+    onAgentRunEvent(eventName, env.data || {});
+  }
+
+  function onAgentRunEvent(name, p) {
+    if (name === "agent_queued") {
+      state.agentRun.status = "queued";
+      setArStatus("⏳ 排队中(并发已满,等待其他任务完成)");
+    } else if (name === "agent_start") {
+      state.agentRun.runId = p.run_id || "";
+      state.agentRun.model = p.model || "";
+      var m = document.getElementById("agentrun-model");
+      if (m) m.textContent = "(模型: " + (p.model || "?") + ")";
+      setArStatus("🔄 执行中(run " + state.agentRun.runId + ")...");
+    } else if (name === "agent_plan") {
+      state.agentRun.steps = (p.steps || []).map(function (s) {
+        return { index: s.index, goal: s.goal, tool: s.tool, args: s.args, status: s.status || "pending", result: "" };
+      });
+      renderArSteps();
+      setArStatus(p.replanned ? "🔄 重新规划(部分步骤失败,调整计划)" : "📋 计划已生成,执行中");
+    } else if (name === "step_start") {
+      var s1 = findArStep(p.index); if (s1) s1.status = "running";
+      renderArSteps();
+    } else if (name === "tool_call") {
+      var s2 = findArStep(p.index); if (s2) { s2.tool = p.tool; s2.args = p.args; }
+      renderArSteps();
+    } else if (name === "tool_result") {
+      var s3 = findArStep(p.index);
+      if (s3) { s3.result = (p.ok ? "✓ " : "✗ ") + (p.summary || ""); s3.ok = !!p.ok; }
+      renderArSteps();
+    } else if (name === "step_done") {
+      var s4 = findArStep(p.index); if (s4) s4.status = "done";
+      renderArSteps();
+    } else if (name === "step_failed") {
+      var s5 = findArStep(p.index); if (s5) { s5.status = "failed"; s5.result = "✗ " + (p.error || ""); }
+      renderArSteps();
+    } else if (name === "agent_delta") {
+      state.agentRun.summary += (p.delta || "");
+      renderArSummary();
+    } else if (name === "agent_final") {
+      if (p.answer) state.agentRun.summary = p.answer;
+      state.agentRun.status = "done";
+      renderArSummary();
+      setArStatus("✓ 完成");
+    } else if (name === "agent_error") {
+      state.agentRun.status = "error";
+      setArStatus("✗ 错误: " + (p.error || ""), "fail");
+    }
+  }
+
+  function findArStep(index) {
+    for (var i = 0; i < state.agentRun.steps.length; i++) {
+      if (state.agentRun.steps[i].index === index) return state.agentRun.steps[i];
+    }
+    return null;
+  }
+
+  function renderArSteps() {
+    var el = document.getElementById("ar-steps");
+    if (!el) return;
+    var html = "";
+    state.agentRun.steps.forEach(function (s) {
+      var icon = s.status === "done" ? '<span class="ok">✓</span>'
+        : s.status === "failed" ? '<span class="fail">✗</span>'
+        : s.status === "running" ? '<span class="run">🔄</span>'
+        : '<span class="pend">○</span>';
+      html += '<div class="agentrun-step"><div class="ar-head"><span class="ar-idx">' + (s.index + 1) + "</span>" + icon +
+        ' <span class="ar-goal">' + esc(s.goal || "") + "</span>" +
+        (s.tool ? ' <span class="ar-tool">' + esc(s.tool) + "</span>" : "") + "</div>";
+      if (s.args) html += '<div class="ar-args">args: ' + esc(JSON.stringify(s.args)) + "</div>";
+      if (s.result) {
+        var border = s.ok === false ? "border-left:2px solid #f85149;" : "border-left:2px solid #3fb950;";
+        html += '<div class="ar-result" style="' + border + '">' + esc(s.result) + "</div>";
+      }
+      html += "</div>";
+    });
+    el.innerHTML = html;
+  }
+
+  function renderArSummary() {
+    var el = document.getElementById("ar-summary");
+    if (!el) return;
+    el.innerHTML = state.agentRun.summary
+      ? '<div class="ar-label">汇总(LLM 流式)</div>' + esc(state.agentRun.summary)
+      : "";
   }
 
   // --- 辅助 ---
