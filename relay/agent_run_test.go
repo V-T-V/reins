@@ -205,29 +205,26 @@ func TestAgentRunNotConfigured(t *testing.T) {
 	}
 }
 
-// TestAgentRunPlanParseFallback M2:规划 JSON 解析失败 → 单步兜底(run_task)仍执行。
+// TestAgentRunPlanParseFallback M2/v4.3.9:规划失败(LLM 返回非 JSON)→ 直接 agent_error,
+// 不再"把 task 当 powershell 命令"兜底(自然语言当命令永远失败且误导)。
 func TestAgentRunPlanParseFallback(t *testing.T) {
 	var calls int
 	srv, _, _ := startAgentRelay(t, func(messages []ChatMessage, tools []ToolDef) (ChatMessage, error) {
 		calls++
-		if calls == 1 {
-			return ChatMessage{Content: "不是 JSON"}, nil // 规划解析失败
-		}
-		return ChatMessage{Content: "兜底执行完成"}, nil
+		return ChatMessage{Content: "不是 JSON"}, nil // 规划解析失败(agentPlan 重试 1 次仍失败)
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	events := agentRunSSE(t, ctx, srv, "随便说点什么")
 
-	// 兜底单步 run_task 会执行,但 Agent 不在线 → 失败。验证流程不 panic 且走到汇总/错误。
 	joined := strings.Join(eventKinds(events), ",")
-	if !hasEvent(events, "agent_plan") {
-		t.Fatalf("应发出 agent_plan(兜底计划): %s", joined)
+	// 规划失败 → 直接 agent_error,不应发出 agent_plan(无兜底)
+	if hasEvent(events, "agent_plan") {
+		t.Fatalf("规划失败不应发出 agent_plan(已移除兜底): %s", joined)
 	}
-	// 最终:汇总或错误(取决于兜底步骤结果)
-	if !hasEvent(events, "agent_final") && !hasEvent(events, "agent_error") {
-		t.Fatalf("应到达 agent_final 或 agent_error: %s", joined)
+	if !hasEvent(events, "agent_error") {
+		t.Fatalf("规划失败应发出 agent_error: %s", joined)
 	}
 }
 

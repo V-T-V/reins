@@ -93,7 +93,7 @@ func agentTools() []AgentTool {
 			Name:        "list_agents",
 			Description: "列出所有在线 Agent(agent_id/hostname/os/version/capabilities)。执行远程任务前先查可用 Agent 及其能力。",
 			Parameters: map[string]any{
-				"type": "object",
+				"type":       "object",
 				"properties": map[string]any{},
 			},
 			Run: func(ctx context.Context, r *Relay, args map[string]any) ToolResult {
@@ -153,7 +153,7 @@ func agentTools() []AgentTool {
 			Run: func(ctx context.Context, r *Relay, args map[string]any) ToolResult {
 				agentID := jsonArgs(args, "agent_id")
 				if agentID == "" {
-					return toolResultErr(fmt.Errorf("agent_id 必填"))
+					return toolResultErr(fmt.Errorf("agent_id 必填 —— 若不知道 agent_id,请先用 list_agents 工具查询在线 Agent 列表拿到 agent_id"))
 				}
 				taskType := jsonArgs(args, "type")
 				if taskType == "" {

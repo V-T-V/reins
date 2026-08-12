@@ -150,15 +150,20 @@ func (r *Relay) handleAgentRun(w http.ResponseWriter, req *http.Request) {
 func (r *Relay) runAgentLoop(ctx context.Context, run *agentRun, send func(event string, payload any)) error {
 	schemas := agentToolSchemas()
 
-	// 1. Planner:LLM 生成步骤列表(JSON 约束;失败重试 1 次,再失败转单步兜底)
+	// 1. Planner:LLM 生成步骤列表(JSON 约束;失败重试 1 次)。
 	steps, err := r.agentPlan(ctx, run, schemas)
 	if err != nil {
-		// 解析失败兜底:单步 run_task(把整句当命令)
-		log.Printf("[agent-run] %s 规划失败,兜底单步: %v", run.ID, err)
-		steps = []AgentStep{{
-			Index: 0, Goal: run.Task, Tool: "run_task",
-			Args: map[string]any{"type": "powershell", "command": run.Task}, Status: "pending",
-		}}
+		// 规划失败 = LLM 不可用(如 401 鉴权/未配置/网络)。
+		// 不再兜底"把 task 当 powershell 命令"(自然语言当命令永远失败且误导);
+		// 直接报错让用户看到真实原因(去配 LLM key / 检查 base-url)。
+		log.Printf("[agent-run] %s 规划失败: %v", run.ID, err)
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "401") || strings.Contains(strings.ToLower(errMsg), "auth") {
+			errMsg = "LLM 鉴权失败(401)—— 请检查 -llm-api-key 是否正确配置"
+		} else if strings.Contains(errMsg, "未配置 LLM") {
+			errMsg = "Agent 编排未启用 —— 服务器需配置 -llm-base-url(如 https://api.deepseek.com/v1)"
+		}
+		return fmt.Errorf("LLM 规划失败: %s", errMsg)
 	}
 	if len(steps) == 0 {
 		return fmt.Errorf("LLM 未生成任何步骤")
@@ -364,21 +369,27 @@ func agentPlanSystemPrompt(schemas []ToolDef, run *agentRun) string {
 %s
 
 %s
-【工具选择决策树】
-- 不知道有哪些 Agent / 该用哪个 → 第一步用 list_agents(看在线 Agent 与能力);或 scheduler_best(按负载推荐 + 能力/标签过滤)
-- 在 Agent 上执行命令/脚本/截图 → run_task(type=powershell 给 command,type=script 给 content)
-- 快捷跑一条 PowerShell → shell_exec(等价 run_task powershell,更简)
-- 查已下发任务的结果 → get_task_result(task_id 来自 run_task 的返回)
-- 看历史任务 → list_tasks(最近 N 条)
-- 跑 Relay 脚本库里已存的脚本 → run_script(name)
-- 读 Agent 配置(allowed_roots / workspace 等) → read_agent_config
+【意图 → 工具映射(最重要:先识别用户意图,再选工具)】
+- "列出/查看/有哪些 agent/客户端/机器" → list_agents(无需参数)
+- "推荐/选哪个 agent" → scheduler_best(可给 type/tag 过滤)
+- "在 agent 上跑命令/查进程/查磁盘/查系统信息/执行 PowerShell" → run_task(type=powershell, command=具体命令) 或 shell_exec
+- "查任务结果/任务怎么样了" → get_task_result(task_id) 或 list_tasks
+- "读 agent 配置/路径/allowed_roots" → read_agent_config
+- "跑脚本库的 xxx 脚本" → run_script(name)
+⚠️ 关键:用户的自然语言描述(如"列出在线 agent")是【任务意图】,不是 PowerShell 命令本身 —— 绝不能把它原样塞进 command 参数。command 必须是真实可执行的 PowerShell 代码(如 Get-Process、Get-PSDrive)。"列出 agent"这种意图对应 list_agents 工具,不是 run_task。
+
+【run_task / shell_exec 的 command 参数示例】(只能是真实 PowerShell)
+- 查进程: Get-Process | Select-Object Name,Id,CPU -First 10
+- 查磁盘: Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free
+- 查系统信息: Get-ComputerInfo | Select-Object OsName,OsVersion,CsProcessors
+- 查 IP: Get-NetIPAddress -AddressFamily IPv4 | Select-Object IPAddress,InterfaceAlias
 
 【输出规则】
 - 必须是合法 JSON:{"steps":[{"goal":"步骤目标","tool":"工具名","args":{...}}]}
 - 只输出 JSON,不要任何解释、不要 Markdown 围栏
 - 步骤数 1-5,能一步完成就一步,宁少勿多
-- args 必须符合工具参数;命令类 command 给完整可执行的 PowerShell(例:Get-Process | Select-Object Name,Id -First 10)
-- 不要编造工具名或参数;不要在 args 里塞工具未定义的字段
+- args 必须符合工具参数 schema;不要编造工具名;不要塞工具未定义的字段
+- run_task 必须给 agent_id(若用户没指定,先 list_agents 拿到 agent_id 再用,或让 scheduler_best 推荐)
 - 涉及多 Agent 时每步明确 agent_id`, toolsDesc.String(), agentHint)
 }
 
