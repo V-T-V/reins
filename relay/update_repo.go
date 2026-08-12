@@ -126,10 +126,6 @@ func (r *UpdateRepo) BinPath(version string) string {
 
 // handleUpdateList GET /api/updates —— 列出可用版本。
 func (r *Relay) handleUpdateList(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	if r.updateRepo == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"versions": []any{}, "enabled": false})
 		return
@@ -141,10 +137,6 @@ func (r *Relay) handleUpdateList(w http.ResponseWriter, req *http.Request) {
 // handleUpdateUpload POST /api/updates/upload?version=v1.2.0 —— 上传新版本二进制。
 // body = 原始二进制(stream-through 落盘 + SHA256)。
 func (r *Relay) handleUpdateUpload(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	if r.updateRepo == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("版本仓库未启用")))
 		return
@@ -168,11 +160,11 @@ func (r *Relay) handleUpdateUpload(w http.ResponseWriter, req *http.Request) {
 // protoUpdateTaskInline 内联二进制的 update 任务(简化:不经 filetransfer)。
 // 适合中等大小二进制(<20MB,WS 32MB 限制内)。
 type protoUpdateTaskInline struct {
-	BinaryB64 string `json:"binary_b64"` // base64 编码的二进制
-	SHA256    string `json:"sha256"`
-	Version   string `json:"version"`
+	BinaryB64  string `json:"binary_b64"` // base64 编码的二进制
+	SHA256     string `json:"sha256"`
+	Version    string `json:"version"`
 	MinVersion string `json:"min_version"`
-	Force     bool   `json:"force"`
+	Force      bool   `json:"force"`
 }
 
 // handleUpdateApply POST /api/updates/apply —— 触发 Agent 更新。
@@ -180,10 +172,6 @@ type protoUpdateTaskInline struct {
 // 流程:从仓库读二进制 → 内联到 update 任务 payload(base64)→ 下发 update 任务。
 // Agent 侧解码 base64 写到 exeDir/.new → rename+copy+重启。
 func (r *Relay) handleUpdateApply(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	if r.updateRepo == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("版本仓库未启用")))
 		return

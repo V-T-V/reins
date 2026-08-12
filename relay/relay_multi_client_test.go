@@ -253,7 +253,7 @@ func TestMultiAgentRoutingE2E(t *testing.T) {
 
 	// 起 2 个 Agent，各自记录收到的任务
 	type agentState struct {
-		conn   *websocket.Conn
+		conn    *websocket.Conn
 		gotTask atomic.Int32
 	}
 	startAgent := func(id string, caps []string) *agentState {

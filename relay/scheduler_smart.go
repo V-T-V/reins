@@ -21,11 +21,11 @@ import (
 
 // AgentLoad Agent 负载信息(从最近 monitor 采样提取)。
 type AgentLoad struct {
-	AgentID   string
-	CPUUsage  float64 // %
+	AgentID    string
+	CPUUsage   float64 // %
 	MemUsedPct float64 // %
-	TaskCount int     // 当前在途任务数
-	LastSeen  time.Time
+	TaskCount  int     // 当前在途任务数
+	LastSeen   time.Time
 }
 
 // SelectBestAgent 智能选择最优 Agent。
@@ -59,8 +59,8 @@ func (r *Relay) SelectBestAgent(tag, taskType string) (string, error) {
 		// tag 为空且 Tags 有值 → 也放行
 		// 负载评分(简化:无实时 monitor 数据时用 0 分)
 		// 生产环境从 metrics 缓存取最近 monitor 采样
-		cpu := 0.0   // TODO: 从 metrics 取
-		mem := 0.0   // TODO: 从 metrics 取
+		cpu := 0.0 // TODO: 从 metrics 取
+		mem := 0.0 // TODO: 从 metrics 取
 		tasks := float64(r.getInflightCount(a.AgentID))
 		score := cpu*0.4 + mem*0.3 + tasks*10 // task weight 高
 		pool = append(pool, scored{a, score})
@@ -123,10 +123,6 @@ func (r *Relay) getInflightCount(agentID string) int {
 
 // handleSelectBest GET /api/scheduler/best —— 智能选择最优 Agent。
 func (r *Relay) handleSelectBest(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	tag := req.URL.Query().Get("tag")
 	taskType := req.URL.Query().Get("type")
 	best, err := r.SelectBestAgent(tag, taskType)

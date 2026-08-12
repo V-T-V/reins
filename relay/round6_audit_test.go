@@ -97,8 +97,8 @@ func TestReadAuditEntriesMalformedLine(t *testing.T) {
 // TestCEFSeverityLevels 验证 formatCEF 按事件类型分级严重性。
 func TestCEFSeverityLevels(t *testing.T) {
 	cases := []struct {
-		event    string
-		minSev   string // 期望 severity ≥ 此值(CEF 末段)
+		event  string
+		minSev string // 期望 severity ≥ 此值(CEF 末段)
 	}{
 		{"task_submitted", "1"},
 		{"task_blocked", "7"},   // blocked → High

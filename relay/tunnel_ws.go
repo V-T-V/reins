@@ -32,10 +32,6 @@ import (
 // 隧道 WebSocket 全双工端点。握手成功即执行 open(等 Agent ready),
 // 之后单一连接内双向转发数据 + 心跳,无首包竞态窗口。
 func (r *Relay) handleTunnelWS(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	q := req.URL.Query()
 	tunnelID := q.Get("tunnel_id")
 	agentID := q.Get("agent_id")

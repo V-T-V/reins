@@ -39,7 +39,8 @@ type TaskStore interface {
 //	acknowledged—— Agent 已 ACK（收到）
 //	completed   —— Agent 已回结果（终态）
 //	failed      —— 执行失败（终态）
-//cancelled   —— 被取消(终态)
+//
+// cancelled   —— 被取消(终态)
 //
 // R1 修复:Status 常量统一用 proto 包定义(单一真相源)。
 // relay 包通过 alias 引用,消除双份定义的漂移风险。
@@ -106,7 +107,7 @@ func validTransition(from, to string) bool {
 //
 // E1/B2 修复：把"读当前态→校验→写新态"合并进单个 db.Update 写事务。
 // bbolt 写事务天然串行，保证 reaper 与 result 并发时不会丢失更新
-//（原 View+Update 两步非原子，可能 completed 被 reaper 覆盖为 pending）。
+// （原 View+Update 两步非原子，可能 completed 被 reaper 覆盖为 pending）。
 func (s *Store) UpdateTaskStatus(taskID, newStatus string) error {
 	if s.db == nil {
 		return ErrStoreClosed
@@ -221,6 +222,7 @@ type Store struct {
 	mu   sync.Mutex // 保护 Close(防并发 Close)
 	path string
 }
+
 // OpenStore 打开（或创建）持久化存储。path 为 .db 文件路径。
 func OpenStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

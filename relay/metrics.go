@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -29,13 +30,13 @@ type Metrics struct {
 	TasksReaped    int64 // 被 reaper 回退的任务数
 	EventsDropped  int64 // SSE 丢弃事件数（慢消费者）
 	// M1 文件传输指标(Relay 转发时统计,Agent 侧也有自己的计数器但无 HTTP server 暴露)
-	UploadsTotal      int64 // 累计上传次数(成功)
-	DownloadsTotal    int64 // 累计下载次数(含部分成功)
-	UploadBytes       int64 // 累计上传字节(Agent 校验通过的)
-	DownloadBytes     int64 // 累计下载字节(发给 Console 的)
-	UploadFailures    int64 // 上传失败次数(Agent 校验失败/中断)
-	DownloadFailures  int64 // 下载失败次数(ctx 超时/连接断)
-	StartedAt      time.Time
+	UploadsTotal     int64 // 累计上传次数(成功)
+	DownloadsTotal   int64 // 累计下载次数(含部分成功)
+	UploadBytes      int64 // 累计上传字节(Agent 校验通过的)
+	DownloadBytes    int64 // 累计下载字节(发给 Console 的)
+	UploadFailures   int64 // 上传失败次数(Agent 校验失败/中断)
+	DownloadFailures int64 // 下载失败次数(ctx 超时/连接断)
+	StartedAt        time.Time
 }
 
 var metrics = &Metrics{StartedAt: time.Now()}
@@ -89,25 +90,25 @@ func (m *Metrics) IncXfer(field string, n int64) {
 // Snapshot 返回指标快照。
 func (m *Metrics) Snapshot() map[string]any {
 	return map[string]any{
-		"agents_online":        atomic.LoadInt64(&m.AgentsOnline),
-		"tasks_submitted":      atomic.LoadInt64(&m.TasksSubmitted),
-		"tasks_dispatched":     atomic.LoadInt64(&m.TasksDispatched),
-		"tasks_completed":      atomic.LoadInt64(&m.TasksCompleted),
-		"tasks_failed":         atomic.LoadInt64(&m.TasksFailed),
-		"tasks_blocked":        atomic.LoadInt64(&m.TasksBlocked),
-		"tasks_cancelled":      atomic.LoadInt64(&m.TasksCancelled),
-		"tasks_acked":          atomic.LoadInt64(&m.TasksAcked),
-		"tasks_nacked":         atomic.LoadInt64(&m.TasksNacked),
-		"tasks_reaped":         atomic.LoadInt64(&m.TasksReaped),
-		"events_dropped":       atomic.LoadInt64(&m.EventsDropped),
-		"xfer_uploads_total":   atomic.LoadInt64(&m.UploadsTotal),
-		"xfer_downloads_total": atomic.LoadInt64(&m.DownloadsTotal),
-		"xfer_upload_bytes":    atomic.LoadInt64(&m.UploadBytes),
-		"xfer_download_bytes":  atomic.LoadInt64(&m.DownloadBytes),
-		"xfer_upload_failures": atomic.LoadInt64(&m.UploadFailures),
+		"agents_online":          atomic.LoadInt64(&m.AgentsOnline),
+		"tasks_submitted":        atomic.LoadInt64(&m.TasksSubmitted),
+		"tasks_dispatched":       atomic.LoadInt64(&m.TasksDispatched),
+		"tasks_completed":        atomic.LoadInt64(&m.TasksCompleted),
+		"tasks_failed":           atomic.LoadInt64(&m.TasksFailed),
+		"tasks_blocked":          atomic.LoadInt64(&m.TasksBlocked),
+		"tasks_cancelled":        atomic.LoadInt64(&m.TasksCancelled),
+		"tasks_acked":            atomic.LoadInt64(&m.TasksAcked),
+		"tasks_nacked":           atomic.LoadInt64(&m.TasksNacked),
+		"tasks_reaped":           atomic.LoadInt64(&m.TasksReaped),
+		"events_dropped":         atomic.LoadInt64(&m.EventsDropped),
+		"xfer_uploads_total":     atomic.LoadInt64(&m.UploadsTotal),
+		"xfer_downloads_total":   atomic.LoadInt64(&m.DownloadsTotal),
+		"xfer_upload_bytes":      atomic.LoadInt64(&m.UploadBytes),
+		"xfer_download_bytes":    atomic.LoadInt64(&m.DownloadBytes),
+		"xfer_upload_failures":   atomic.LoadInt64(&m.UploadFailures),
 		"xfer_download_failures": atomic.LoadInt64(&m.DownloadFailures),
-		"uptime_seconds":       int(time.Since(m.StartedAt).Seconds()),
-		"goroutines":           runtime.NumGoroutine(),
+		"uptime_seconds":         int(time.Since(m.StartedAt).Seconds()),
+		"goroutines":             runtime.NumGoroutine(),
 	}
 }
 
@@ -119,10 +120,6 @@ func (m *Metrics) SetEventsDropped(n int64) {
 // handleMetrics GET /api/metrics 暴露运行指标(JSON 格式,需鉴权)。
 // P1-S7 修复:加鉴权(原无鉴权泄漏在线数/任务计数/goroutine数,利于侦察)。
 func (r *Relay) handleMetrics(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	// 更新在线数 + events_dropped(D7 从 EventBus 同步)
 	metrics.SetAgentsOnline(len(r.agents.Snapshot()))
 	metrics.SetEventsDropped(r.console.Dropped())
@@ -143,7 +140,8 @@ func (r *Relay) handlePromMetrics(w http.ResponseWriter, req *http.Request) {
 	}
 	if expectedToken != "" {
 		got := req.Header.Get("Authorization")
-		if got != "Bearer "+expectedToken {
+		// 常量时间比较(与 authorize/hasValidBearer 一致,防计时侧信道泄露 metrics token)
+		if subtle.ConstantTimeCompare([]byte(got), []byte("Bearer "+expectedToken)) != 1 {
 			writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("metrics 端点需要 Bearer token")))
 			return
 		}

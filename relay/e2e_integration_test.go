@@ -20,16 +20,14 @@ import (
 )
 
 // newTestRelay 创建测试用 Relay 实例(MemoryStore + 无 audit)。
+//
+// v4.5.0 架构修复:改用 NewRelay 构造(而非 struct literal),避免漂移 ——
+// 原写法漏 agentRunSem(nil channel,触 /api/agent/run 会挂死)、sessions、loginLimiter。
+// 现在继承 NewRelay 的所有默认值,再按测试需要覆盖。
 func newTestRelay(t *testing.T) (*Relay, *httptest.Server) {
 	t.Helper()
 	store := NewMemoryStore()
-	r := &Relay{
-		cfg:    Config{Addr: ":0"},
-		agents: NewRegistry(),
-		console: NewEventBus(),
-		policy:  DefaultCommandPolicy(),
-		store:   store,
-	}
+	r := NewRelay(Config{Addr: ":0"}).WithStore(store)
 	mux := http.NewServeMux()
 	r.registerHTTP(mux)
 	srv := httptest.NewServer(mux)
@@ -228,4 +226,3 @@ func TestE2EMemoryStoreStateMachine(t *testing.T) {
 		t.Error("终态不应能回退")
 	}
 }
-

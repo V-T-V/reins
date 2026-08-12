@@ -49,7 +49,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
-- **成功标准**:169 Go 文件 / 31.8K 行 / 373 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
+- **成功标准**:194 Go 文件 / ~39K 行 / 560+ 测试 / 端到端全路径验证通过(rounds 1-10 + 2026-08-12 控制台/AI Agent/架构优化)。
 
 ## 架构假设(4 项显式假设)
 
@@ -62,34 +62,38 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 
 ```
 go-rmm/
-├── relay/              # 中继服务器(59 文件)
-│   ├── server.go       # Relay 主体 + serveAgent + xferSession + EventBus
-│   ├── router.go       # REST 路由(42 端点)
+├── relay/              # 中继服务器(78 文件)
+│   ├── server.go       # Relay 主体 + authorize/authH 中间件 + serveAgent + EventBus
+│   ├── router.go       # REST 路由(~47 端点,authH 包装器统一鉴权)
 │   ├── store.go        # bbolt TaskStore + TaskStore interface + CAS/ReapToPending
 │   ├── memstore.go     # 内存版 TaskStore(mock/测试/轻量部署)
-│   ├── redis_store.go  # Redis 版 TaskStore(水平扩展)
 │   ├── batchdispatch.go # 批量任务分发(一对多/聚合/重试/进度跟踪)[round 8]
-│   ├── tenant.go       # 多租户组织/角色策略/配额/隔离过滤 [round 7]
+│   ├── tenant.go       # 多租户组织/角色策略/配额/隔离过滤 [round 7](未接 HTTP handler)
 │   ├── reaper.go       # 超时任务回收
 │   ├── ca.go           # 内置 CA + CRL + enrollment
 │   ├── policy.go       # 命令策略(黑名单)
 │   ├── audit.go        # hash chain 审计 + 异步写入
 │   ├── audit_siem.go   # SIEM 导出(CEF/Syslog/JSON)
-│   ├── rbac.go         # RBAC 多租户(tenant:role:secret)
+│   ├── rbac.go         # RBAC 多租户(tenant:role:secret)(未接 HTTP handler)
 │   ├── power.go        # 电源操作端点(标签白名单)
 │   ├── secrets.go      # Secret 管理(TTL+一次性)
 │   ├── sessions.go     # 控制台会话存储(内存态,滑动续期)[2026-08-12]
-│   ├── console_auth.go # 控制台 login/logout/session 端点(HttpOnly Cookie 鉴权)[2026-08-12]
+│   ├── console_auth.go # 控制台 login/logout/session 端点(HttpOnly Cookie + 登录限流)[2026-08-12]
+│   ├── login_ratelimit.go # 登录限流(IP 失败计数+锁定,防暴力破解)[2026-08-12]
+│   ├── agent_run.go    # AI Agent 编排(Plan-Execute-Replan + V4 prompt)[2026-08-06]
+│   ├── agent_tools.go  # 8 个编排工具(list_agents/run_task/...)[2026-08-06]
+│   ├── llm_client.go   # OpenAI 兼容 LLM 客户端(规划/流式/function calling)[2026-08-06]
 │   ├── update_repo.go  # Agent 版本仓库(自更新)
 │   ├── scheduler.go    # cron 定时任务
-│   ├── scheduler_smart.go # 智能调度(负载均衡)
+│   ├── scheduler_smart.go # 智能调度(负载均衡,CPU/mem 待接 metrics)
 │   ├── scriptlib.go    # 脚本库(远端脚本存储)
 │   ├── tunnel.go       # 隧道透传(端口转发)
-│   ├── event_federation.go # Redis Pub/Sub 事件联邦
+│   ├── tunnel_ws.go    # 隧道 WebSocket 全双工 [2026-08-06]
 │   ├── logging.go      # slog 结构化日志
-│   ├── metrics.go      # Prometheus /metrics + pprof
+│   ├── metrics.go      # Prometheus /metrics(常量时间鉴权)+ pprof
 │   ├── tls_watcher.go  # TLS 证书过期检测
-│   └── *.go            # config/web/main/registry
+│   └── *.go            # config/web/main/registry/quickstart/stream_task/buffer_pool/...
+│   # 注:redis_store.go / event_federation.go 此前误列,实际未实现(水平扩展为接口预留)
 ├── agent/              # Windows Agent(18 文件)
 │   ├── connection.go   # 主循环 + recvLoop + WS 连接管理
 │   ├── filetransfer.go # 大文件传输引擎(SHA256+续传)
@@ -137,10 +141,10 @@ go-rmm/
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 169 |
-| 代码行 | 31,800+ |
+| Go 文件 | 194 |
+| 代码行 | ~39,000+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 373 |
+| 测试用例 | 560+(relay 包 280+ 测试/基准函数) |
 | 基准测试 | 22 |
 | CLI 命令 | 51 |
 | API 端点 | 42 |
@@ -256,6 +260,14 @@ go-rmm/
   - **根因修复**:`agentPlan`/`agentReplan` 原同时传 `tools=schemas` + `response_format=json_object` —— DeepSeek V4(强 tool-use)会倾向返回 `tool_calls` 而非计划 JSON,冲突。改 `ChatJSON(..., nil)`,规划纯走 system prompt 描述工具 + json_object,schemas 仅用于 prompt 文本。
   - **prompt 针对 V4 重写**:`agentPlanSystemPrompt` 加结构化「工具选择决策树」(不知道 agent→list_agents;执行命令→run_task;...) + 反幻觉规则(不编造工具/参数,命令完整 PowerShell)。
   - **模型迁移**:`deepseek-chat`(legacy,2026-07-24 退役)→ `deepseek-v4-flash`/`deepseek-v4-pro`(1M 上下文,SOTA agentic)。`config.go` 注释 + 默认说明更新。
+
+**已完成(2026-08-12,架构梳理与优化 v4.5.0)**:
+- ✅ **架构审计**:Explore agent 全面审计 78 个 relay 文件,识别 10 项优化点(按 ROI 排序)。
+- ✅ **auth 中间件 `authH`**(最大架构改进):消除 ~40 个 handler 各自重复的 `if err := r.authorize(req); err != nil { writeJSON(401...) }` 4 行块。`registerHTTP` 统一用 `r.authH(handler)` 包装;故意跳过 authorize 的端点(/healthz 软鉴权、/metrics 独立 token、/api/enroll 注册令牌、/api/console/* 自鉴权)显式不包。删 `handleConsoleWS` 死代码(未注册)。
+- ✅ **安全修复 `handlePromMetrics`**:原 `got != "Bearer "+token` 是明文比较(计时侧信道泄露 metrics token),改 `subtle.ConstantTimeCompare`(与 authorize/hasValidBearer 一致)。
+- ✅ **`newTestRelay` 漂移修复**:原 struct literal 构造漏 `agentRunSem`(nil channel,触 /api/agent/run 会挂死)、sessions、loginLimiter。改用 `NewRelay(cfg).WithStore(store)`,继承所有默认值,消除"测试与生产行为不一致"footgun。
+- ✅ **一致性**:`bootstrap.go:55` 的 hand-rolled `map[string]string` 错误改用统一 `errMap`(已由 authH 覆盖鉴权)。
+- ✅ **AGENTS.md 同步**:删幻影文件(`redis_store.go`/`event_federation.go` 实际未实现);补 `login_ratelimit.go`/`agent_run.go`/`agent_tools.go`/`llm_client.go`/`tunnel_ws.go` 等;更新计数(169→194 文件、31.8K→~39K 行、373→560+ 测试);标注 RBAC/tenant"未接 HTTP handler"。
 
 ### P1 — 能力补全
 4. **Linux Agent**:补齐 Linux 执行器(systemd 服务/包管理/journalctl),打通跨平台。

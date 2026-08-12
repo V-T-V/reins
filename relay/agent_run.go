@@ -60,10 +60,6 @@ type agentPlanResponse struct {
 // handleAgentRun POST /api/agent/run —— Agent 编排(SSE 流式)。
 // 请求体:{"task": "自然语言任务", "agent_id"?: 可选, "type"?: 可选}
 func (r *Relay) handleAgentRun(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	if r.llmClient == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("Agent 编排未启用: 未配置 LLM(需 -llm-base-url,如 http://127.0.0.1:11434/v1)")))
 		return

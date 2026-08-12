@@ -129,14 +129,10 @@ var secretStore = NewSecretStore()
 
 // handleSecretPut POST /api/secrets —— 存储凭据(返回 ref)。
 func (r *Relay) handleSecretPut(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	var body struct {
-		Value    string `json:"value"`     // 凭据明文(不记入 audit)
-		TTL      int    `json:"ttl"`       // 秒,默认 3600
-		OneTime  bool   `json:"one_time"`  // 一次性(默认 true)
+		Value   string `json:"value"`    // 凭据明文(不记入 audit)
+		TTL     int    `json:"ttl"`      // 秒,默认 3600
+		OneTime bool   `json:"one_time"` // 一次性(默认 true)
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("解析失败: %w", err)))
@@ -172,10 +168,6 @@ func (r *Relay) handleSecretPut(w http.ResponseWriter, req *http.Request) {
 // handleSecretGet GET /api/secrets/{ref} —— Agent 拉取凭据。
 // 鉴权:需 Relay token(防未授权访问)。
 func (r *Relay) handleSecretGet(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	ref := req.URL.Path[len("/api/secrets/"):]
 	if ref == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("缺少 ref")))
@@ -195,10 +187,6 @@ func (r *Relay) handleSecretGet(w http.ResponseWriter, req *http.Request) {
 
 // handleSecretDelete DELETE /api/secrets/{ref} —— 删除凭据。
 func (r *Relay) handleSecretDelete(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	ref := req.URL.Path[len("/api/secrets/"):]
 	secretStore.Delete(ref)
 	writeJSON(w, http.StatusOK, map[string]any{"ref": ref, "deleted": true})

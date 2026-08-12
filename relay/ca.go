@@ -32,12 +32,12 @@ import (
 // D3 修复 P1-3：CRL（revoked/issued）持久化到 data/ca-state.json，
 // Relay 重启后撤销状态不丢失。
 type CA struct {
-	mu       sync.Mutex
-	rootCert *x509.Certificate
-	rootKey  *ecdsa.PrivateKey
-	caPEM    []byte
-	certPath string // 根证书落盘路径
-	keyPath  string // 根私钥落盘路径
+	mu        sync.Mutex
+	rootCert  *x509.Certificate
+	rootKey   *ecdsa.PrivateKey
+	caPEM     []byte
+	certPath  string // 根证书落盘路径
+	keyPath   string // 根私钥落盘路径
 	statePath string // CRL 状态落盘路径（ca-state.json）
 
 	// 注册令牌：token → 绑定信息（agentID + 创建时间，一次性，签发后删除，不持久化）
@@ -291,7 +291,7 @@ func (c *CA) VerifyClientCert(cert *x509.Certificate) error {
 	roots := x509.NewCertPool()
 	roots.AddCert(c.rootCert)
 	_, err := cert.Verify(x509.VerifyOptions{
-		Roots:   roots,
+		Roots:     roots,
 		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	})
 	if err != nil {

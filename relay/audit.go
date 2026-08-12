@@ -6,8 +6,9 @@
 //   - 日志轮转: 按天轮转(可选,后续加)
 //
 // hash chain 格式:
-//   {"ts":...,"event":...,"prev_hash":"abc123...","this_hash":"def456..."}
-//   this_hash = sha256(prev_hash + json(record_without_hashes))
+//
+//	{"ts":...,"event":...,"prev_hash":"abc123...","this_hash":"def456..."}
+//	this_hash = sha256(prev_hash + json(record_without_hashes))
 package main
 
 import (
@@ -24,13 +25,13 @@ import (
 
 // AuditLog 任务审计日志(append-only + hash chain + 异步写入)。
 type AuditLog struct {
-	mu       sync.Mutex // 仅保护 prevHash 字段
-	file     *os.File
-	prevHash string // 上一条记录的 hash(链式)
-	ch       chan AuditEntry
-	closeCh  chan struct{}
+	mu        sync.Mutex // 仅保护 prevHash 字段
+	file      *os.File
+	prevHash  string // 上一条记录的 hash(链式)
+	ch        chan AuditEntry
+	closeCh   chan struct{}
 	closeOnce sync.Once // 幂等 close(防重复 close panic,round 6 修复)
-	closed   bool
+	closed    bool
 }
 
 // AuditEntry 单条审计记录(不含 hash,hash 在写入时计算)。
@@ -148,7 +149,7 @@ func (a *AuditLog) Close() error {
 	}
 	a.closeOnce.Do(func() {
 		a.closed = true
-		close(a.closeCh) // 触发 writeLoop 排空退出
+		close(a.closeCh)                   // 触发 writeLoop 排空退出
 		time.Sleep(100 * time.Millisecond) // 给 writeLoop 排空时间
 	})
 	return a.file.Close()

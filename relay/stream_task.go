@@ -29,10 +29,6 @@ import (
 //	event: task_result
 //	data: {"task_id":"...","success":true,"stdout":"..."}
 func (r *Relay) handleStreamTask(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	var task proto.TaskRequest
 	if err := json.NewDecoder(req.Body).Decode(&task); err != nil {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("请求体解析失败: %w", err)))

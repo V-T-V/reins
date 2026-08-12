@@ -173,8 +173,8 @@ func (s *Scheduler) executeRule(rule CronRule) {
 		s.store.SaveTask(StoredTask{
 			Request:   task,
 			Status:    StatusPending,
-			CreatedAt: now,                         // P1-C5 修复:填充时间戳
-			UpdatedAt: now,                         // 否则 reaper 误判超时秒数立即回收
+			CreatedAt: now, // P1-C5 修复:填充时间戳
+			UpdatedAt: now, // 否则 reaper 误判超时秒数立即回收
 		})
 	}
 

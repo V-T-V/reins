@@ -22,40 +22,44 @@ import (
 
 // registerHTTP 注册 REST 路由（控制台调用）。
 func (r *Relay) registerHTTP(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/agents", r.handleListAgents)
-	mux.HandleFunc("POST /api/tasks", r.handlePostTask)
-	mux.HandleFunc("POST /api/tasks/batch", r.handleBatchTask)              // C10 批量下发
-	mux.HandleFunc("POST /api/tasks/cancel", r.handleCancelTask)            // C6 取消任务
-	mux.HandleFunc("GET /api/tasks", r.handleListTasks)                     // C4/F1 任务历史
-	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)                      // C4 单任务详情+结果
-	mux.HandleFunc("POST /api/enroll-token", r.handleGenEnrollToken)        // C7 生成注册令牌
-	mux.HandleFunc("POST /api/enroll", r.handleEnroll)                      // C7 Agent 换证书
-	mux.HandleFunc("POST /api/agents/revoke", r.handleRevokeAgent)          // G2 撤销 Agent 证书
-	mux.HandleFunc("GET /api/crons", r.handleListCrons)                     // H2 cron 列表
-	mux.HandleFunc("POST /api/crons", r.handleAddCron)                      // H2 新建 cron
-	mux.HandleFunc("DELETE /api/crons/", r.handleDeleteCron)                // H2 删除 cron
-	mux.HandleFunc("POST /api/shell/open", r.handleShellOpen)               // H3 开终端会话
-	mux.HandleFunc("POST /api/shell/input", r.handleShellInput)             // H3 发 stdin
-	mux.HandleFunc("POST /api/shell/close", r.handleShellClose)             // H3 关会话
-	mux.HandleFunc("POST /api/transfer/upload", r.handleTransferUpload)     // J2 上传
-	mux.HandleFunc("POST /api/transfer/download", r.handleTransferDownload) // J2 下载
-	mux.HandleFunc("GET /api/events", r.handleSSE)
-	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
-	mux.HandleFunc("GET /healthz", r.handleHealthz)     // D8 深度健康检查
+	// v4.5.0 架构优化:需要鉴权的路由用 r.authH 包装(统一 401,消除 handler 内重复 authorize 块)。
+	// 故意不包 authH 的:/healthz(软鉴权)、/metrics(独立 MetricsToken)、/api/enroll(注册令牌自鉴权)、
+	// /api/console/*(密码/cookie 自鉴权)。
+	a := r.authH
+	mux.HandleFunc("GET /api/agents", a(r.handleListAgents))
+	mux.HandleFunc("POST /api/tasks", a(r.handlePostTask))
+	mux.HandleFunc("POST /api/tasks/batch", a(r.handleBatchTask))              // C10 批量下发
+	mux.HandleFunc("POST /api/tasks/cancel", a(r.handleCancelTask))            // C6 取消任务
+	mux.HandleFunc("GET /api/tasks", a(r.handleListTasks))                     // C4/F1 任务历史
+	mux.HandleFunc("GET /api/tasks/", a(r.handleGetTask))                      // C4 单任务详情+结果
+	mux.HandleFunc("POST /api/enroll-token", a(r.handleGenEnrollToken))        // C7 生成注册令牌
+	mux.HandleFunc("POST /api/enroll", r.handleEnroll)                         // C7 Agent 换证书(注册令牌自鉴权)
+	mux.HandleFunc("POST /api/agents/revoke", a(r.handleRevokeAgent))          // G2 撤销 Agent 证书
+	mux.HandleFunc("GET /api/crons", a(r.handleListCrons))                     // H2 cron 列表
+	mux.HandleFunc("POST /api/crons", a(r.handleAddCron))                      // H2 新建 cron
+	mux.HandleFunc("DELETE /api/crons/", a(r.handleDeleteCron))                // H2 删除 cron
+	mux.HandleFunc("POST /api/shell/open", a(r.handleShellOpen))               // H3 开终端会话
+	mux.HandleFunc("POST /api/shell/input", a(r.handleShellInput))             // H3 发 stdin
+	mux.HandleFunc("POST /api/shell/close", a(r.handleShellClose))             // H3 关会话
+	mux.HandleFunc("POST /api/transfer/upload", a(r.handleTransferUpload))     // J2 上传
+	mux.HandleFunc("POST /api/transfer/download", a(r.handleTransferDownload)) // J2 下载
+	mux.HandleFunc("GET /api/events", a(r.handleSSE))
+	mux.HandleFunc("GET /api/metrics", a(r.handleMetrics)) // C10 可观测性(JSON 指标)
+	mux.HandleFunc("GET /healthz", r.handleHealthz)        // D8 深度健康(软鉴权:未授权只回 status:ok)
 	// 阶段 3.1:隧道(端口转发)
-	mux.HandleFunc("POST /api/tunnel/open", r.handleTunnelOpen)
-	mux.HandleFunc("POST /api/tunnel/data", r.handleTunnelData)
-	mux.HandleFunc("GET /api/tunnel/poll", r.handleTunnelPoll)
-	mux.HandleFunc("POST /api/tunnel/close", r.handleTunnelClose)
-	mux.HandleFunc("GET /api/tunnel/ws", r.handleTunnelWS) // P1-A:WS 全双工(CLI 优先,失败回退 HTTP)
+	mux.HandleFunc("POST /api/tunnel/open", a(r.handleTunnelOpen))
+	mux.HandleFunc("POST /api/tunnel/data", a(r.handleTunnelData))
+	mux.HandleFunc("GET /api/tunnel/poll", a(r.handleTunnelPoll))
+	mux.HandleFunc("POST /api/tunnel/close", a(r.handleTunnelClose))
+	mux.HandleFunc("GET /api/tunnel/ws", a(r.handleTunnelWS)) // P1-A:WS 全双工(CLI 优先,失败回退 HTTP)
 	// 自更新:Agent 版本仓库 + 分发
-	mux.HandleFunc("GET /api/updates", r.handleUpdateList)
-	mux.HandleFunc("POST /api/updates/upload", r.handleUpdateUpload)
-	mux.HandleFunc("POST /api/updates/apply", r.handleUpdateApply)
+	mux.HandleFunc("GET /api/updates", a(r.handleUpdateList))
+	mux.HandleFunc("POST /api/updates/upload", a(r.handleUpdateUpload))
+	mux.HandleFunc("POST /api/updates/apply", a(r.handleUpdateApply))
 	// 电源操作(标签白名单鉴权)
-	mux.HandleFunc("POST /api/power", r.handlePower)
+	mux.HandleFunc("POST /api/power", a(r.handlePower))
 	// S6:Prometheus 文本格式(供 Prometheus scraper)
-	// P1:有 MetricsToken 时校验(独立于主 Token),都空才真无鉴权
+	// P1:独立 MetricsToken 校验(常量时间),不走 authorize(不接 cookie)
 	mux.HandleFunc("GET /metrics", r.handlePromMetrics)
 	// S6:pprof 调试端点。P1 生产硬化:仅 dev 模式或显式 -debug-pprof 才注册,
 	// 默认不注册(防 heap/goroutine/内存侦察泄露)。注册到独立 mux 不污染 DefaultServeMux。
@@ -67,29 +71,29 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 		mux.Handle("/debug/pprof/trace", http.DefaultServeMux)
 	}
 	// XL1:Secret Management(凭据下发不落 audit)
-	mux.HandleFunc("POST /api/secrets", r.handleSecretPut)
-	mux.HandleFunc("GET /api/secrets/", r.handleSecretGet)
-	mux.HandleFunc("DELETE /api/secrets/", r.handleSecretDelete)
+	mux.HandleFunc("POST /api/secrets", a(r.handleSecretPut))
+	mux.HandleFunc("GET /api/secrets/", a(r.handleSecretGet))
+	mux.HandleFunc("DELETE /api/secrets/", a(r.handleSecretDelete))
 	// XL4:审计 SIEM 导出(CEF/JSON/Syslog)
-	mux.HandleFunc("GET /api/audit/export", r.handleAuditExport)
+	mux.HandleFunc("GET /api/audit/export", a(r.handleAuditExport))
 	// XL6:智能调度(负载均衡选择最优 Agent)
-	mux.HandleFunc("GET /api/scheduler/best", r.handleSelectBest)
+	mux.HandleFunc("GET /api/scheduler/best", a(r.handleSelectBest))
 	// D2:工具发现(供 AI Agent)
-	mux.HandleFunc("GET /api/tools", r.handleListTools)
+	mux.HandleFunc("GET /api/tools", a(r.handleListTools))
 	// O2:流式任务(SSE 实时 stdout)
-	mux.HandleFunc("POST /api/tasks/stream", r.handleStreamTask)
+	mux.HandleFunc("POST /api/tasks/stream", a(r.handleStreamTask))
 	// Agent 编排(2026-08-06):自然语言任务 → LLM 规划 → 工具执行(SSE 流式)
-	mux.HandleFunc("POST /api/agent/run", r.handleAgentRun)
+	mux.HandleFunc("POST /api/agent/run", a(r.handleAgentRun))
 	// F8:脚本库
-	mux.HandleFunc("GET /api/scripts", r.handleScriptList)
-	mux.HandleFunc("POST /api/scripts", r.handleScriptUpload)
-	mux.HandleFunc("GET /api/scripts/", r.handleScriptGet)
-	mux.HandleFunc("DELETE /api/scripts/", r.handleScriptDelete)
-	mux.HandleFunc("POST /api/scripts/", r.handleScriptRun)
+	mux.HandleFunc("GET /api/scripts", a(r.handleScriptList))
+	mux.HandleFunc("POST /api/scripts", a(r.handleScriptUpload))
+	mux.HandleFunc("GET /api/scripts/", a(r.handleScriptGet))
+	mux.HandleFunc("DELETE /api/scripts/", a(r.handleScriptDelete))
+	mux.HandleFunc("POST /api/scripts/", a(r.handleScriptRun))
 	// D1:Agent 二进制下载（一行安装用）
 	r.registerDownloadDir(mux)
 	// B2:部署引导(一行安装命令)
-	mux.HandleFunc("GET /api/bootstrap", r.handleBootstrap)
+	mux.HandleFunc("GET /api/bootstrap", a(r.handleBootstrap))
 	// 控制台会话鉴权(2026-08-12):HttpOnly Cookie,浏览器登录后访问 API/SSE
 	// 三端点均不走 authorize(自行校验密码/读 cookie)
 	mux.HandleFunc("POST /api/console/login", r.handleConsoleLogin)
@@ -145,10 +149,6 @@ func (r *Relay) handleHealthz(w http.ResponseWriter, req *http.Request) {
 //
 // agent_id 与 status 可组合。过滤时多取(fetchLimit=500)再内存筛,保证过滤后仍有足量。
 func (r *Relay) handleListTasks(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	if r.store == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"tasks": []any{}, "count": 0, "enabled": false})
 		return
@@ -201,10 +201,6 @@ func (r *Relay) handleListTasks(w http.ResponseWriter, req *http.Request) {
 //
 // agent_ids 优先于 tag。响应: {"selector": "...", "dispatched": [...], "count": N, "task_ids": {agentID: taskID}}
 func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	var body struct {
 		AgentIDs []string        `json:"agent_ids"` // 显式 agent 列表(2026-08-12,优先于 tag)
 		Tag      string          `json:"tag"`       // 如 "env=prod"(agent_ids 为空时用)
@@ -341,10 +337,6 @@ func summarizePayload(taskType string, payload []byte) string {
 
 // POST /api/tasks/cancel —— 取消任务（C6）。转发 task_cancel 到 Agent，并更新状态。
 func (r *Relay) handleCancelTask(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	var body struct {
 		TaskID  string `json:"task_id"`
 		AgentID string `json:"agent_id"`
@@ -402,10 +394,6 @@ func (r *Relay) handleCancelTask(w http.ResponseWriter, req *http.Request) {
 
 // GET /api/tasks/{id} —— 单任务详情 + 结果。
 func (r *Relay) handleGetTask(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	if r.store == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("持久化未启用")))
 		return
@@ -426,10 +414,6 @@ func (r *Relay) handleGetTask(w http.ResponseWriter, req *http.Request) {
 
 // GET /api/agents —— 返回所有在线 Agent。
 func (r *Relay) handleListAgents(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	// P2-10 修复：只调一次 Snapshot（原双次调用有 2x 拷贝开销 + 可能不一致）
 	list := r.agents.Snapshot()
 	// V1:为每个 agent 附带传输画像(ub/db/uc/dc/fc,来自心跳上报)
@@ -464,10 +448,6 @@ func (r *Relay) handleListAgents(w http.ResponseWriter, req *http.Request) {
 //
 // 请求体即 proto.TaskRequest。Relay 找到目标 Agent 连接后，把任务封装成 Envelope 转发。
 func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	var task proto.TaskRequest
 	if err := json.NewDecoder(req.Body).Decode(&task); err != nil {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("请求体解析失败: %w", err)))
@@ -714,10 +694,6 @@ func (r *Relay) recoverInFlightTasks() {
 //	event: task_result
 //	data: {"task_id":"...","success":true,...}
 func (r *Relay) handleSSE(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -823,10 +799,6 @@ func writeSSE(w http.ResponseWriter, _ http.Flusher, event string, data any) {
 // 请求体: {"agent_id": "agent-host01"}
 // 响应: {"agent_id":"...", "token":"<32字节hex>", "expires_in":3600}
 func (r *Relay) handleGenEnrollToken(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	if r.ca == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("CA 未启用")))
 		return
@@ -903,10 +875,6 @@ func (r *Relay) handleEnroll(w http.ResponseWriter, req *http.Request) {
 // 撤销后该 Agent 的 mTLS 握手会被 VerifyPeerCertificate 钩子拒绝（CRL 校验）。
 // 撤销状态持久化到 ca-state.json，Relay 重启不丢失。
 func (r *Relay) handleRevokeAgent(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	if r.ca == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("CA 未启用")))
 		return
@@ -954,10 +922,6 @@ func (r *Relay) handleRevokeAgent(w http.ResponseWriter, req *http.Request) {
 // 响应在每条规则上额外附 next_run(Unix ms):对 enabled 规则用 robfig/cron 解析 cron_expr
 // 算出下次执行时间(读取侧补 —— CronRule.NextRun 字段当前未被调度器回写)。
 func (r *Relay) handleListCrons(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	if r.scheduler == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"crons": []any{}, "enabled": false})
 		return
@@ -993,10 +957,6 @@ func (r *Relay) handleListCrons(w http.ResponseWriter, req *http.Request) {
 
 // POST /api/crons —— 新建定时规则。
 func (r *Relay) handleAddCron(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	if r.scheduler == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("调度器未启用")))
 		return
@@ -1041,10 +1001,6 @@ func (r *Relay) handleAddCron(w http.ResponseWriter, req *http.Request) {
 
 // DELETE /api/crons/{id} —— 删除定时规则。
 func (r *Relay) handleDeleteCron(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	ruleID := strings.TrimPrefix(req.URL.Path, "/api/crons/")
 	if ruleID == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("缺少规则 ID")))
@@ -1069,10 +1025,6 @@ func (r *Relay) handleDeleteCron(w http.ResponseWriter, req *http.Request) {
 // POST /api/shell/open —— 开启终端会话。
 // 请求体: {"agent_id":"...", "cols":80, "rows":24, "shell":"powershell"}
 func (r *Relay) handleShellOpen(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	var body struct {
 		AgentID string `json:"agent_id"`
 		Cols    int    `json:"cols"`
@@ -1116,10 +1068,6 @@ func (r *Relay) handleShellOpen(w http.ResponseWriter, req *http.Request) {
 // 局限:shell 是交互式流,用户可分多次输入绕过单行检测(如 'Forma'+'t-Volume')。
 // 根本防线是 P0-S3(Agent 侧强制校验),这里做行级快速过滤。
 func (r *Relay) handleShellInput(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	var body struct {
 		SessionID string `json:"session_id"`
 		AgentID   string `json:"agent_id"`
@@ -1180,10 +1128,6 @@ func summarizeBase64(b64 string, maxLen int) string {
 
 // POST /api/shell/close —— 关闭会话。
 func (r *Relay) handleShellClose(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	var body struct {
 		SessionID string `json:"session_id"`
 		AgentID   string `json:"agent_id"`
@@ -1218,10 +1162,6 @@ func (r *Relay) handleShellClose(w http.ResponseWriter, req *http.Request) {
 // Relay 不落盘，仅 256KB 缓冲转发。
 func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 	xferStart := time.Now() // Q4:传输耗时日志
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	agentID := req.URL.Query().Get("agent_id")
 	path := req.URL.Query().Get("path")
 	transferID := req.URL.Query().Get("transfer_id")
@@ -1378,10 +1318,6 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 // handleTransferDownload 下载：Agent 读文件 → 二进制帧 → Relay → Console HTTP response。
 func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request) {
 	xferStart := time.Now() // Q4:传输耗时
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	agentID := req.URL.Query().Get("agent_id")
 	path := req.URL.Query().Get("path")
 	transferID := req.URL.Query().Get("transfer_id")

@@ -28,10 +28,6 @@ import (
 //	since=1h|24h|7d       (默认 1h,只导出最近)
 //	limit=1000            (默认 1000)
 func (r *Relay) handleAuditExport(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	if r.audit == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("审计未启用")))
 		return

@@ -30,10 +30,6 @@ import (
 // 请求体: proto.TunnelOpen{tunnel_id, network, target}
 // 流程: 找 Agent conn → 发 TunnelOpen → 等 TunnelReady → 返回 200(或 502 失败)。
 func (r *Relay) handleTunnelOpen(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	var body struct {
 		TunnelID string `json:"tunnel_id"`
 		AgentID  string `json:"agent_id"`
@@ -118,10 +114,6 @@ func (r *Relay) handleTunnelOpen(w http.ResponseWriter, req *http.Request) {
 // 简化:本端点只做 Console→Agent 方向(POST body → Agent)。
 // Agent→Console 方向用 GET /api/tunnel/poll?  简化用 dataCh 读取。
 func (r *Relay) handleTunnelData(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	tunnelID := req.URL.Query().Get("tunnel_id")
 	agentID := req.URL.Query().Get("agent_id")
 	if tunnelID == "" || agentID == "" {
@@ -160,10 +152,6 @@ func (r *Relay) handleTunnelData(w http.ResponseWriter, req *http.Request) {
 // handleTunnelPoll POST /api/tunnel/poll —— 拉 Agent→Console 方向的隧道数据。
 // 用 SSE 式流:从 dataCh 读数据,流式写 HTTP response。
 func (r *Relay) handleTunnelPoll(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	tunnelID := req.URL.Query().Get("tunnel_id")
 	agentID := req.URL.Query().Get("agent_id")
 	if tunnelID == "" {
@@ -205,10 +193,6 @@ func (r *Relay) handleTunnelPoll(w http.ResponseWriter, req *http.Request) {
 
 // handleTunnelClose POST /api/tunnel/close —— 关闭隧道。
 func (r *Relay) handleTunnelClose(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	var body struct {
 		TunnelID string `json:"tunnel_id"`
 		AgentID  string `json:"agent_id"`

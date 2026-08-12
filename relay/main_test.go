@@ -124,8 +124,8 @@ func TestRelayEndToEnd(t *testing.T) {
 		t.Fatalf("查询 agents 失败: %v", err)
 	}
 	var listResp struct {
-		Count int                `json:"count"`
-		Agents []proto.Register  `json:"agents"`
+		Count  int              `json:"count"`
+		Agents []proto.Register `json:"agents"`
 	}
 	json.NewDecoder(agentsResp.Body).Decode(&listResp)
 	agentsResp.Body.Close()
@@ -189,7 +189,7 @@ func TestRegistrySweep(t *testing.T) {
 
 	// 等待后用极小阈值清理，确保超过阈值
 	time.Sleep(3 * time.Millisecond)
-	if len(r.Sweep(1 * time.Millisecond)) != 1 {
+	if len(r.Sweep(1*time.Millisecond)) != 1 {
 		t.Fatal("首次清理应移除 a1")
 	}
 	if r.Conn("a1") != nil {

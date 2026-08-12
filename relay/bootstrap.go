@@ -51,11 +51,7 @@ type bootstrapInfo struct {
 //  2. host/port 查询参数
 //  3. 自动检测本机 IP + cfg.Addr 端口
 func (r *Relay) handleBootstrap(w http.ResponseWriter, req *http.Request) {
-	// 鉴权(部署凭据:知道 Token 才能拿一行命令)
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "需要鉴权: Bootstrap info requires auth token"})
-		return
-	}
+	// 鉴权由 registerHTTP 的 authH 包装器统一处理(v4.5.0)。
 
 	// 优先级 1:ExternalURL(显式配置,最可靠)
 	// 例如 https://203.0.113.99/rmm,会自动派生 wss://203.0.113.99/rmm/agent

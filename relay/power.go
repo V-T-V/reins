@@ -29,10 +29,6 @@ const PowerTagValue = "true"
 //  2. 目标 Agent 必须带 power_allowed=true 标签(否则 403)
 //  3. 审计记录
 func (r *Relay) handlePower(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
-		return
-	}
 	var body proto.PowerTask
 	// 注:agent_id 不在 PowerTask 里,额外字段
 	var raw struct {

@@ -24,10 +24,10 @@ import (
 
 // ChatMessage 对话消息(OpenAI 协议)。
 type ChatMessage struct {
-	Role       string      `json:"role"` // system / user / assistant / tool
-	Content    string      `json:"content,omitempty"`
-	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
+	Role       string     `json:"role"` // system / user / assistant / tool
+	Content    string     `json:"content,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 // ToolCall 模型请求的工具调用。
@@ -45,8 +45,8 @@ type ToolFunc struct {
 
 // ToolDef 工具定义(function calling 的 tools 项)。
 type ToolDef struct {
-	Type     string            `json:"type"` // "function"
-	Function ToolFunctionDef   `json:"function"`
+	Type     string          `json:"type"` // "function"
+	Function ToolFunctionDef `json:"function"`
 }
 
 // ToolFunctionDef 工具函数定义(parameters 为 JSON Schema 子集)。

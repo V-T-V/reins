@@ -23,12 +23,12 @@ import (
 
 // BatchRequest 批量任务请求(一对多)。
 type BatchRequest struct {
-	BatchID    string          // 批次 ID(为空则自动生成)
-	AgentIDs   []string        // 目标 Agent 列表(一对多)
-	Type       string          // 任务类型
-	Payload    []byte          // 任务载荷
-	Timeout    int             // 单任务超时秒
-	MaxRetries int             // 失败重试次数(0=不重试)
+	BatchID    string   // 批次 ID(为空则自动生成)
+	AgentIDs   []string // 目标 Agent 列表(一对多)
+	Type       string   // 任务类型
+	Payload    []byte   // 任务载荷
+	Timeout    int      // 单任务超时秒
+	MaxRetries int      // 失败重试次数(0=不重试)
 }
 
 // TargetResult 单个目标的执行结果。

@@ -409,8 +409,8 @@ func (r *Relay) WithSessions(s *SessionStore) *Relay {
 //   - session cookie 有效 → 通过(浏览器路径,2026-08-12 新增)
 //   - 否则 401
 //
-// 所有 ~20 个 handler 第一行调 r.authorize(req),改此函数内部即可全端点(含 SSE)支持 cookie,
-// 无需动任何调用点。
+// v4.5.0:常规 HTTP handler 不再各自调 authorize —— registerHTTP 用 authH 包装器统一鉴权。
+// 仅 handleAgentWS(WS,http.Error 响应)、handleHealthz(软鉴权)自行调用。
 func (r *Relay) authorize(req *http.Request) error {
 	if r.cfg.Token == "" && r.cfg.ConsolePassword == "" {
 		return nil
@@ -450,6 +450,22 @@ func (r *Relay) hasValidSession(req *http.Request) bool {
 	}
 	_, ok := r.sessions.Get(cookie.Value)
 	return ok
+}
+
+// authH 鉴权中间件包装器(v4.5.0 架构优化):包装一个 handler,先过 authorize,
+// 失败统一返回 401 JSON。消除 ~39 个 handler 各自重复的 4 行 authorize 块。
+//
+// 用法:mux.HandleFunc("POST /api/tasks", r.authH(r.handlePostTask))
+// 故意跳过 authorize 的端点(/healthz 软鉴权、/metrics 独立 token、
+// /api/console/* 自鉴权、/api/enroll 注册令牌)直接注册 handler,不包 authH。
+func (r *Relay) authH(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := r.authorize(req); err != nil {
+			writeJSON(w, http.StatusUnauthorized, errMap(err))
+			return
+		}
+		h(w, req)
+	}
 }
 
 // handleAgentWS 处理 Agent 的反向 WS 连接。
@@ -763,19 +779,6 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			log.Printf("[agent-read] 未知消息类型 %s from %s", env.Type, agentID)
 		}
 	}
-}
-
-// handleConsoleWS 处理控制台的 WS 连接（P0 控制台用 SSE+REST，此端点预留兼容）。
-func (r *Relay) handleConsoleWS(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	c, err := websocket.Accept(w, req, &websocket.AcceptOptions{InsecureSkipVerify: r.cfg.Dev})
-	if err != nil {
-		return
-	}
-	c.Close(websocket.StatusPolicyViolation, "P0 控制台请使用 SSE /api/events")
 }
 
 // mustMarshal 编码失败返回 nil（不应发生）。
