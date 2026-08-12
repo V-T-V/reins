@@ -17,10 +17,23 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// roundDur 时长向上取整到秒的可读字符串(如 "5m"、"30s")。
+func roundDur(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	s := int(d.Seconds())
+	if s >= 60 {
+		return fmt.Sprintf("%dm", (s+59)/60)
+	}
+	return fmt.Sprintf("%ds", s)
+}
 
 // consoleLoginReq 登录请求体。
 type consoleLoginReq struct {
@@ -68,10 +81,27 @@ func (r *Relay) currentSession(req *http.Request) (*Session, bool) {
 }
 
 // handleConsoleLogin POST /api/console/login —— 密码校验 + 颁发 session cookie。
+//
+// 安全(2026-08-12 加固):
+//   - IP 维度登录限流:连续失败 5 次 → 锁定 5 分钟(锁定期间不查密码,429)
+//   - subtle.ConstantTimeCompare 防计时侧信道
+//   - 审计 login_failed / login_locked / login_success
 func (r *Relay) handleConsoleLogin(w http.ResponseWriter, req *http.Request) {
 	if r.cfg.ConsolePassword == "" || r.sessions == nil {
 		writeJSON(w, http.StatusNotFound, errMap(errConsoleAuthDisabled))
 		return
+	}
+	ip := clientIP(req)
+	// 限流:锁定期间直接拒绝(不查密码,防计时侧信道 + 减速字典攻击)
+	if r.loginLimiter != nil {
+		if allowed, rem := r.loginLimiter.Allow(ip); !allowed {
+			if r.audit != nil {
+				r.audit.Log(AuditEntry{Event: "console_login_locked", Detail: "ip=" + ip + " 剩余" + rem.String()})
+			}
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(rem.Seconds())+1))
+			writeJSON(w, http.StatusTooManyRequests, errMap(fmt.Errorf("登录尝试过多,已锁定 %s(防暴力破解)", roundDur(rem))))
+			return
+		}
 	}
 	var body consoleLoginReq
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
@@ -85,11 +115,21 @@ func (r *Relay) handleConsoleLogin(w http.ResponseWriter, req *http.Request) {
 	// 常量时间比较密码(防计时侧信道)
 	ok := subtle.ConstantTimeCompare([]byte(body.Password), []byte(r.cfg.ConsolePassword)) == 1
 	if !ok {
-		if r.audit != nil {
-			r.audit.Log(AuditEntry{Event: "console_login_failed", Operator: username, Detail: "ip=" + clientIP(req)})
+		var lockInfo string
+		if r.loginLimiter != nil {
+			if lockDur := r.loginLimiter.RecordFail(ip); lockDur > 0 {
+				lockInfo = "(已锁定 " + roundDur(lockDur) + ")"
+			}
 		}
-		writeJSON(w, http.StatusUnauthorized, errMap(errConsoleBadCreds))
+		if r.audit != nil {
+			r.audit.Log(AuditEntry{Event: "console_login_failed", Operator: username, Detail: "ip=" + ip + lockInfo})
+		}
+		writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("密码错误%s", lockInfo)))
 		return
+	}
+	// 成功:清除该 IP 的失败计数
+	if r.loginLimiter != nil {
+		r.loginLimiter.RecordSuccess(ip)
 	}
 	sess, err := r.sessions.Create(username)
 	if err != nil {

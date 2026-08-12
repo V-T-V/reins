@@ -321,16 +321,17 @@ func (b *EventBus) Broadcast(ev Event) {
 // --- Relay 主体 ---
 
 type Relay struct {
-	cfg        Config
-	agents     *Registry
-	console    *EventBus
-	store      TaskStore      // 任务持久化(R2/F1),可为 nil(关闭持久化)
-	ca         *CA            // 内置 CA(C7 身份认证),可为 nil(关闭 mTLS)
-	policy     *CommandPolicy // 命令安全策略(S4)
-	audit      *AuditLog      // 审计日志(F1)
-	scheduler  *Scheduler     // H2 定时任务调度器,可为 nil
-	updateRepo *UpdateRepo    // Agent 版本仓库(自更新分发),可为 nil
-	sessions   *SessionStore  // 控制台会话存储(HttpOnly Cookie 鉴权,2026-08-12),可为 nil(控制台登录禁用)
+	cfg          Config
+	agents       *Registry
+	console      *EventBus
+	store        TaskStore      // 任务持久化(R2/F1),可为 nil(关闭持久化)
+	ca           *CA            // 内置 CA(C7 身份认证),可为 nil(关闭 mTLS)
+	policy       *CommandPolicy // 命令安全策略(S4)
+	audit        *AuditLog      // 审计日志(F1)
+	scheduler    *Scheduler     // H2 定时任务调度器,可为 nil
+	updateRepo   *UpdateRepo    // Agent 版本仓库(自更新分发),可为 nil
+	sessions     *SessionStore  // 控制台会话存储(HttpOnly Cookie 鉴权,2026-08-12),可为 nil(控制台登录禁用)
+	loginLimiter *LoginLimiter  // 登录限流(IP 维度失败计数+锁定,2026-08-12),可为 nil
 
 	// P1-A:WS 隧道心跳参数(可测试覆盖;0 表示用默认值)。
 	tunnelPingInterval time.Duration // 心跳 Ping 间隔,默认 15s
@@ -357,9 +358,10 @@ func NewRelay(cfg Config) *Relay {
 	if cfg.LLMBaseURL != "" {
 		relay.llmClient = NewLLMClient(cfg.LLMBaseURL, cfg.LLMAPIVKey, cfg.LLMModel)
 	}
-	// 控制台会话(配置了 -console-password 才启用,2026-08-12)
+	// 控制台会话 + 登录限流(配置了 -console-password 才启用,2026-08-12)
 	if cfg.ConsolePassword != "" {
 		relay.sessions = NewSessionStore(cfg.ConsoleSessionTTL)
+		relay.loginLimiter = NewLoginLimiter()
 	}
 	return relay
 }
