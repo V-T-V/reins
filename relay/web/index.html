@@ -146,6 +146,12 @@
   .agentrun-summary { margin-top: 14px; padding: 10px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
   .agentrun-summary .ar-label { color: #58a6ff; font-size: 12px; margin-bottom: 4px; }
   .agentrun-status { padding: 6px 4px; font-size: 12px; color: #8b949e; }
+  .ar-quick-btn { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 4px 10px; border-radius: 12px; font-size: 12px; cursor: pointer; }
+  .ar-quick-btn:hover { background: #30363d; border-color: #58a6ff; color: #58a6ff; }
+  .ar-history { font-size: 12px; }
+  .ar-history .ar-hist-label { color: #8b949e; margin-bottom: 4px; }
+  .ar-hist-item { display: inline-block; background: #0d1117; border: 1px solid #30363d; border-radius: 3px; padding: 3px 8px; margin: 2px 4px 2px 0; cursor: pointer; color: #8b949e; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+  .ar-hist-item:hover { border-color: #58a6ff; color: #c9d1d9; }
 </style>
 </head>
 <body>
@@ -212,6 +218,8 @@
       <div class="panel">
         <div class="panel-header">🤖 AI Agent 任务<span id="agentrun-model" style="color:#8b949e;font-weight:normal;font-size:12px;margin-left:8px"></span></div>
         <div class="panel-body">
+          <label>快捷指令(点击填入,可再编辑)</label>
+          <div id="agentrun-quick" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
           <label>用自然语言描述你要做的事(AI 自动规划 + 调用工具执行)</label>
           <textarea id="agentrun-task" placeholder="如:查看所有 agent 的磁盘空间并汇报&#10;在所有在线 agent 上检查 Chrome 进程&#10;读取某 agent 的配置" style="min-height:70px"></textarea>
           <div class="row" style="margin-top:8px">
@@ -223,6 +231,7 @@
               <button onclick="window.__submitAgentRun()" id="agentrun-btn">执行</button>
             </div>
           </div>
+          <div id="agentrun-history" style="margin-top:8px"></div>
           <div id="agentrun-output" style="margin-top:12px"></div>
         </div>
       </div>

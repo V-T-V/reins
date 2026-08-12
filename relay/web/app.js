@@ -89,6 +89,8 @@
     subscribeSSE();
     refreshMetrics();
     renderBatchForm();
+    renderAgentQuick();
+    renderAgentHistory();
     state.agentsTimer = setInterval(refreshAgents, 10000); // 兜底轮询
     state.metricsTimer = setInterval(refreshMetrics, 5000); // metrics 轮询
     state.timelineTimer = setInterval(function () {
@@ -975,6 +977,58 @@
   }
 
   // --- 🤖 AI Agent 任务(2026-08-12:自然语言 → LLM 编排,fetch+ReadableStream 解析 SSE)---
+  // 快捷指令模板:降低自然语言使用门槛(常见运维任务一键填入)。
+  var agentQuickTemplates = [
+    "列出所有在线 agent 及其能力",
+    "查看所有 agent 的磁盘空间使用情况",
+    "找出所有 agent 上 CPU 占用最高的 5 个进程",
+    "查看系统的操作系统版本和内存信息",
+    "检查是否有 Chrome 浏览器进程在运行",
+    "读取目标 agent 的配置(allowed_roots/workspace)",
+    "查看所有 agent 最近的任务执行历史",
+  ];
+
+  function renderAgentQuick() {
+    var host = document.getElementById("agentrun-quick");
+    if (!host) return;
+    host.innerHTML = agentQuickTemplates.map(function (t) {
+      return '<button class="ar-quick-btn" data-quick="' + esc(t) + '">' + esc(t) + "</button>";
+    }).join("");
+    host.querySelectorAll("[data-quick]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var ta = document.getElementById("agentrun-task");
+        if (ta) { ta.value = btn.getAttribute("data-quick"); ta.focus(); }
+      });
+    });
+  }
+
+  // 会话历史(localStorage 持久化最近任务文本,点击重填)。
+  function loadAgentHistory() {
+    try { return JSON.parse(localStorage.getItem("gormm_agent_history") || "[]"); }
+    catch (e) { return []; }
+  }
+  function saveAgentHistory(task) {
+    var hist = loadAgentHistory().filter(function (t) { return t !== task; });
+    hist.unshift(task);
+    hist = hist.slice(0, 8);
+    try { localStorage.setItem("gormm_agent_history", JSON.stringify(hist)); } catch (e) {}
+  }
+  function renderAgentHistory() {
+    var host = document.getElementById("agentrun-history");
+    if (!host) return;
+    var hist = loadAgentHistory();
+    if (hist.length === 0) { host.innerHTML = ""; return; }
+    host.innerHTML = '<div class="ar-history"><div class="ar-hist-label">最近任务(点击重填)</div>' +
+      hist.map(function (t) { return '<span class="ar-hist-item" data-hist="' + esc(t) + '" title="' + esc(t) + '">' + esc(t) + "</span>"; }).join("") +
+      "</div>";
+    host.querySelectorAll("[data-hist]").forEach(function (el) {
+      el.addEventListener("click", function () {
+        var ta = document.getElementById("agentrun-task");
+        if (ta) { ta.value = el.getAttribute("data-hist"); ta.focus(); }
+      });
+    });
+  }
+
   function updateAgentRunAgentSelect() {
     var sel = document.getElementById("agentrun-agent");
     if (!sel) return;
@@ -995,6 +1049,8 @@
     var task = (taskEl && taskEl.value || "").trim();
     var agentID = (document.getElementById("agentrun-agent") || {}).value || "";
     if (!task) { alert("请描述任务"); return; }
+    saveAgentHistory(task);   // 记入历史
+    renderAgentHistory();
     var out = document.getElementById("agentrun-output");
     var btn = document.getElementById("agentrun-btn");
     if (btn) btn.disabled = true;
