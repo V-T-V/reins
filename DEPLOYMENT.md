@@ -250,11 +250,58 @@ curl -k https://your-domain.com/rmm/healthz
 
 ---
 
+## 6.1 控制台鉴权(浏览器 Web UI)
+
+浏览器无法安全保存 Relay Token(`localStorage`/URL 易被 XSS/日志窃取,且 `EventSource` 不能设 Authorization 头)。生产部署应启用独立的控制台会话鉴权。
+
+**服务端(Relay)加一个 flag:**
+
+```bash
+./go-rmm-relay -token $(openssl rand -hex 32) \
+  -console-password $(openssl rand -base64 18) \
+  -addr 127.0.0.1:7780
+```
+
+- `-token`:CLI/Agent 的 Bearer 鉴权(不变)
+- `-console-password`:控制台登录密码(独立,与 Token 解耦)
+
+**浏览器流程:**
+
+1. 访问 `https://your-domain.com/rmm/` → 显示登录页
+2. 输入 `-console-password` 所设密码 → Relay 颁发 `HttpOnly + Secure + SameSite=Lax` 会话 Cookie(滑动续期,默认 8h)
+3. 后续所有 API(`/api/agents` 等)与 SSE(`/api/events`)随请求自动带 cookie 鉴权
+4. 登出(`/api/console/logout`)→ cookie 立即失效
+
+**关键点:**
+
+- Relay Token **不落浏览器**(cookie 里是随机 session id,与 Token 解耦)
+- `Secure` 标志据 `X-Forwarded-Proto: https` 自动识别(上方 Nginx 配置已设 `proxy_set_header X-Forwarded-Proto $scheme;`),无需额外配置
+- CLI/Agent 的 Bearer 鉴权**零改动**(`go-rmm --token <TOKEN>` 仍工作)
+- 未配 `-console-password` = 控制台登录禁用;此时仅当 Token 也空(dev)时控制台可无鉴权访问
+- 审计:登录成功/失败/登出均记入 hash chain(`operator`=用户名,`detail`=客户端 IP)
+
+**会话存储**:内存态(单 Relay 默认)。Relay 重启后需重新登录。水平扩展(多 Relay)时迁 Redis(对齐 TaskStore 模式)。
+
+**可选加固**:在 Nginx 对登录端点加 IP 白名单,限制谁能尝试登录:
+
+```nginx
+location = /rmm/api/console/login {
+    allow 10.0.0.0/8;   # 你的内网/办公出口
+    deny all;
+    proxy_pass http://127.0.0.1:7780/api/console/login;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+---
+
 ## 7. 安全加固
 
 | 层 | 措施 | 命令 |
 |----|------|------|
 | 鉴权 | Token(必须) | `-token $(openssl rand -hex 32)` |
+| 控制台 | 会话 Cookie(浏览器) | `-console-password $(openssl rand -base64 18)` |
 | RBAC | 多租户角色 | Token: `tenant:operator:secret` |
 | 电源 | 标签白名单 | Agent tags: `power_allowed=true` |
 | 文件 | 路径白名单 | `allow_all_roots: false` |

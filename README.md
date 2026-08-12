@@ -79,11 +79,14 @@
 |------|------|
 | 命令执行 | `task run -a <agent> -c "Get-Date"` |
 | 流式执行 | `task stream -a <agent> -c "ping -t 8.8.8.8"` (SSE 实时 stdout) |
+| Agent 编排 | `POST /api/agent/run` (自然语言任务 → LLM 规划 → 自动执行 → 流式汇总,Web 控制台 Agent 面板) |
 | 多 Agent 并行 | `exec -a a1,a2,a3 -c "hostname"` |
 | 交互式 Shell | `shell open -a <agent>` (asciinema 录屏) |
 | 文件传输 | `file upload/download` (SHA256 + 断点续传 + 并发分片) |
 | 目录同步 | `sync push/pull` |
-| 端口转发 | `tunnel -L 3306:db:3306` (SSH -L) |
+| 端口转发 | `tunnel -L 3306:db:3306` (SSH -L,WS 全双工 + 心跳,自动回退 HTTP) |
+| 白名单排查 | `config agent-config -a <agent>` (查看远端 AllowedRoots) |
+| JSON 输出 | `-o json` 全局 flag(task/status/file/tunnel 等全部结构化) |
 
 ### 自动化编排(6 命令)
 | 能力 | 命令 |
@@ -148,6 +151,29 @@ go-rmm --relay http://server:7780 --token <token> monitor top -a <agent>
 
 > 零配置:Relay 首次启动若未设 `-token` 会自动生成一个并打印;Agent 也可用 `GET /api/bootstrap` 拿到一行 PowerShell 安装命令(`iex (irm ...)`),复制粘贴到目标机即可。
 
+> **控制台鉴权(生产推荐)**:浏览器无法安全存 Relay Token(`localStorage`/URL 易被窃取,`EventSource` 也无法设 Authorization 头)。生产应配 `-console-password <密码>`,首次访问 `https://<host>/rmm/` 显示登录页,输密码后颁发 `HttpOnly+Secure+SameSite=Lax` 会话 Cookie(滑动续期 8h),普通 API 与 SSE 都靠 cookie 鉴权。Relay Token 不落浏览器,CLI/Agent 的 Bearer 链路零改动。反代 TLS 终端下 Relay 据 `X-Forwarded-Proto` 自动设 Secure 标志(现有 `nginx-rmm.conf` 已配)。未配 `-console-password` = 控制台登录禁用(仅 dev 模式 Token 也空时可无鉴权访问)。
+
+### 🤖 Agent 化任务(Web 控制台自然语言编排)
+
+```bash
+# 1. 启用 LLM(默认 Ollama 本地,OpenAI 兼容 /v1)
+./go-rmm-relay -llm-base-url http://127.0.0.1:11434/v1 -llm-model qwen2.5:7b
+#    (云 API 亦可:-llm-base-url https://api.deepseek.com/v1 -llm-api-key <key>)
+
+# 2. 浏览器打开控制台 → "🤖 Agent 任务" 面板
+#    输入自然语言任务,例如:
+#    "查看所有在线 Agent,找出 CPU 占用最高的进程"
+#    "在 agent-01 上检查磁盘空间并汇报结果"
+#    → Agent 自动规划步骤 → 逐步执行 → 实时看到每步结果 → 流式汇总
+
+# 3. 或 API 直调(SSE 流式)
+curl -N -X POST http://localhost:7780/api/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{"task":"列出在线 Agent 及其能力"}'
+```
+
+> 编排循环:LLM 规划(≤5 步)→ 逐步执行工具(list_agents/scheduler_best/run_task/run_script 等 8 个)→ 失败自动重规划(≤2 次)→ 流式汇总。未配置 `-llm-base-url` 时端点返回 503(前端面板禁用提示)。并发上限 `-llm-agent-max`(默认 2,超出排队)。
+
 ---
 
 ## 部署
@@ -178,8 +204,12 @@ Relay 配置优先级:**命令行 flag > 环境变量 > 默认值**。
 | `-tls-cert` | `GO_RMM_RELAY_TLS_CERT` | — | Relay TLS 证书文件 |
 | `-tls-key` | `GO_RMM_RELAY_TLS_KEY` | — | Relay TLS 私钥文件 |
 | `-external-url` | `GO_RMM_EXTERNAL_URL` | — | 外部访问地址(经反代/TLS 终端时用),如 `https://host/rmm` |
+| `-console-password` | `GO_RMM_CONSOLE_PASSWORD` | (空=禁用) | 控制台登录密码(独立于 Token);空=控制台登录禁用,只能用 CLI Bearer |
+| `-console-session-ttl` | `GO_RMM_CONSOLE_SESSION_TTL` | `8h` | 控制台会话有效期(滑动续期,如 `8h`/`30m`) |
+| `-console-cookie-name` | `GO_RMM_CONSOLE_COOKIE_NAME` | `gormm_session` | 控制台 session cookie 名 |
+| `-console-secure-cookie` | `GO_RMM_CONSOLE_SECURE_COOKIE` | off | 强制 cookie Secure 标志(反代 TLS 终端下默认按 `X-Forwarded-Proto` 自动识别) |
 
-配置校验(`Config.Validate()`):`addr` 不能为空;mTLS 模式必须配证书;token 长度建议 ≥8。
+配置校验(`Config.Validate()`):`addr` 不能为空;mTLS 模式必须配证书;token 长度建议 ≥8;`console-password` 长度建议 ≥6 且 `console-session-ttl` ≥1m。
 
 CLI 全局 flag:`--relay`(默认 `http://127.0.0.1:7780`)、`--token`、`--output text|json`、`--insecure`(跳过自签证书校验)、`--cacert`。
 
@@ -191,6 +221,7 @@ CLI 全局 flag:`--relay`(默认 `http://127.0.0.1:7780`)、`--token`、`--outpu
 |----|------|
 | **传输** | 反向 WS(wss://)+ mTLS 双向认证 + 内置 CA + CRL 吊销 |
 | **鉴权** | `tenant:role:secret` token;空 token 配置 = 不校验(仅 dev) |
+| **控制台** | 浏览器登录 → HttpOnly+Secure+SameSite 会话 Cookie(独立 `-console-password`,滑动续期 8h);EventSource/SSE 靠 cookie 鉴权,Relay Token 不落浏览器 |
 | **授权** | RBAC 三角色(admin/operator/viewer)+ 细粒度 action |
 | **命令策略** | 黑名单拦截高危命令(Format-Volume 等),批量下发也校验 |
 | **审计** | hash chain 防篡改 + 异步落盘 + SIEM 导出(CEF/Syslog) |

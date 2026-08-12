@@ -55,11 +55,15 @@ func (r *Relay) handleTunnelOpen(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// 注册 ready channel + data channel(dataCh 复用文件传输通道,Agent 隧道帧也路由到此)
+	// 注册 ready channel + data channel。
+	// P0-A 修复:dataCh 在 open 阶段即注册(带 64 缓冲),消除 open→poll 之间的数据丢弃窗口。
+	// Agent 在 TunnelReady 后立即推数据帧,routeXferData 会缓冲到 dataCh;
+	// 后续 poll 经 registerXferChannel(getOrRegister 语义)复用同一通道,首包不再丢失。
 	readyCh := conn.registerReadyChannel(body.TunnelID)
-	// dataCh 不在此注册(由 /api/tunnel/poll 按需注册),避免 open 阶段就占资源
-	_ = readyCh
-	defer conn.unregisterXferChannels(body.TunnelID)
+	conn.registerXferChannel(body.TunnelID)
+	// 只清理 readyCh;dataCh 由 poll 的 defer 或 /api/tunnel/close 清理,
+	// 若在此 unregisterXferChannels 会把刚注册的数据通道误杀,竞态修复失效。
+	defer conn.unregisterReadyChannel(body.TunnelID)
 
 	// 发 TunnelOpen 给 Agent
 	open := proto.TunnelOpen{
@@ -71,6 +75,8 @@ func (r *Relay) handleTunnelOpen(w http.ResponseWriter, req *http.Request) {
 	ctx, cancel := context.WithTimeout(req.Context(), 30*time.Minute)
 	defer cancel()
 	if err := conn.writeJSON(ctx, env); err != nil {
+		// Review:发送失败时清理提前注册的 dataCh,防泄漏(无 poll 消费者时会挂到 Agent 断线)
+		conn.unregisterXferChannels(body.TunnelID)
 		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("发送 TunnelOpen 失败: %w", err)))
 		return
 	}
@@ -79,6 +85,7 @@ func (r *Relay) handleTunnelOpen(w http.ResponseWriter, req *http.Request) {
 	select {
 	case ready := <-readyCh:
 		if ready == nil {
+			conn.unregisterXferChannels(body.TunnelID)
 			writeJSON(w, http.StatusGatewayTimeout, errMap(fmt.Errorf("Agent 返回空 ready")))
 			return
 		}
@@ -88,9 +95,15 @@ func (r *Relay) handleTunnelOpen(w http.ResponseWriter, req *http.Request) {
 			"accepted":  ready.Accepted,
 			"reason":    ready.Reason,
 		})
+		// Review:Agent 拒绝时清理 dataCh(CLI 在 accepted=false 分支不发 close,原实现泄漏)
+		if !ready.Accepted {
+			conn.unregisterXferChannels(body.TunnelID)
+		}
 	case <-time.After(10 * time.Second):
+		conn.unregisterXferChannels(body.TunnelID)
 		writeJSON(w, http.StatusGatewayTimeout, errMap(fmt.Errorf("等待 Agent ready 超时")))
 	case <-ctx.Done():
+		conn.unregisterXferChannels(body.TunnelID)
 		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("客户端断开")))
 	}
 }
@@ -162,7 +175,8 @@ func (r *Relay) handleTunnelPoll(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("agent 不在线")))
 		return
 	}
-	// dataCh 已在 /api/tunnel/open 时注册
+	// P0-A:dataCh 已在 /api/tunnel/open 时提前注册,此处 getOrRegister 复用同一通道,
+	// open→poll 之间 Agent 早到的数据帧已在通道中缓冲,不会丢失。
 	ch := conn.registerXferChannel(tunnelID)
 	defer conn.unregisterXferChannels(tunnelID)
 
@@ -211,6 +225,8 @@ func (r *Relay) handleTunnelClose(w http.ResponseWriter, req *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = conn.writeJSON(ctx, env)
+		// P0-A:同时清理 dataCh,防 open 成功但 poll 未发起时通道泄漏(挂到 Agent 断线)
+		conn.unregisterXferChannels(body.TunnelID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tunnel_id": body.TunnelID, "closed": true})
 }

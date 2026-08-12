@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/robfig/cron/v3"
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
@@ -23,29 +24,30 @@ import (
 func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", r.handleListAgents)
 	mux.HandleFunc("POST /api/tasks", r.handlePostTask)
-	mux.HandleFunc("POST /api/tasks/batch", r.handleBatchTask) // C10 批量下发
-	mux.HandleFunc("POST /api/tasks/cancel", r.handleCancelTask) // C6 取消任务
-	mux.HandleFunc("GET /api/tasks", r.handleListTasks)   // C4/F1 任务历史
-	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)    // C4 单任务详情+结果
-	mux.HandleFunc("POST /api/enroll-token", r.handleGenEnrollToken) // C7 生成注册令牌
-	mux.HandleFunc("POST /api/enroll", r.handleEnroll)               // C7 Agent 换证书
-	mux.HandleFunc("POST /api/agents/revoke", r.handleRevokeAgent)   // G2 撤销 Agent 证书
-	mux.HandleFunc("GET /api/crons", r.handleListCrons)             // H2 cron 列表
-	mux.HandleFunc("POST /api/crons", r.handleAddCron)              // H2 新建 cron
-	mux.HandleFunc("DELETE /api/crons/", r.handleDeleteCron)        // H2 删除 cron
-	mux.HandleFunc("POST /api/shell/open", r.handleShellOpen)       // H3 开终端会话
-	mux.HandleFunc("POST /api/shell/input", r.handleShellInput)     // H3 发 stdin
-	mux.HandleFunc("POST /api/shell/close", r.handleShellClose)     // H3 关会话
-	mux.HandleFunc("POST /api/transfer/upload", r.handleTransferUpload)   // J2 上传
+	mux.HandleFunc("POST /api/tasks/batch", r.handleBatchTask)              // C10 批量下发
+	mux.HandleFunc("POST /api/tasks/cancel", r.handleCancelTask)            // C6 取消任务
+	mux.HandleFunc("GET /api/tasks", r.handleListTasks)                     // C4/F1 任务历史
+	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)                      // C4 单任务详情+结果
+	mux.HandleFunc("POST /api/enroll-token", r.handleGenEnrollToken)        // C7 生成注册令牌
+	mux.HandleFunc("POST /api/enroll", r.handleEnroll)                      // C7 Agent 换证书
+	mux.HandleFunc("POST /api/agents/revoke", r.handleRevokeAgent)          // G2 撤销 Agent 证书
+	mux.HandleFunc("GET /api/crons", r.handleListCrons)                     // H2 cron 列表
+	mux.HandleFunc("POST /api/crons", r.handleAddCron)                      // H2 新建 cron
+	mux.HandleFunc("DELETE /api/crons/", r.handleDeleteCron)                // H2 删除 cron
+	mux.HandleFunc("POST /api/shell/open", r.handleShellOpen)               // H3 开终端会话
+	mux.HandleFunc("POST /api/shell/input", r.handleShellInput)             // H3 发 stdin
+	mux.HandleFunc("POST /api/shell/close", r.handleShellClose)             // H3 关会话
+	mux.HandleFunc("POST /api/transfer/upload", r.handleTransferUpload)     // J2 上传
 	mux.HandleFunc("POST /api/transfer/download", r.handleTransferDownload) // J2 下载
 	mux.HandleFunc("GET /api/events", r.handleSSE)
 	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
-	mux.HandleFunc("GET /healthz", r.handleHealthz) // D8 深度健康检查
+	mux.HandleFunc("GET /healthz", r.handleHealthz)     // D8 深度健康检查
 	// 阶段 3.1:隧道(端口转发)
 	mux.HandleFunc("POST /api/tunnel/open", r.handleTunnelOpen)
 	mux.HandleFunc("POST /api/tunnel/data", r.handleTunnelData)
 	mux.HandleFunc("GET /api/tunnel/poll", r.handleTunnelPoll)
 	mux.HandleFunc("POST /api/tunnel/close", r.handleTunnelClose)
+	mux.HandleFunc("GET /api/tunnel/ws", r.handleTunnelWS) // P1-A:WS 全双工(CLI 优先,失败回退 HTTP)
 	// 自更新:Agent 版本仓库 + 分发
 	mux.HandleFunc("GET /api/updates", r.handleUpdateList)
 	mux.HandleFunc("POST /api/updates/upload", r.handleUpdateUpload)
@@ -76,6 +78,8 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/tools", r.handleListTools)
 	// O2:流式任务(SSE 实时 stdout)
 	mux.HandleFunc("POST /api/tasks/stream", r.handleStreamTask)
+	// Agent 编排(2026-08-06):自然语言任务 → LLM 规划 → 工具执行(SSE 流式)
+	mux.HandleFunc("POST /api/agent/run", r.handleAgentRun)
 	// F8:脚本库
 	mux.HandleFunc("GET /api/scripts", r.handleScriptList)
 	mux.HandleFunc("POST /api/scripts", r.handleScriptUpload)
@@ -86,6 +90,11 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	r.registerDownloadDir(mux)
 	// B2:部署引导(一行安装命令)
 	mux.HandleFunc("GET /api/bootstrap", r.handleBootstrap)
+	// 控制台会话鉴权(2026-08-12):HttpOnly Cookie,浏览器登录后访问 API/SSE
+	// 三端点均不走 authorize(自行校验密码/读 cookie)
+	mux.HandleFunc("POST /api/console/login", r.handleConsoleLogin)
+	mux.HandleFunc("POST /api/console/logout", r.handleConsoleLogout)
+	mux.HandleFunc("GET /api/console/session", r.handleConsoleSession)
 }
 
 // GET /healthz —— 深度健康检查(D8 / P3-1)。
@@ -126,7 +135,15 @@ func (r *Relay) handleHealthz(w http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(w).Encode(status)
 }
 
-// GET /api/tasks —— 任务历史（最新在前，?limit=N，默认 50）。
+// GET /api/tasks —— 任务历史（最新在前）。
+//
+// 查询参数:
+//
+//	?limit=N      返回条数上限,默认 50
+//	?agent_id=X   只返回该 Agent 的任务(内存过滤,2026-08-12 加,控制台档案面板用)
+//	?status=S     只返回该状态的任务(pending/dispatched/acknowledged/completed/failed/cancelled)
+//
+// agent_id 与 status 可组合。过滤时多取(fetchLimit=500)再内存筛,保证过滤后仍有足量。
 func (r *Relay) handleListTasks(w http.ResponseWriter, req *http.Request) {
 	if err := r.authorize(req); err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
@@ -136,44 +153,75 @@ func (r *Relay) handleListTasks(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"tasks": []any{}, "count": 0, "enabled": false})
 		return
 	}
+	q := req.URL.Query()
 	limit := 50
-	if l := req.URL.Query().Get("limit"); l != "" {
+	if l := q.Get("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	tasks, err := r.store.ListTasks(limit)
+	agentFilter := q.Get("agent_id")
+	statusFilter := q.Get("status")
+	// 过滤时多取,避免过滤后不足 limit
+	fetchLimit := limit
+	if agentFilter != "" || statusFilter != "" {
+		fetchLimit = 500
+	}
+	tasks, err := r.store.ListTasks(fetchLimit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errMap(err))
 		return
 	}
+	// handler 层内存过滤(不动 TaskStore 接口,2 agent 规模够用)
+	if agentFilter != "" || statusFilter != "" {
+		filtered := make([]StoredTask, 0, len(tasks))
+		for _, t := range tasks {
+			if agentFilter != "" && t.Request.AgentID != agentFilter {
+				continue
+			}
+			if statusFilter != "" && t.Status != statusFilter {
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		tasks = filtered
+	}
+	if len(tasks) > limit {
+		tasks = tasks[:limit]
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks, "count": len(tasks), "enabled": true})
 }
 
-// POST /api/tasks/batch —— 按标签批量下发任务（C10）。
+// POST /api/tasks/batch —— 批量下发任务(C10 + 2026-08-12 agent_ids 选择器)。
 //
 // 请求体:
 //
-//	{"tag": "env=prod", "type": "powershell", "payload": {...}, "timeout": 30}
+//	{"agent_ids": ["agent-1","agent-2"], "type": "powershell", "payload": {...}, "timeout": 30}
+//	或按标签(兼容旧): {"tag": "env=prod", "type": "powershell", "payload": {...}}
 //
-// 响应: {"dispatched": ["agent-1","agent-2"], "offline": [], "task_ids": {...}}
+// agent_ids 优先于 tag。响应: {"selector": "...", "dispatched": [...], "count": N, "task_ids": {agentID: taskID}}
 func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 	if err := r.authorize(req); err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
 	var body struct {
-		Tag     string          `json:"tag"`     // 如 "env=prod"
-		Type    string          `json:"type"`
-		Payload json.RawMessage `json:"payload"`
-		Timeout int             `json:"timeout"`
+		AgentIDs []string        `json:"agent_ids"` // 显式 agent 列表(2026-08-12,优先于 tag)
+		Tag      string          `json:"tag"`       // 如 "env=prod"(agent_ids 为空时用)
+		Type     string          `json:"type"`
+		Payload  json.RawMessage `json:"payload"`
+		Timeout  int             `json:"timeout"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("请求体解析失败: %w", err)))
 		return
 	}
-	if body.Tag == "" || body.Type == "" {
-		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("tag 和 type 不能为空")))
+	if body.Type == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("type 不能为空")))
+		return
+	}
+	if len(body.AgentIDs) == 0 && body.Tag == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_ids 或 tag 至少填一个")))
 		return
 	}
 	if !proto.IsValidTaskType(body.Type) {
@@ -181,21 +229,41 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// P1-1 修复（致命安全洞）：批量下发必须经过命令策略校验，否则可绕过 S4 下发 Format-Volume
+	// P1-1 修复(致命安全洞):批量下发必须经过命令策略校验,否则可绕过 S4 下发 Format-Volume
 	if err := r.policy.CheckPayload(body.Type, body.Payload); err != nil {
-		log.Printf("[policy] 批量任务被拦截 tag=%s type=%s: %v", body.Tag, body.Type, err)
+		log.Printf("[policy] 批量任务被拦截 type=%s: %v", body.Type, err)
 		metrics.Inc("blocked")
 		if r.audit != nil {
-			r.audit.Log(AuditEntry{Event: "task_blocked", Type: body.Type, Detail: "batch:" + body.Tag + " " + err.Error()})
+			r.audit.Log(AuditEntry{Event: "task_blocked", Type: body.Type, Detail: "batch " + err.Error()})
 		}
 		writeJSON(w, http.StatusForbidden, errMap(err))
 		return
 	}
 
-	// 找匹配 Agent
-	agentIDs := r.agents.FindByTag(body.Tag)
+	// 选 agent:agent_ids 优先(过滤只留在线),否则按 tag
+	var agentIDs []string
+	selector := "tag:" + body.Tag
+	if len(body.AgentIDs) > 0 {
+		online := r.agents.Snapshot()
+		onlineSet := make(map[string]bool, len(online))
+		for _, a := range online {
+			onlineSet[a.AgentID] = true
+		}
+		for _, id := range body.AgentIDs {
+			if onlineSet[id] {
+				agentIDs = append(agentIDs, id)
+			}
+		}
+		selector = "agent_ids(" + strconv.Itoa(len(body.AgentIDs)) + ")"
+	} else {
+		agentIDs = r.agents.FindByTag(body.Tag)
+	}
 	if len(agentIDs) == 0 {
-		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("无带标签 %s 的在线 Agent", body.Tag)))
+		if len(body.AgentIDs) > 0 {
+			writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("agent_ids 中的 Agent 均不在线")))
+		} else {
+			writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("无带标签 %s 的在线 Agent", body.Tag)))
+		}
 		return
 	}
 
@@ -231,12 +299,13 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 			}
 		}(aid, taskID, task)
 		if r.audit != nil {
-			r.audit.Log(AuditEntry{Event: "task_submitted", AgentID: aid, TaskID: taskID, Type: body.Type, Detail: "batch:" + body.Tag})
+			r.audit.Log(AuditEntry{Event: "task_submitted", AgentID: aid, TaskID: taskID, Type: body.Type, Detail: "batch:" + selector})
 		}
 	}
 	wg.Wait() // D2:等所有并行投递完成
-	log.Printf("[task] 批量下发 tag=%s → %d agents", body.Tag, len(dispatched))
+	log.Printf("[task] 批量下发 %s → %d agents", selector, len(dispatched))
 	writeJSON(w, http.StatusAccepted, map[string]any{
+		"selector":   selector,
 		"tag":        body.Tag,
 		"dispatched": dispatched,
 		"count":      len(dispatched),
@@ -250,11 +319,15 @@ func summarizePayload(taskType string, payload []byte) string {
 	var text string
 	switch taskType {
 	case "powershell":
-		var t struct{ Command string `json:"command"` }
+		var t struct {
+			Command string `json:"command"`
+		}
 		json.Unmarshal(payload, &t)
 		text = t.Command
 	case "script":
-		var t struct{ Content string `json:"content"` }
+		var t struct {
+			Content string `json:"content"`
+		}
 		json.Unmarshal(payload, &t)
 		text = t.Content
 	default:
@@ -559,6 +632,13 @@ func (r *Relay) dispatchTask(conn *wsConn, task proto.TaskRequest) error {
 	} else {
 		log.Printf("[task] 下发 task=%s type=%s → agent=%s", task.TaskID, task.Type, task.AgentID)
 	}
+	// P1-B:广播 task_dispatched 事件(SSE 订阅者实时感知投递,CLI waitResult 双通道)
+	r.console.Broadcast(Event{
+		Kind:    proto.TypeTaskDispatched,
+		AgentID: task.AgentID,
+		Payload: mustMarshal(task),
+		TS:      time.Now().UnixMilli(),
+	})
 	return nil
 }
 
@@ -865,7 +945,14 @@ func (r *Relay) handleRevokeAgent(w http.ResponseWriter, req *http.Request) {
 
 // --- H2 定时任务 ---
 
-// GET /api/crons —— 列出所有定时规则。
+// GET /api/crons —— 列出定时规则。
+//
+// 查询参数:
+//
+//	?agent_id=X   只返回该 Agent 绑定的规则(2026-08-12 加,控制台档案面板用)
+//
+// 响应在每条规则上额外附 next_run(Unix ms):对 enabled 规则用 robfig/cron 解析 cron_expr
+// 算出下次执行时间(读取侧补 —— CronRule.NextRun 字段当前未被调度器回写)。
 func (r *Relay) handleListCrons(w http.ResponseWriter, req *http.Request) {
 	if err := r.authorize(req); err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
@@ -876,7 +963,32 @@ func (r *Relay) handleListCrons(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	rules := r.scheduler.ListRules()
-	writeJSON(w, http.StatusOK, map[string]any{"crons": rules, "count": len(rules), "enabled": true})
+	agentFilter := req.URL.Query().Get("agent_id")
+	now := time.Now()
+	out := make([]map[string]any, 0, len(rules))
+	for _, rule := range rules {
+		if agentFilter != "" && rule.AgentID != agentFilter {
+			continue
+		}
+		entry := map[string]any{
+			"id":         rule.ID,
+			"cron_expr":  rule.CronExpr,
+			"task_type":  rule.TaskType,
+			"agent_id":   rule.AgentID,
+			"enabled":    rule.Enabled,
+			"timeout":    rule.Timeout,
+			"last_run":   rule.LastRun,
+			"created_at": rule.CreatedAt,
+			"tags":       rule.Tags,
+		}
+		if rule.Enabled {
+			if sched, perr := cron.ParseStandard(rule.CronExpr); perr == nil {
+				entry["next_run"] = sched.Next(now).UnixMilli()
+			}
+		}
+		out = append(out, entry)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"crons": out, "count": len(out), "enabled": true})
 }
 
 // POST /api/crons —— 新建定时规则。
@@ -1382,4 +1494,3 @@ done:
 		r.audit.Log(AuditEntry{Event: "file_download", AgentID: agentID, Detail: fmt.Sprintf("%s %d bytes", transferID, totalWritten)})
 	}
 }
-

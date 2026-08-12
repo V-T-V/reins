@@ -78,6 +78,8 @@ go-rmm/
 │   ├── rbac.go         # RBAC 多租户(tenant:role:secret)
 │   ├── power.go        # 电源操作端点(标签白名单)
 │   ├── secrets.go      # Secret 管理(TTL+一次性)
+│   ├── sessions.go     # 控制台会话存储(内存态,滑动续期)[2026-08-12]
+│   ├── console_auth.go # 控制台 login/logout/session 端点(HttpOnly Cookie 鉴权)[2026-08-12]
 │   ├── update_repo.go  # Agent 版本仓库(自更新)
 │   ├── scheduler.go    # cron 定时任务
 │   ├── scheduler_smart.go # 智能调度(负载均衡)
@@ -159,7 +161,7 @@ go-rmm/
 | **relay** 任务投递 | 95% | WS 转发 + CAS 存储 + Reaper 超时回收 + 智能调度 | ✅ |
 | **relay** 批量分发 | 90% | 一对多 + 聚合 + 指数退避重试 + 实时进度跟踪 [round 8] | ✅ |
 | **relay** 多租户 | 80% | 组织/角色策略/配额/隔离过滤(内存 store) [round 7] | 🟡 持久化待接 |
-| **relay** 安全层 | 90% | mTLS + 内置 CA + CRL + 命令策略黑名单 + Secret 管理 | ✅ |
+| **relay** 安全层 | 92% | mTLS + 内置 CA + CRL + 命令策略黑名单 + Secret 管理 + 控制台会话 Cookie 鉴权 | ✅ |
 | **relay** 审计 | 95% | hash chain 防篡改 + 异步落盘 + SIEM 导出 [round 6] | ✅ |
 | **relay** 水平扩展 | 70% | TaskStore interface + Redis + Pub/Sub 联邦;多 Relay 故障切换 | 🟡 生产验证待补 |
 | **agent** 执行器 | 90% | 9 类任务(PS/script/file/screenshot/browse/guiclick/update/power/monitor) | ✅ |
@@ -169,7 +171,7 @@ go-rmm/
 | **cmd** CLI | 90% | 51 命令 + 流式 + TUI + 退出码体系 | ✅ |
 | **client** SDK | 85% | 45+ 方法 + 流式 + 工具发现 | ✅ |
 | **proto** 协议 | 95% | Envelope + 30 消息 + 二进制帧 + tunnel | ✅ |
-| **console** Web | 80% | 反向代理 + 内嵌前端 + 实时事件 | 🟡 |
+| **console** Web | 90% | 反向代理 + 内嵌前端 + 实时事件 + 会话 Cookie 鉴权(HttpOnly+Secure+SameSite,EventSource 靠 cookie) | ✅ |
 | **executors** | 90% | 8 执行器实现 + 跨平台 | ✅ |
 
 **安全假设(显式)**:
@@ -216,6 +218,35 @@ go-rmm/
 - ✅ **空闲 Agent 掉线循环修复(S7)**:Relay 收到心跳后回 `heartbeat_ack` 帧,防空闲 Agent(无任务下发)被 watchdog(2×Heartbeat 无收包)周期误杀重连(隧道/任务随机拒绝)。
 - ✅ **Prometheus 指标前缀统一**:`gormm_agents_online`(两 m)→`gormmm_agents_online`(三 m),与其他 `gormmm_*` 命名空间一致(防 PromQL 匹配遗漏)。
 - ✅ **审计写盘错误加固**:`writeEntry` 原丢弃 `file.Write` 返回值,磁盘满/权限拒绝时审计记录静默丢失;现显式记日志(含 event 名),并补 `VerifyChain` 空文件/缺失/空行回归测试。
+
+**已完成(2026-08-06,基于两次真实会话的全面修复+深度优化)**:
+- ✅ **P0-A 隧道首包丢失竞态(会话卡死根因)**:`handleTunnelOpen` 原只在 open 阶段注册 readyCh,dataCh 由 poll 按需注册;Agent 在 TunnelReady 后立即推数据,`routeXferData` 找不到 channel 静默丢弃 → HTTP 响应头字节全丢,连接表现为"✓ 隧道就绪但数据卡死"。三层修复:Relay open 阶段提前注册 dataCh(64 缓冲,getOrRegister 语义,open 返回只清理 readyCh)+ CLI poll 与 open 并行启动 + Agent session 注册提前到 sendReady 前;另修 close 后 poll 挂 30 分钟(EOF 唤醒)。新增 `tunnel_integration_test.go` 4 个回归测试(首包不丢/拒绝透传/close 唤醒/并发竞态)。
+- ✅ **P0-B `-o json` 补齐**:jsonMode 原只覆盖 8 处(agent list/task result/sysinfo 等),task run/list/cancel、status、file upload/download、task stream、tunnel 横幅全为文本。现统一 `{command, ok, ...}` 结构全命令覆盖;上传/下载进度条 json 模式抑制(progressReader/Writer 静默);新增 `json_output_test.go`。
+- ✅ **P1-A 隧道 WebSocket 全双工**:新端点 `GET /api/tunnel/ws`(握手即 open),单 WS 连接承载 open 信令 + 双向数据 + 心跳(Ping 0x02/Pong 0x03,默认 15s/30s 判死,Relay 字段可调),彻底消除双 HTTP 长连接开销与首包竞态;CLI 优先 WS,握手失败自动回退 HTTP(老 Relay 兼容);旧端点完整保留。Agent 侧零改动。新增 `tunnel_ws_test.go` 4 个测试(E2E 双向/心跳保活/判死/RST 拒绝)。
+- ✅ **P1-B 任务结果 SSE 实时推送**:Relay 补广播 `task_dispatched`(dispatchTask 成功)/`task_acknowledged`(TypeTaskAck 处),proto 新增对应常量;CLI `waitResult` 改 SSE 优先 + 轮询兜底双通道(`/api/events` 按 task_id 过滤),task run 结果秒回(实测 299ms vs 原 60s 轮询超时),SSE 断线自动落回轮询零状态丢失。新增 `task_events_test.go` 3 个测试。
+- ✅ **P2-A 上传白名单体验**:403 时 CLI 附可操作提示(查看/修改 AllowedRoots 指引);新增 `config agent-config` 子命令——探测远端 config.json 位置并解析显示 allowed_roots/workspace/max_concurrent_tasks 等关键字段(支持 `-o json` 与 `--path` 指定)。
+- ✅ **P2-B CLI localhost 代理豁免**:`ProxyFromEnvironment` 会劫持 127.0.0.1 流量(用户本机 http_proxy 导致隧道假死,会话实测);提取 `proxyFunc`——loopback(localhost/127.0.0.1/[::1])直连,其余走环境代理;新增 `io_test.go`。
+- ✅ **P2-C status 输出补全**:原只解析 4 个 health 字段 + agent count;现补 xfer 传输指标(healthz)、每-Agent 详情(capabilities/tags/version)、任务实时状态分布(pending/dispatched/acknowledged/completed/failed/cancelled 计数)、`-o json` 支持。
+- ✅ **P2-D Agent 任务排队替代 NACK 风暴**:`handleTaskWithPool` 原 TrySubmit 池满立即 NACK → Relay 回退 pending → 重投风暴(会话实测 master 串行长任务 3-4 分钟时后续任务反复超时);改先发 ACK(Relay 保持 acknowledged,reaper 阈值 timeout×3≥300s 不误杀)再 `Submit` 阻塞排队,排队上限 = 任务 timeout 超时自愈;新增排队自动执行回归测试。
+
+**已完成(2026-08-06,Web 控制台 Agent 化任务执行)**:
+- ✅ **Agent 编排层(补齐"自然语言 → 工具调用")**:Relay 新增 `POST /api/agent/run`(SSE 流式)——用户用自然语言描述运维任务,LLM 自动规划 → 逐步执行工具 → 失败重规划(≤2 次)→ 流式汇总。Plan-and-Execute 循环(借鉴 go-agent-research `planexec` 三接口 + agentloop `LoopEvent` 事件协议)。
+- ✅ **LLM 客户端(纯标准库)**:`relay/llm_client.go` — OpenAI 兼容 `/v1/chat/completions`,原生 function calling,`Chat`/`ChatJSON`/`ChatStream`(逐 token)+ 重试(429/5xx 指数退避)+ `StubLLM` 脚本式 mock(测试零依赖真实模型)。配置:`-llm-base-url`(默认空=禁用,示例 `http://127.0.0.1:11434/v1` 指向 Ollama)/`-llm-api-key`/`-llm-model`(默认 qwen2.5:7b)/`-llm-agent-max`(并发上限 2)。
+- ✅ **8 个编排工具**(`relay/agent_tools.go`,内部直接调用 Relay 逻辑,错误不抛出):list_agents / scheduler_best / run_task / get_task_result / run_script / shell_exec / list_tasks / read_agent_config。
+- ✅ **SSE 事件协议**:`agent_start` / `agent_plan`(含 replanned 标记)/ `step_start` / `tool_call`(参数截断脱敏)/ `tool_result`(2KB 截断)/ `step_done` / `step_failed` / `agent_delta`(汇总流式)/ `agent_final` / `agent_error` / `agent_queued`(并发排队)。data 统一 `{agent_run_id, data, ts}` 包裹。
+- ✅ **console Agent 面板**(`console/web/index.html` + `app.js`):自然语言输入 → 计划步骤卡片(状态着色 pending/running/done/failed/replanned)→ 实时事件日志 → 流式结果气泡;Agent 下拉限定;会话内历史 5 条回填;fetch+ReadableStream 解析 SSE(POST 不支持 EventSource)。
+- ✅ **规划容错**:LLM 规划 JSON 解析失败(围栏/非法/空)→ 重试 1 次 → 单步 run_task 兜底;工具失败 → Replanner 注入失败原因重规划(≤2 次)。
+- ✅ **/api/tools 补登记**:`stream_task` + `agent_run`(原 29 工具 → 31)。
+
+**已完成(2026-08-12,控制台会话鉴权 — HttpOnly Cookie)**:
+- ✅ **根因**:浏览器控制台显示"在线 Agent (0)" + "Relay: 连接断开"——所有 `fetch()` 与 `EventSource` 未带鉴权,`/api/agents` 与 `/api/events` 返回 401。CLI 带 Bearer Token 正常,证明鉴权链路本身正常,缺的是浏览器侧凭证传递。`EventSource` 浏览器无法设 Authorization 头 → 必须走 Cookie。
+- ✅ **方案**:控制台登录后 Relay 颁发 `HttpOnly + Secure + SameSite=Lax` 会话 Cookie(有状态内存 session,滑动续期 8h),普通 API 与 SSE 都靠 cookie 鉴权。Relay Token 不落浏览器,CLI/Agent Bearer 零改动。
+- ✅ **`relay/sessions.go`**:`SessionStore`(内存态,`crypto/rand` 32 字节 ID,滑动续期,后台 sweep 清过期,`Create/Get/Delete/Len/Close`)。不复用 SecretStore(其无 caller-key + 无续期 API)。
+- ✅ **`relay/console_auth.go`**:`POST /api/console/login`(密码 `subtle.ConstantTimeCompare` + 颁 cookie + 审计)、`POST /api/console/logout`(清 session + 清 cookie)、`GET /api/console/session`(前端判断登录态)。`Secure` 据 `X-Forwarded-Proto` 自适应(反代 TLS 终端)。
+- ✅ **`relay/server.go` `authorize` 双轨**:抽 `hasValidBearer` + 新增 `hasValidSession`,两者任一通过即可。~20 个 handler 零调用点改动即全端点(含 SSE)支持 cookie。`Relay.sessions` 字段 + `WithSessions` builder。
+- ✅ **`relay/config.go`**:`-console-password` / `-console-session-ttl` / `-console-cookie-name` / `-console-secure-cookie` flag + env + `Validate`。
+- ✅ **前端 `web/app.js` + `index.html`**:`apiFetch()` 包装(自动 `credentials:"include"` + 401 弹登录)、`EventSource({withCredentials:true})`、XHR `withCredentials`、`#login-overlay` 登录页 + 登出按钮、`checkSession()` 启动门控。监听随 EventSource 重连重新注册(顺带修了重连丢监听的潜在问题)。
+- ✅ **测试**:`relay/console_auth_test.go` 13 例(login 成功/失败/禁用、session 端点、authorize cookie 通过/无凭证 401/Bearer 回归、logout 失效、TTL 过期、滑动续期、cookie 属性 HttpOnly/Secure/SameSite/Path、X-Forwarded-Proto 自适应、dev 放行回归、审计 login 事件)。
 
 ### P1 — 能力补全
 4. **Linux Agent**:补齐 Linux 执行器(systemd 服务/包管理/journalctl),打通跨平台。

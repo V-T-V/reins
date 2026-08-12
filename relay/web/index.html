@@ -76,9 +76,78 @@
   .setup-card .cmd { background: #1c2128; border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin: 12px 0; font-family: monospace; font-size: 13px; color: #3fb950; text-align: left; word-break: break-all; cursor: pointer; position: relative; }
   .setup-card .cmd:hover { border-color: var(--accent); }
   .setup-card .copy-hint { position: absolute; right: 12px; top: 12px; color: var(--text-muted); font-size: 11px; }
+
+  /* 控制台登录遮罩(2026-08-12 会话 Cookie 鉴权) */
+  .login-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(13,17,23,0.97); z-index: 10000;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .login-card {
+    background: #161b22; border: 1px solid #30363d;
+    border-radius: 12px; padding: 40px; width: 360px; text-align: center;
+  }
+  .login-card h2 { color: #58a6ff; margin-bottom: 8px; font-size: 18px; }
+  .login-card p { color: #8b949e; font-size: 13px; margin-bottom: 20px; }
+  .login-card label { text-align: left; }
+  .login-card input { margin-bottom: 12px; }
+  .login-card .login-error { color: #f85149; font-size: 12px; min-height: 16px; margin: 8px 0; }
+  .login-card button { width: 100%; margin-top: 8px; }
+  .login-card.loading button { opacity: 0.6; pointer-events: none; }
+
+  /* Agent 任务档案(2026-08-12) */
+  #timeline-refresh-btn { float: right; padding: 2px 10px; font-size: 12px; background: #21262d; }
+  #timeline-refresh-btn:hover { background: #30363d; }
+  .timeline-grid { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 12px; }
+  .timeline-col { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px; min-height: 100px; max-height: 320px; overflow-y: auto; }
+  .timeline-col h4 { font-size: 12px; color: #58a6ff; margin-bottom: 8px; border-bottom: 1px solid #21262d; padding-bottom: 4px; }
+  .timeline-item { font-size: 12px; padding: 6px 4px; border-bottom: 1px solid #21262d; font-family: "Cascadia Code", Consolas, monospace; cursor: pointer; }
+  .timeline-item:hover { background: #161b22; }
+  .timeline-item .ti-id { color: #c9d1d9; }
+  .timeline-item .ti-meta { color: #8b949e; font-size: 11px; margin-top: 2px; }
+  .timeline-item .ok { color: #3fb950; }
+  .timeline-item .fail { color: #f85149; }
+  .timeline-item .run { color: #d29922; }
+  .timeline-item .pend { color: #8b949e; }
+  .timeline-detail { margin-top: 6px; padding: 6px; background: #161b22; border-radius: 4px; font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
+  .timeline-cron { margin-top: 12px; padding-top: 10px; border-top: 1px solid #30363d; }
+  .timeline-cron h4 { font-size: 12px; color: #58a6ff; margin-bottom: 6px; }
+  .cron-item { font-size: 12px; padding: 4px 0; color: #c9d1d9; font-family: monospace; }
+  .cron-item code { background: #21262d; padding: 1px 6px; border-radius: 3px; color: #3fb950; }
+  .cron-item .cron-disabled { color: #f85149; margin-left: 6px; }
+
+  /* 批量任务下发(2026-08-12) */
+  .batch-agent { padding: 4px 6px; font-size: 12px; font-family: "Cascadia Code", Consolas, monospace; cursor: pointer; border-bottom: 1px solid #21262d; }
+  .batch-agent:hover { background: #161b22; }
+  .batch-agent input { width: auto; margin-right: 6px; }
+  .batch-row { display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid #21262d; font-size: 12px; font-family: "Cascadia Code", Consolas, monospace; cursor: pointer; }
+  .batch-row:hover { background: #161b22; }
+  .batch-row .b-agent { flex: 1; color: #c9d1d9; }
+  .batch-row .b-status { font-size: 11px; min-width: 120px; }
+  .batch-row .ok { color: #3fb950; }
+  .batch-row .fail { color: #f85149; }
+  .batch-row .run { color: #d29922; }
+  .batch-row .pend { color: #8b949e; }
+  .batch-detail { flex-basis: 100%; margin-top: 6px; padding: 6px; background: #161b22; border-radius: 4px; font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 160px; overflow-y: auto; }
+  .batch-summary { padding: 8px 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; margin-top: 10px; font-size: 12px; color: #c9d1d9; }
 </style>
 </head>
 <body>
+<!-- 控制台登录遮罩(2026-08-12 会话 Cookie 鉴权,JS 控制显隐) -->
+<div class="login-overlay" id="login-overlay" style="display:none">
+  <div class="login-card" id="login-card">
+    <h2>🔐 go-rmm 控制台</h2>
+    <p>请输入控制台密码登录</p>
+    <label>用户名（可选）</label>
+    <input id="login-username" placeholder="admin" autocomplete="username">
+    <label>密码</label>
+    <input id="login-password" type="password" placeholder="控制台密码" autocomplete="current-password"
+      onkeydown="if(event.key==='Enter') window.__doLogin()">
+    <div class="login-error" id="login-error"></div>
+    <button onclick="window.__doLogin()">登录</button>
+  </div>
+</div>
+
 <!-- P2 安装引导（0 Agent 时显示） -->
 <div class="setup-overlay" id="setup-overlay" style="display:none">
   <div class="setup-card">
@@ -118,6 +187,9 @@
     <div class="toolbar">
       <h1>go-rmm 控制台</h1>
       <span class="relay-badge" id="relay-info">Relay: 连接中...</span>
+      <span id="user-badge" style="display:none;margin-left:auto;color:#8b949e;font-size:12px">
+        <span id="user-name"></span> · <a href="#" onclick="window.__doLogout();return false" style="color:#f85149;cursor:pointer">登出</a>
+      </span>
     </div>
     <div class="content">
       <!-- 任务下发 -->
@@ -125,6 +197,38 @@
         <div class="panel-header">下发任务</div>
         <div class="panel-body" id="task-form-host">
           <div class="empty" id="no-agent-hint">请先在左侧选择一个 Agent</div>
+        </div>
+      </div>
+      <!-- 批量任务下发(2026-08-12):多选 agent + 一次性下发 + 执行结果表 -->
+      <div class="panel">
+        <div class="panel-header">批量任务下发</div>
+        <div class="panel-body" id="batch-body">
+          <div class="row">
+            <div>
+              <label>任务类型</label>
+              <select id="b-task-type" onchange="window.__renderBatchFields()"></select>
+            </div>
+            <div>
+              <label>超时(秒)</label>
+              <input id="b-task-timeout" type="number" value="30" min="1" max="600">
+            </div>
+          </div>
+          <div id="b-task-fields"></div>
+          <label>目标 Agent(勾选在线)</label>
+          <div id="batch-agent-list" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:4px;max-height:120px;overflow-y:auto;margin-bottom:8px"></div>
+          <div style="margin-bottom:10px">
+            <button onclick="window.__batchSelectAll()" style="background:#21262d;padding:4px 12px;font-size:12px">全选</button>
+            <button onclick="window.__batchClearAll()" style="background:#21262d;padding:4px 12px;font-size:12px">清空</button>
+          </div>
+          <button onclick="window.__submitBatch()">批量下发</button>
+          <div id="batch-result" style="margin-top:16px"></div>
+        </div>
+      </div>
+      <!-- Agent 任务档案(2026-08-12):已做 / 在做 / 待做 + 定时计划 -->
+      <div class="panel">
+        <div class="panel-header">Agent 任务档案<span id="timeline-agent-id" style="color:#8b949e;font-weight:normal;margin-left:8px;font-size:12px"></span><button id="timeline-refresh-btn" onclick="window.__refreshTimeline()">刷新</button></div>
+        <div class="panel-body" id="timeline-body">
+          <div class="empty">请先在左侧选择一个 Agent</div>
         </div>
       </div>
       <!-- 运行指标 (D6) -->

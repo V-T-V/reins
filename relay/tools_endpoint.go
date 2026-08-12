@@ -25,10 +25,13 @@ var allTools = []ToolEntry{
 
 	// 执行
 	{"run_task", "下发任务(powershell/script/file/...)并返回结果", "POST", "/api/tasks", "execution"},
+	{"stream_task", "流式下发任务(SSE 实时 stdout/进度/结果,AI Agent 用)", "POST", "/api/tasks/stream", "execution"},
 	{"batch_task", "按标签批量下发任务", "POST", "/api/tasks/batch", "execution"},
 	{"get_task", "查询单个任务状态和结果", "GET", "/api/tasks/{id}", "execution"},
 	{"list_tasks", "列出任务历史", "GET", "/api/tasks", "execution"},
 	{"cancel_task", "取消任务", "POST", "/api/tasks/cancel", "execution"},
+	// Agent 编排(2026-08-06):自然语言任务 → LLM 规划 → 工具执行
+	{"agent_run", "Agent 编排:自然语言任务自动规划执行(SSE 流式)", "POST", "/api/agent/run", "execution"},
 
 	// Shell
 	{"shell_open", "打开交互式终端会话", "POST", "/api/shell/open", "terminal"},

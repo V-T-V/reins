@@ -41,7 +41,7 @@ type wsConn struct {
 	// routeXferData 锁内只取 session 引用,锁外用 select+done 发送,
 	// 避免持锁阻塞导致死锁(channel 满时消费者断开会双向死锁)。
 	xferMu       sync.Mutex
-	xferChannels map[string]*xferSession             // transferID → 下载数据会话
+	xferChannels map[string]*xferSession                     // transferID → 下载数据会话
 	xferReady    map[string]chan *proto.FileTransferReady    // transferID → ready 信号
 	xferComplete map[string]chan *proto.FileTransferComplete // transferID → 完成信号
 }
@@ -51,9 +51,9 @@ type wsConn struct {
 // P0-C1 修复:done channel 在 unregister/closeAll 时 close,
 // routeXferData 用 select 监听 done 优雅退出,不再持锁阻塞。
 type xferSession struct {
-	data  chan []byte // 传输数据(满则背压)
-	done  chan struct{} // close 时通知生产者(routeXferData)停止发送
-	once  sync.Once
+	data chan []byte   // 传输数据(满则背压)
+	done chan struct{} // close 时通知生产者(routeXferData)停止发送
+	once sync.Once
 }
 
 // signalDone 幂等关闭 done channel(防重复 close panic)。
@@ -86,12 +86,16 @@ func (w *wsConn) registerCompleteChannel(transferID string) chan *proto.FileTran
 }
 
 // unregisterXferChannels 清理所有传输通道。
-// P0-#4/P0-C1 修复:close done channel 通知生产者停止;不再持锁阻塞发送。
+// P0-A 修复:close done channel 通知生产者停止;不再持锁阻塞发送。
+// P0-A 延伸:锁外向 dataCh 发 EOF(nil)唤醒阻塞在 poll 的消费者,
+// 否则 /api/tunnel/close 后 poll 的 HTTP 响应要挂到 30 分钟 ctx 超时才结束(CLI 连接关闭后进程悬挂)。
 func (w *wsConn) unregisterXferChannels(transferID string) {
 	w.xferMu.Lock()
+	var wake chan []byte
 	if s, ok := w.xferChannels[transferID]; ok {
 		delete(w.xferChannels, transferID)
 		s.signalDone() // 通知 routeXferData 停止发送
+		wake = s.data
 	}
 	if ch, ok := w.xferReady[transferID]; ok {
 		delete(w.xferReady, transferID)
@@ -102,14 +106,26 @@ func (w *wsConn) unregisterXferChannels(transferID string) {
 		safeCloseCompleteChan(ch)
 	}
 	w.xferMu.Unlock()
+	if wake != nil {
+		select {
+		case wake <- nil: // EOF 标记,唤醒 poll 消费者
+		default: // 消费者已不在读(channel 满),无需唤醒
+		}
+	}
 }
 
 // registerXferChannel 注册一个传输数据通道,返回只读 channel。
+// P0-A 修复:getOrRegister 语义——已存在则复用原通道。
+// 隧道 open 阶段提前注册 dataCh 后,poll 复用同一通道,
+// Agent 早到的数据帧缓冲在通道里不再丢失(原实现重复注册会覆盖旧通道,数据发往被丢弃的旧 channel)。
 func (w *wsConn) registerXferChannel(transferID string) <-chan []byte {
 	w.xferMu.Lock()
 	defer w.xferMu.Unlock()
 	if w.xferChannels == nil {
 		w.xferChannels = make(map[string]*xferSession)
+	}
+	if s, ok := w.xferChannels[transferID]; ok {
+		return s.data
 	}
 	s := &xferSession{
 		data: make(chan []byte, 64),
@@ -117,6 +133,18 @@ func (w *wsConn) registerXferChannel(transferID string) <-chan []byte {
 	}
 	w.xferChannels[transferID] = s
 	return s.data
+}
+
+// unregisterReadyChannel 只清理 ready 信号通道,不动 dataCh。
+// P0-A 修复:隧道 open 阶段提前注册 dataCh,open 返回时只应释放 readyCh,
+// dataCh 由 poll 的 defer(或 close 端点)负责清理,避免把提前注册的数据通道误杀。
+func (w *wsConn) unregisterReadyChannel(transferID string) {
+	w.xferMu.Lock()
+	defer w.xferMu.Unlock()
+	if ch, ok := w.xferReady[transferID]; ok {
+		delete(w.xferReady, transferID)
+		safeCloseReadyChan(ch)
+	}
 }
 
 // routeXferData 把二进制帧路由到对应 transferID 的 channel。
@@ -155,6 +183,10 @@ func (w *wsConn) closeAllXferChannels() {
 	for id, s := range w.xferChannels {
 		delete(w.xferChannels, id)
 		s.signalDone()
+		select {
+		case s.data <- nil: // P0-A:唤醒 poll 消费者
+		default:
+		}
 	}
 	for id, ch := range w.xferReady {
 		delete(w.xferReady, id)
@@ -213,7 +245,7 @@ type Event struct {
 type EventBus struct {
 	mu          sync.RWMutex
 	subscribers map[string]chan Event // subID → channel
-	dropped     int64                // 累计丢弃事件数
+	dropped     int64                 // 累计丢弃事件数
 }
 
 func NewEventBus() *EventBus {
@@ -289,24 +321,47 @@ func (b *EventBus) Broadcast(ev Event) {
 // --- Relay 主体 ---
 
 type Relay struct {
-	cfg     Config
-	agents  *Registry
-	console *EventBus
-	store   TaskStore      // 任务持久化(R2/F1),可为 nil(关闭持久化)
-	ca      *CA           // 内置 CA(C7 身份认证),可为 nil(关闭 mTLS)
-	policy  *CommandPolicy // 命令安全策略(S4)
-	audit   *AuditLog     // 审计日志(F1)
-	scheduler *Scheduler  // H2 定时任务调度器,可为 nil
-	updateRepo *UpdateRepo // Agent 版本仓库(自更新分发),可为 nil
+	cfg        Config
+	agents     *Registry
+	console    *EventBus
+	store      TaskStore      // 任务持久化(R2/F1),可为 nil(关闭持久化)
+	ca         *CA            // 内置 CA(C7 身份认证),可为 nil(关闭 mTLS)
+	policy     *CommandPolicy // 命令安全策略(S4)
+	audit      *AuditLog      // 审计日志(F1)
+	scheduler  *Scheduler     // H2 定时任务调度器,可为 nil
+	updateRepo *UpdateRepo    // Agent 版本仓库(自更新分发),可为 nil
+	sessions   *SessionStore  // 控制台会话存储(HttpOnly Cookie 鉴权,2026-08-12),可为 nil(控制台登录禁用)
+
+	// P1-A:WS 隧道心跳参数(可测试覆盖;0 表示用默认值)。
+	tunnelPingInterval time.Duration // 心跳 Ping 间隔,默认 15s
+	tunnelDeadline     time.Duration // 无收包判死阈值,默认 30s
+
+	// Agent 编排(2026-08-06):Web 控制台自然语言任务 → LLM 规划 → 工具执行
+	llmClient   *LLMClient    // 非 nil 时启用 /api/agent/run(配置了 -llm-base-url)
+	agentRunSem chan struct{} // 并发 Agent run 信号量(LLMAgentMax)
 }
 
 func NewRelay(cfg Config) *Relay {
-	return &Relay{
-		cfg:     cfg,
-		agents:  NewRegistry(),
-		console: NewEventBus(),
-		policy:  DefaultCommandPolicy(),
+	maxAgent := cfg.LLMAgentMax
+	if maxAgent <= 0 {
+		maxAgent = 2
 	}
+	relay := &Relay{
+		cfg:         cfg,
+		agents:      NewRegistry(),
+		console:     NewEventBus(),
+		policy:      DefaultCommandPolicy(),
+		agentRunSem: make(chan struct{}, maxAgent),
+	}
+	// LLM 配置了 base-url 才启用 Agent 编排
+	if cfg.LLMBaseURL != "" {
+		relay.llmClient = NewLLMClient(cfg.LLMBaseURL, cfg.LLMAPIVKey, cfg.LLMModel)
+	}
+	// 控制台会话(配置了 -console-password 才启用,2026-08-12)
+	if cfg.ConsolePassword != "" {
+		relay.sessions = NewSessionStore(cfg.ConsoleSessionTTL)
+	}
+	return relay
 }
 
 // WithStore 注入持久化存储(C4)。
@@ -339,13 +394,37 @@ func (r *Relay) WithScheduler(s *Scheduler) *Relay {
 	return r
 }
 
-// 鉴权：校验 Bearer token（配置为空则放行）。
+// WithSessions 注入控制台会话存储(2026-08-12,测试用)。
+func (r *Relay) WithSessions(s *SessionStore) *Relay {
+	r.sessions = s
+	return r
+}
+
+// 鉴权：双轨校验 —— Bearer token(CLI/Agent) 或 控制台 session cookie(浏览器)。
 //
-// S6 修复：token 比较用 crypto/subtle.ConstantTimeCompare，消除计时侧信道。
+//   - cfg.Token 空 + cfg.ConsolePassword 空 → 放行(dev/no-auth 回归保护)
+//   - Bearer 匹配 cfg.Token → 通过(CLI/Agent 路径,S6 常量时间比较)
+//   - session cookie 有效 → 通过(浏览器路径,2026-08-12 新增)
+//   - 否则 401
+//
+// 所有 ~20 个 handler 第一行调 r.authorize(req),改此函数内部即可全端点(含 SSE)支持 cookie,
+// 无需动任何调用点。
 func (r *Relay) authorize(req *http.Request) error {
-	if r.cfg.Token == "" {
+	if r.cfg.Token == "" && r.cfg.ConsolePassword == "" {
 		return nil
 	}
+	if r.cfg.Token != "" && r.hasValidBearer(req) {
+		return nil
+	}
+	if r.cfg.ConsolePassword != "" && r.hasValidSession(req) {
+		return nil
+	}
+	return errors.New("无效的鉴权")
+}
+
+// hasValidBearer 校验 Bearer token(Authorization 头 或 ?token= 查询参数)。
+// S6 常量时间比较,消除计时侧信道。
+func (r *Relay) hasValidBearer(req *http.Request) bool {
 	token := req.Header.Get("Authorization")
 	if token == "" {
 		token = req.URL.Query().Get("token")
@@ -355,10 +434,20 @@ func (r *Relay) authorize(req *http.Request) error {
 	}
 	want := "Bearer " + r.cfg.Token
 	// 常量时间比较：长度不同时先 normalize 再比，避免长度泄露
-	if subtle.ConstantTimeCompare([]byte(token), []byte(want)) != 1 {
-		return errors.New("无效的鉴权 token")
+	return subtle.ConstantTimeCompare([]byte(token), []byte(want)) == 1
+}
+
+// hasValidSession 校验控制台会话 cookie(浏览器路径,滑动续期)。
+func (r *Relay) hasValidSession(req *http.Request) bool {
+	if r.sessions == nil {
+		return false
 	}
-	return nil
+	cookie, err := req.Cookie(r.cookieName())
+	if err != nil {
+		return false
+	}
+	_, ok := r.sessions.Get(cookie.Value)
+	return ok
 }
 
 // handleAgentWS 处理 Agent 的反向 WS 连接。
@@ -425,14 +514,14 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			log.Printf("[agent-read] %s 连接断开: %v", wc.id, err)
 			return
 		}
-	if msgType != websocket.MessageText {
-		// B1 修复：二进制帧 = 文件下载数据，路由到 transferID 的 channel
-		transferID, isLast, payload, parseErr := proto.ParseBinaryFrame(data)
-		if parseErr == nil {
-			wc.routeXferData(transferID, payload, isLast)
+		if msgType != websocket.MessageText {
+			// B1 修复：二进制帧 = 文件下载数据，路由到 transferID 的 channel
+			transferID, isLast, payload, parseErr := proto.ParseBinaryFrame(data)
+			if parseErr == nil {
+				wc.routeXferData(transferID, payload, isLast)
+			}
+			continue
 		}
-		continue
-	}
 		var env proto.Envelope
 		if err := json.Unmarshal(data, &env); err != nil {
 			log.Printf("[agent-read] JSON 解析失败: %v", err)
@@ -496,6 +585,13 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			if err := env.Decode(&ack); err == nil && r.store != nil {
 				if err := r.store.UpdateTaskStatus(ack.TaskID, StatusAcknowledged); err == nil {
 					metrics.Inc("acked") // D7
+					// P1-B:广播 task_acknowledged 事件(CLI waitResult 实时感知)
+					r.console.Broadcast(Event{
+						Kind:    proto.TypeTaskAcknowledged,
+						AgentID: agentID,
+						Payload: mustMarshal(ack),
+						TS:      time.Now().UnixMilli(),
+					})
 				}
 			}
 
@@ -528,6 +624,11 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 						} else {
 							metrics.Inc("failed")
 						}
+					} else {
+						// 不再静默吞错：result 已 SaveResult 持久化，但 status 推进失败
+						// （常见于 reaper 已把任务转终态、或 cancel/result 竞态）。
+						// CLI 的 waitResult 有 result 兜底，仍能拿到结果。
+						log.Printf("[relay] task %s result received but status update failed: %v (result saved)", res.TaskID, err)
 					}
 				}
 				// C9 审计：记录任务结果

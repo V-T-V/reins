@@ -4,6 +4,13 @@
 //   agents: Map<agentID, Register>  当前已知 Agent
 //   selected: string|null           当前选中 Agent
 //   evtSource: EventSource          SSE 订阅
+//   loginShowing: bool              登录遮罩显示中(暂停所有网络轮询)
+//   mainUIStarted: bool             主 UI 已启动(幂等,登出后重置)
+//
+// 鉴权(2026-08-12):HttpOnly + Secure + SameSite 会话 Cookie。
+//   - 所有 API 调用走 apiFetch()(自动 credentials:"include")
+//   - EventSource 用 { withCredentials: true }(浏览器无法对 SSE 设 Authorization 头,只能靠 cookie)
+//   - 401 → 弹登录遮罩;启动先 GET /api/console/session 判断登录态
 (function () {
   "use strict";
 
@@ -14,12 +21,168 @@
   if (basePath === "/" || basePath === ".") basePath = "";
   function api(path) { return basePath + path; }
 
-  const state = { agents: new Map(), selected: null, evtSource: null };
+  const state = {
+    agents: new Map(),
+    selected: null,
+    evtSource: null,
+    loginShowing: false,
+    mainUIStarted: false,
+    agentsTimer: null,
+    metricsTimer: null,
+    bootstrapLoaded: false,
+    // Agent 任务档案(2026-08-12)
+    timelineAgent: null,   // 当前展示档案的 agent id
+    timelineTimer: null,   // 15s 刷新句柄
+    timelineTasks: [],     // 当前 agent 的任务缓存
+    timelineCrons: [],     // cron 缓存
+    taskAgentMap: {},      // task_id → agent_id(SSE 事件按 task_id 定位 agent)
+    batchResults: {},      // 批量下发结果:task_id → {agentID, status, progress, result, ts}
+  };
+
+  // --- 控制台会话鉴权(2026-08-12)---
+  //
+  // apiFetch: 包装 fetch,自动 credentials:"include"(浏览器随请求发 HttpOnly cookie),
+  // 并拦截 401 → 弹登录遮罩。cookie 是 HttpOnly,JS 读不到,完全由浏览器管理。
+  async function apiFetch(url, opts) {
+    opts = opts || {};
+    opts.credentials = "include";
+    const r = await fetch(url, opts);
+    if (r.status === 401 && !state.loginShowing) {
+      showLogin("会话已过期或未登录,请重新登录");
+    }
+    return r;
+  }
+
+  function showLogin(msg) {
+    state.loginShowing = true;
+    const ov = document.getElementById("login-overlay");
+    if (ov) ov.style.display = "flex";
+    const err = document.getElementById("login-error");
+    if (err) err.textContent = msg || "";
+    // 暂停 SSE/轮询,避免持续 401
+    if (state.evtSource) { state.evtSource.close(); state.evtSource = null; }
+    const pw = document.getElementById("login-password");
+    if (pw) { pw.value = ""; setTimeout(function () { pw.focus(); }, 50); }
+  }
+
+  function hideLogin() {
+    state.loginShowing = false;
+    const ov = document.getElementById("login-overlay");
+    if (ov) ov.style.display = "none";
+  }
+
+  function updateUserBadge(username) {
+    const badge = document.getElementById("user-badge");
+    const name = document.getElementById("user-name");
+    if (badge && name) {
+      name.textContent = username || "admin";
+      badge.style.display = "inline";
+    }
+  }
+
+  // 启动主 UI(登录成功或无需鉴权时调用)。幂等:__doLogout 后重置 mainUIStarted 允许重启。
+  function startMainUI() {
+    if (state.mainUIStarted) return;
+    state.mainUIStarted = true;
+    refreshAgents();
+    subscribeSSE();
+    refreshMetrics();
+    renderBatchForm();
+    state.agentsTimer = setInterval(refreshAgents, 10000); // 兜底轮询
+    state.metricsTimer = setInterval(refreshMetrics, 5000); // metrics 轮询
+    state.timelineTimer = setInterval(function () {
+      if (state.timelineAgent && !state.loginShowing) loadAgentTimeline(state.timelineAgent);
+    }, 15000); // 任务档案轮询
+  }
+
+  // 停主 UI(登出时调用):清 interval + 关 SSE。
+  function stopMainUI() {
+    state.mainUIStarted = false;
+    if (state.agentsTimer) { clearInterval(state.agentsTimer); state.agentsTimer = null; }
+    if (state.metricsTimer) { clearInterval(state.metricsTimer); state.metricsTimer = null; }
+    if (state.timelineTimer) { clearInterval(state.timelineTimer); state.timelineTimer = null; }
+    if (state.evtSource) { state.evtSource.close(); state.evtSource = null; }
+    const badge = document.getElementById("user-badge");
+    if (badge) badge.style.display = "none";
+  }
+
+  // 启动时先查会话状态,决定显示登录页还是直接进主 UI。
+  async function checkSession() {
+    try {
+      const r = await apiFetch(api("/api/console/session"));
+      const data = await r.json();
+      if (data.logged_in) {
+        updateUserBadge(data.username);
+        hideLogin();
+        startMainUI();
+      } else if (data.console_auth) {
+        // 控制台鉴权已启用但未登录
+        showLogin();
+      } else {
+        // 控制台鉴权未启用:探测能否无鉴权进(dev 模式 Token 也空)
+        hideLogin();
+        try {
+          const probe = await fetch(api("/api/agents"), { credentials: "include" });
+          if (probe.ok) {
+            startMainUI();
+          } else {
+            showLogin("控制台鉴权未启用(需配置 -console-password),无法登录");
+          }
+        } catch (e) {
+          showLogin("无法连接 Relay: " + e.message);
+        }
+      }
+    } catch (e) {
+      showLogin("无法连接 Relay,请检查网络后重试");
+    }
+  }
+
+  // 登录:裸 fetch(不走 apiFetch,避免 401 拦截与登录失败混淆)。credentials 带回新 cookie。
+  window.__doLogin = async function () {
+    const card = document.getElementById("login-card");
+    const err = document.getElementById("login-error");
+    const username = ((document.getElementById("login-username") || {}).value) || "";
+    const password = ((document.getElementById("login-password") || {}).value) || "";
+    if (!password) { if (err) err.textContent = "请输入密码"; return; }
+    if (err) err.textContent = "";
+    if (card) card.classList.add("loading");
+    try {
+      const loginURL = api("/api/console/login");
+      const r = await fetch(loginURL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ username: username, password: password }),
+      });
+      const data = await r.json();
+      if (card) card.classList.remove("loading");
+      if (r.ok) {
+        updateUserBadge(data.username);
+        hideLogin();
+        startMainUI();
+      } else {
+        if (err) err.textContent = data.error || ("登录失败 (" + r.status + ")");
+      }
+    } catch (e) {
+      if (card) card.classList.remove("loading");
+      if (err) err.textContent = "网络错误: " + e.message;
+    }
+  };
+
+  window.__doLogout = async function () {
+    try {
+      const logoutURL = api("/api/console/logout");
+      await fetch(logoutURL, { method: "POST", credentials: "include" });
+    } catch (e) {}
+    stopMainUI();
+    showLogin("已登出");
+  };
 
   // --- Agent 列表 ---
   async function refreshAgents() {
+    if (state.loginShowing) return;
     try {
-      const r = await fetch(api("/api/agents"));
+      const r = await apiFetch(api("/api/agents"));
       const data = await r.json();
       // 标记：列表里没有的视为离线
       const onlineIds = new Set();
@@ -28,6 +191,7 @@
         onlineIds.add(a.agent_id);
       });
       renderAgentList();
+      renderBatchAgentList();
       // P2：0 Agent 时显示安装引导
       var overlay = document.getElementById("setup-overlay");
       if (state.agents.size === 0 && overlay && !overlay.dataset.dismissed) {
@@ -39,12 +203,10 @@
           var el = document.getElementById(id);
           if (el) el.textContent = relayIP;
         });
-        // 从 /api/bootstrap 拉取真实 Token(用户已登录,Token 在 cookie/header)
-        // 因 Web UI 无显式 Token 输入,尝试从 location 或 URL query 取,
-        // 失败时保留占位符 TOKEN,提示用户用 CLI bootstrap 获取。
+        // 从 /api/bootstrap 拉取真实 Token(已登录,cookie 鉴权通过)
         if (!state.bootstrapLoaded) {
           state.bootstrapLoaded = true;
-          fetch(api("/api/bootstrap?host=" + location.hostname + "&port=" + (location.port || "7780")))
+          apiFetch(api("/api/bootstrap?host=" + location.hostname + "&port=" + (location.port || "7780")))
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (info) {
               if (info && info.token) {
@@ -91,6 +253,7 @@
     state.selected = id;
     renderAgentList();
     renderTaskForm();
+    loadAgentTimeline(id);
   }
 
   // --- 任务表单（按类型动态渲染字段）---
@@ -180,7 +343,7 @@
     const taskId = "t-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
     const body = { task_id: taskId, type, agent_id: state.selected, payload, timeout };
     try {
-      const r = await fetch(api("/api/tasks"), {
+      const r = await apiFetch(api("/api/tasks"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -188,6 +351,11 @@
       const data = await r.json();
       if (r.ok) {
         appendResult({ pending: true, task_id: taskId, type, ts: Date.now() });
+        // 新任务归属当前选中 agent → 登记映射 + 刷新档案面板
+        if (state.selected) {
+          state.taskAgentMap[taskId] = state.selected;
+          if (state.selected === state.timelineAgent) scheduleTimelineReload();
+        }
       } else {
         alert("下发失败: " + (data.error || r.status));
       }
@@ -226,10 +394,13 @@
     }
   }
 
-  // --- SSE 订阅（D6: 加自动重连）---
+  // --- SSE 订阅（D6 自动重连;2026-08-12 withCredentials 带 cookie）---
+  // EventSource 浏览器侧无法设 Authorization 头,只能靠 cookie 鉴权 —— 这是会话 Cookie 方案的根因。
+  // 所有事件监听(含 file_xfer / shell_output)在此注册,确保重连后新 EventSource 重新挂监听。
   function subscribeSSE() {
+    if (state.loginShowing) return; // 登出/未登录时不连
     if (state.evtSource) state.evtSource.close();
-    const es = new EventSource(api("/api/events"));
+    const es = new EventSource(api("/api/events"), { withCredentials: true });
     state.evtSource = es;
     es.addEventListener("hello", () => {
       document.getElementById("relay-info").textContent = "Relay: 已连接 ✓";
@@ -240,6 +411,7 @@
       const data = JSON.parse(e.data).data;
       state.agents.set(data.agent_id, data);
       renderAgentList();
+      renderBatchAgentList();
     });
     es.addEventListener("agent_offline", (e) => {
       const data = JSON.parse(e.data).data;
@@ -247,15 +419,83 @@
       state.agents.delete(id);
       if (state.selected === id) state.selected = null;
       renderAgentList();
+      renderBatchAgentList();
       renderTaskForm();
     });
     es.addEventListener("task_progress", (e) => {
       const data = JSON.parse(e.data).data;
       updatePending(data.task_id, { progress: data });
+      if (state.taskAgentMap[data.task_id] === state.timelineAgent) scheduleTimelineReload();
+      if (state.batchResults[data.task_id]) {
+        state.batchResults[data.task_id].status = "dispatched";
+        state.batchResults[data.task_id].progress = data;
+        scheduleBatchReload();
+      }
     });
     es.addEventListener("task_result", (e) => {
       const data = JSON.parse(e.data).data;
       updatePending(data.task_id, { result: data });
+      if (state.taskAgentMap[data.task_id] === state.timelineAgent) scheduleTimelineReload();
+      if (state.batchResults[data.task_id]) {
+        var br = state.batchResults[data.task_id];
+        br.status = data.success ? "completed" : "failed";
+        br.duration_ms = data.duration_ms;
+        if (data.error) br.error = data.error;
+        br.ts = Date.now();
+        scheduleBatchReload();
+      }
+    });
+    // J3:大文件传输进度(SSE)
+    es.addEventListener("file_xfer_progress", (e) => {
+      const data = JSON.parse(e.data).data;
+      const el = document.getElementById("xfer-progress");
+      if (el) {
+        const mb = (data.bytes_done / 1048576).toFixed(1);
+        const totalMB = data.total > 0 ? (data.total / 1048576).toFixed(1) : "?";
+        const speedMB = data.speed_bps > 0 ? (data.speed_bps / 1048576).toFixed(1) : "0";
+        el.innerHTML = '<div style="background:#21262d;border-radius:4px;padding:8px">' +
+          '<div style="display:flex;justify-content:between">' +
+          '<span>' + data.percent + '% (' + mb + '/' + totalMB + ' MB)</span>' +
+          '<span style="color:#8b949e">' + speedMB + ' MB/s</span></div>' +
+          '<div style="background:#0d1117;border-radius:2px;height:20px;margin-top:4px">' +
+          '<div style="background:#238636;height:100%;width:' + data.percent + '%;border-radius:2px"></div>' +
+          '</div></div>';
+      }
+    });
+    es.addEventListener("file_xfer_complete", (e) => {
+      const data = JSON.parse(e.data).data;
+      const el = document.getElementById("xfer-progress");
+      if (el && data.success) {
+        el.innerHTML += '<div style="color:#3fb950;margin-top:4px">✓ 传输完成 sha256=' + (data.sha256_actual || "").substring(0, 16) + '...</div>';
+      } else if (el) {
+        el.innerHTML += '<div style="color:#f85149;margin-top:4px">✗ 传输失败: ' + esc(data.error || "") + '</div>';
+      }
+    });
+    // H5:交互式终端输出(SSE)
+    es.addEventListener("shell_output", (e) => {
+      const data = JSON.parse(e.data).data;
+      if (data.exit) {
+        const content = document.getElementById("shell-content");
+        if (content) { content.innerHTML += '<span style="color:#8b949e">\n[进程退出 code=' + (data.exit_code !== undefined ? data.exit_code : "?") + "]</span>\n"; }
+        state.shellSession = null;
+        return;
+      }
+      if (data.data_b64) {
+        const decoded = decodeURIComponent(escape(atob(data.data_b64)));
+        state.shellOutput += decoded;
+        const content = document.getElementById("shell-content");
+        if (content) {
+          content.textContent += decoded;
+          // 自动滚动到底
+          const term = document.getElementById("terminal");
+          if (term) { term.scrollTop = term.scrollHeight; }
+        }
+      }
+    });
+    es.addEventListener("shell_close", (e) => {
+      const content = document.getElementById("shell-content");
+      if (content) { content.innerHTML += '<span style="color:#8b949e">\n[会话已关闭]</span>\n'; }
+      state.shellSession = null;
     });
     // D6 P2-4 修复：onerror 检测连接关闭后主动重连
     es.onerror = () => {
@@ -267,8 +507,9 @@
 
   // D6：重连后补拉近期任务结果（防 SSE 丢事件）
   async function fetchRecentResults() {
+    if (state.loginShowing) return;
     try {
-      const r = await fetch(api("/api/tasks?limit=10"));
+      const r = await apiFetch(api("/api/tasks?limit=10"));
       const data = await r.json();
       (data.tasks || []).forEach((t) => {
         if (t.status === "completed" || t.status === "failed") {
@@ -283,7 +524,7 @@
     if (!confirm("确认取消任务 " + taskId + "？")) return;
     const agentID = state.selected || "";
     try {
-      await fetch(api("/api/tasks/cancel"), {
+      await apiFetch(api("/api/tasks/cancel"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ task_id: taskId, agent_id: agentID, reason: "用户手动取消" }),
@@ -295,8 +536,9 @@
 
   // D6：metrics 面板轮询
   async function refreshMetrics() {
+    if (state.loginShowing) return;
     try {
-      const r = await fetch(api("/api/metrics"));
+      const r = await apiFetch(api("/api/metrics"));
       const m = await r.json();
       const el = document.getElementById("metrics-panel");
       if (el) {
@@ -385,6 +627,351 @@
     return `<span class="ts">[${ts}]</span> ${esc(JSON.stringify(item))}`;
   }
 
+  // --- Agent 任务档案(2026-08-12:已做 / 在做 / 待做 + 定时计划)---
+  let timelineReloadTimer = null;
+  function scheduleTimelineReload() {
+    if (timelineReloadTimer) clearTimeout(timelineReloadTimer);
+    timelineReloadTimer = setTimeout(function () {
+      timelineReloadTimer = null;
+      if (state.timelineAgent && !state.loginShowing) loadAgentTimeline(state.timelineAgent);
+    }, 500); // 合并短时多个 SSE 事件为一次重载
+  }
+
+  window.__refreshTimeline = function () {
+    if (state.selected && !state.loginShowing) loadAgentTimeline(state.selected);
+  };
+
+  // loadAgentTimeline 拉取该 agent 的任务(分桶)+ cron,渲染到 #timeline-body。
+  async function loadAgentTimeline(agentID) {
+    if (state.loginShowing || !agentID) return;
+    state.timelineAgent = agentID;
+    var idEl = document.getElementById("timeline-agent-id");
+    if (idEl) idEl.textContent = agentID;
+    var body = document.getElementById("timeline-body");
+    if (!body) return;
+    body.innerHTML = '<div class="empty">加载中...</div>';
+    try {
+      var resp = await Promise.all([
+        apiFetch(api("/api/tasks?agent_id=" + encodeURIComponent(agentID) + "&limit=100")),
+        apiFetch(api("/api/crons?agent_id=" + encodeURIComponent(agentID))),
+      ]);
+      var tData = await resp[0].json();
+      var cData = await resp[1].json();
+      if (!resp[0].ok) {
+        body.innerHTML = '<div class="empty">加载失败: ' + esc(tData.error || resp[0].status) + "</div>";
+        return;
+      }
+      state.timelineTasks = tData.tasks || [];
+      state.timelineCrons = cData.crons || [];
+      // 维护 task_id → agent_id 映射(SSE 事件按 task_id 定位 agent)
+      state.timelineTasks.forEach(function (t) {
+        if (t.request) state.taskAgentMap[t.request.task_id] = agentID;
+      });
+      renderTimeline();
+    } catch (e) {
+      body.innerHTML = '<div class="empty">加载异常: ' + esc(e.message) + "</div>";
+    }
+  }
+
+  function renderTimeline() {
+    var body = document.getElementById("timeline-body");
+    if (!body) return;
+    if (!state.timelineAgent) {
+      body.innerHTML = '<div class="empty">请先在左侧选择一个 Agent</div>';
+      return;
+    }
+    var tasks = state.timelineTasks || [];
+    var doing = [], pending = [], done = [];
+    tasks.forEach(function (t) {
+      var s = t.status;
+      if (s === "dispatched" || s === "acknowledged") doing.push(t);
+      else if (s === "pending") pending.push(t);
+      else done.push(t); // completed/failed/cancelled
+    });
+    done.sort(function (a, b) { return (b.updated_at || 0) - (a.updated_at || 0); });
+    var doneTop = done.slice(0, 20);
+    var crons = state.timelineCrons || [];
+
+    var html = '<div class="timeline-grid">' +
+      timelineCol("🔄 在做 (" + doing.length + ")", doing.map(function (t) { return timelineItemHTML(t, "run"); }).join("")) +
+      timelineCol("⏳ 待做 (" + pending.length + ")", pending.map(function (t) { return timelineItemHTML(t, "pend"); }).join("")) +
+      timelineCol("✅ 已做 (最近 " + doneTop.length + ")", doneTop.map(function (t) {
+        return timelineItemHTML(t, t.status === "completed" ? "ok" : "fail");
+      }).join("")) +
+      "</div>";
+    if (crons.length) html += cronSectionHTML(crons);
+    body.innerHTML = html;
+    // 任务卡片点击展开详情
+    body.querySelectorAll("[data-task-id]").forEach(function (el) {
+      el.addEventListener("click", function () { toggleTaskDetail(el); });
+    });
+  }
+
+  function timelineCol(title, itemsHTML) {
+    return '<div class="timeline-col"><h4>' + title + "</h4>" +
+      (itemsHTML || '<div class="empty" style="padding:12px">无</div>') + "</div>";
+  }
+
+  function timelineItemHTML(t, cls) {
+    var id = t.request ? t.request.task_id : (t.task_id || "");
+    var type = t.request ? t.request.type : "";
+    var ts = fmtTime(t.updated_at || t.created_at);
+    var label = t.status === "completed" ? "✓" : t.status === "failed" ? "✗"
+      : t.status === "cancelled" ? "⊘" : t.status === "pending" ? "⏳" : "🔄";
+    return '<div class="timeline-item" data-task-id="' + esc(id) + '">' +
+      '<div><span class="' + cls + '">' + label + '</span> <span class="ti-id">' + esc(shortID(id)) +
+      '</span> <span class="ti-meta">' + esc(type) + (ts ? " · " + ts : "") + "</span></div>" +
+      '<div class="ti-meta">状态: ' + esc(t.status) + (t.attempt > 1 ? " · 尝试 " + t.attempt : "") + "</div>" +
+      '<div class="timeline-detail" style="display:none"></div></div>';
+  }
+
+  function cronSectionHTML(crons) {
+    var items = crons.map(function (c) {
+      var next = c.next_run ? " · 下次: " + fmtTime(c.next_run) : "";
+      var last = c.last_run ? "上次: " + fmtTime(c.last_run) : "上次: 无";
+      var disabled = c.enabled ? "" : '<span class="cron-disabled">(已禁用)</span>';
+      return '<div class="cron-item"><code>' + esc(c.cron_expr) + "</code> " +
+        esc(c.task_type) + " · " + last + next + disabled + "</div>";
+    }).join("");
+    return '<div class="timeline-cron"><h4>⏰ 定时计划 (cron, ' + crons.length + ")</h4>" + items + "</div>";
+  }
+
+  function shortID(id) { return id ? id.slice(0, 16) : "?"; }
+  function fmtTime(ms) {
+    if (!ms) return "";
+    var n = typeof ms === "number" ? ms : parseInt(ms, 10);
+    if (!n) return "";
+    var d = new Date(n);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleString();
+  }
+
+  // toggleTaskDetail 点击任务卡片 → GET /api/tasks/{id} 取 result 展开详情。
+  async function toggleTaskDetail(el) {
+    var detail = el.querySelector(".timeline-detail");
+    if (!detail) return;
+    if (detail.style.display !== "none") { detail.style.display = "none"; return; }
+    detail.style.display = "block";
+    detail.textContent = "加载中...";
+    var taskID = el.getAttribute("data-task-id");
+    try {
+      var r = await apiFetch(api("/api/tasks/" + encodeURIComponent(taskID)));
+      if (!r.ok) { detail.textContent = "加载失败: " + r.status; return; }
+      var data = await r.json();
+      var result = data.result, task = data.task;
+      var txt = "类型: " + (task && task.request ? task.request.type : "?") + "\n";
+      txt += "状态: " + (task ? task.status : "?") + "\n";
+      txt += "创建: " + fmtTime(task && task.created_at) + "\n";
+      txt += "更新: " + fmtTime(task && task.updated_at) + "\n";
+      if (result) {
+        txt += "成功: " + result.success + (result.duration_ms ? " · " + result.duration_ms + "ms" : "") + "\n";
+        if (result.stdout) txt += "\n--- stdout ---\n" + result.stdout;
+        if (result.stderr) txt += "\n--- stderr ---\n" + result.stderr;
+        if (result.error) txt += "\n--- error ---\n" + result.error;
+      } else {
+        txt += "\n(暂无结果,任务进行中或未投递)";
+      }
+      detail.textContent = txt;
+    } catch (e) {
+      detail.textContent = "异常: " + e.message;
+    }
+  }
+
+  // --- 批量任务下发(2026-08-12:多选 agent + 一次性下发 + 执行结果表)---
+  let batchReloadTimer = null;
+  function scheduleBatchReload() {
+    if (batchReloadTimer) clearTimeout(batchReloadTimer);
+    batchReloadTimer = setTimeout(function () {
+      batchReloadTimer = null;
+      if (Object.keys(state.batchResults).length > 0) renderBatchResults();
+    }, 300);
+  }
+
+  function renderBatchForm() {
+    var sel = document.getElementById("b-task-type");
+    if (!sel) return;
+    var all = ["powershell", "script", "file", "screenshot", "browse", "guiclick"];
+    sel.innerHTML = all.map(function (t) { return '<option value="' + t + '">' + t + "</option>"; }).join("");
+    window.__renderBatchFields();
+    renderBatchAgentList();
+  }
+
+  // renderBatchAgentList 渲染在线 agent checkbox,保留已勾选状态。
+  function renderBatchAgentList() {
+    var host = document.getElementById("batch-agent-list");
+    if (!host) return;
+    var checked = {};
+    host.querySelectorAll('input[type="checkbox"]').forEach(function (cb) { checked[cb.value] = cb.checked; });
+    var agents = Array.from(state.agents.values());
+    if (agents.length === 0) {
+      host.innerHTML = '<div class="empty" style="padding:8px">暂无在线 Agent</div>';
+      return;
+    }
+    host.innerHTML = agents.map(function (a) {
+      var c = checked[a.agent_id] ? " checked" : "";
+      return '<div class="batch-agent"><label><input type="checkbox" value="' + esc(a.agent_id) + '"' + c + "> " +
+        esc(a.agent_id) + ' <span style="color:#8b949e">' + esc(a.hostname || "") + "</span></label></div>";
+    }).join("");
+  }
+
+  window.__renderBatchFields = function () {
+    var type = document.getElementById("b-task-type").value;
+    document.getElementById("b-task-fields").innerHTML = batchFieldsHTML(type);
+  };
+
+  // batchFieldsHTML 同 fieldsHTML 但用 b- 前缀 id,避免与单下发冲突。
+  function batchFieldsHTML(type) {
+    switch (type) {
+      case "powershell":
+        return '<label>PowerShell 命令(所有选中 Agent 执行相同命令)</label><textarea id="b-f-command" placeholder="Get-Process | Select-Object Name,Id -First 5">Get-Process | Select-Object Name,Id -First 5</textarea>';
+      case "script":
+        return '<div class="row"><div><label>语言</label><select id="b-f-lang"><option value="ps1">ps1</option><option value="bat">bat</option></select></div></div><label>脚本内容</label><textarea id="b-f-content">Write-Output "batch"</textarea>';
+      case "file":
+        return '<div class="row"><div><label>操作</label><select id="b-f-op"><option value="download">download</option><option value="upload">upload</option></select></div></div><label>目标路径(绝对路径)</label><input id="b-f-path" placeholder="C:\\temp\\x.txt"><label>内容 base64(仅 upload)</label><textarea id="b-f-contentb64" placeholder="upload 时填"></textarea>';
+      case "screenshot":
+        return '<label>目标(留空=全屏)</label><input id="b-f-target" placeholder="进程名/标题">';
+      case "browse":
+        return '<label>URL</label><input id="b-f-url" placeholder="https://example.com"><label>动作 JSON</label><textarea id="b-f-actions">[{"op":"screenshot"}]</textarea>';
+      case "guiclick":
+        return '<label>意图(自然语言)</label><textarea id="b-f-intent" placeholder="点击登录按钮"></textarea>';
+      default:
+        return "";
+    }
+  }
+
+  window.__batchSelectAll = function () {
+    document.querySelectorAll('#batch-agent-list input[type="checkbox"]').forEach(function (cb) { cb.checked = true; });
+  };
+  window.__batchClearAll = function () {
+    document.querySelectorAll('#batch-agent-list input[type="checkbox"]').forEach(function (cb) { cb.checked = false; });
+  };
+
+  function batchBuildPayload(type) {
+    var val = function (id) { var el = document.getElementById(id); return el ? el.value : ""; };
+    switch (type) {
+      case "powershell": return { command: val("b-f-command") };
+      case "script": return { lang: val("b-f-lang"), content: val("b-f-content") };
+      case "file": return { op: val("b-f-op"), path: val("b-f-path"), content_b64: val("b-f-contentb64") };
+      case "screenshot": return { target: val("b-f-target"), full: false, activate: true };
+      case "browse":
+        try { return { url: val("b-f-url"), actions: JSON.parse(val("b-f-actions") || "[]") }; }
+        catch (e) { alert("actions JSON 错: " + e.message); return null; }
+      case "guiclick": return { intent: val("b-f-intent"), target: val("b-f-target"), max_steps: 5 };
+      default: return {};
+    }
+  }
+
+  window.__submitBatch = async function () {
+    if (state.loginShowing) return;
+    var type = document.getElementById("b-task-type").value;
+    var timeout = parseInt(document.getElementById("b-task-timeout").value, 10) || 30;
+    var payload = batchBuildPayload(type);
+    if (payload === null) return;
+    var agentIDs = [];
+    document.querySelectorAll('#batch-agent-list input[type="checkbox"]:checked').forEach(function (cb) { agentIDs.push(cb.value); });
+    if (agentIDs.length === 0) { alert("请至少勾选一个 Agent"); return; }
+    if (type === "powershell" && !payload.command) { alert("请填 PowerShell 命令"); return; }
+
+    var result = document.getElementById("batch-result");
+    result.innerHTML = '<div class="empty" style="padding:12px">下发中...(' + agentIDs.length + " 个 Agent)</div>";
+    try {
+      var r = await apiFetch(api("/api/tasks/batch"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_ids: agentIDs, type: type, payload: payload, timeout: timeout }),
+      });
+      var data = await r.json();
+      if (!r.ok) {
+        result.innerHTML = '<div style="color:#f85149;padding:8px">下发失败: ' + esc(data.error || r.status) + "</div>";
+        return;
+      }
+      // 初始化 batchResults
+      state.batchResults = {};
+      var dispatchedSet = {};
+      (data.dispatched || []).forEach(function (aid) { dispatchedSet[aid] = true; });
+      Object.keys(data.task_ids || {}).forEach(function (aid) {
+        state.batchResults[data.task_ids[aid]] = { agentID: aid, status: "dispatched", ts: Date.now() };
+      });
+      // 勾选但未投递成功 → 标投递失败
+      agentIDs.forEach(function (aid) {
+        if (!dispatchedSet[aid]) {
+          state.batchResults["fail-" + aid + "-" + Date.now()] = {
+            agentID: aid, status: "failed", error: "投递失败(Agent 可能离线)", ts: Date.now(),
+          };
+        }
+      });
+      renderBatchResults();
+    } catch (e) {
+      result.innerHTML = '<div style="color:#f85149;padding:8px">异常: ' + esc(e.message) + "</div>";
+    }
+  };
+
+  function renderBatchResults() {
+    var result = document.getElementById("batch-result");
+    if (!result) return;
+    var rows = Object.values(state.batchResults);
+    if (rows.length === 0) { result.innerHTML = ""; return; }
+    var ok = 0, run = 0, fail = 0;
+    rows.forEach(function (r) {
+      if (r.status === "completed") ok++;
+      else if (r.status === "failed") fail++;
+      else run++;
+    });
+    rows.sort(function (a, b) { return (a.agentID || "").localeCompare(b.agentID || ""); });
+    var html = '<div style="font-size:12px;color:#8b949e;margin-bottom:6px">执行结果(' + rows.length + ' 个 Agent,点击行展开详情):</div>';
+    rows.forEach(function (r) {
+      var icon = r.status === "completed" ? '<span class="ok">✓</span>'
+        : r.status === "failed" ? '<span class="fail">✗</span>'
+        : '<span class="run">🔄</span>';
+      var statusText = r.status === "completed" ? "成功" + (r.duration_ms ? " " + r.duration_ms + "ms" : "")
+        : r.status === "failed" ? "失败" + (r.error ? " · " + esc(r.error) : "")
+        : (r.progress ? r.progress.percent + "% " + esc(r.progress.step || "") : "执行中...");
+      html += '<div class="batch-row" data-batch-agent="' + esc(r.agentID) + '">' +
+        '<div class="b-agent">' + icon + " " + esc(r.agentID) + '</div>' +
+        '<div class="b-status ' + (r.status === "completed" ? "ok" : r.status === "failed" ? "fail" : "run") + '">' + statusText + "</div></div>";
+    });
+    html += '<div class="batch-summary">总体: <span class="ok">' + ok + "✓</span> · <span class=\"run\">" + run + '🔄</span> · <span class="fail">' + fail + "✗</span></div>";
+    result.innerHTML = html;
+    result.querySelectorAll("[data-batch-agent]").forEach(function (el) {
+      el.addEventListener("click", function () { toggleBatchDetail(el); });
+    });
+  }
+
+  // toggleBatchDetail 点执行表行 → GET /api/tasks/{id} 展开结果详情。
+  async function toggleBatchDetail(el) {
+    var agentID = el.getAttribute("data-batch-agent");
+    var existing = el.querySelector(".batch-detail");
+    if (existing) { existing.remove(); return; }
+    var tid = null;
+    Object.keys(state.batchResults).forEach(function (k) { if (state.batchResults[k].agentID === agentID) tid = k; });
+    if (!tid || tid.indexOf("fail-") === 0) {
+      var br = state.batchResults[tid];
+      var d = document.createElement("div");
+      d.className = "batch-detail";
+      d.textContent = br ? br.error || "投递失败" : "无详情";
+      el.appendChild(d);
+      return;
+    }
+    var detail = document.createElement("div");
+    detail.className = "batch-detail";
+    detail.textContent = "加载中...";
+    el.appendChild(detail);
+    try {
+      var r = await apiFetch(api("/api/tasks/" + encodeURIComponent(tid)));
+      if (!r.ok) { detail.textContent = "加载失败: " + r.status; return; }
+      var data = await r.json();
+      var task = data.task, res = data.result;
+      var txt = "task: " + tid + "\n状态: " + (task ? task.status : "?") + "\n";
+      if (res) {
+        txt += "成功: " + res.success + (res.duration_ms ? " · " + res.duration_ms + "ms" : "") + "\n";
+        if (res.stdout) txt += "\n--- stdout ---\n" + res.stdout;
+        if (res.stderr) txt += "\n--- stderr ---\n" + res.stderr;
+        if (res.error) txt += "\n--- error ---\n" + res.error;
+      } else { txt += "\n(暂无结果,执行中)"; }
+      detail.textContent = txt;
+    } catch (e) { detail.textContent = "异常: " + e.message; }
+  }
+
   // --- 辅助 ---
   function esc(s) {
     if (s == null) return "";
@@ -395,13 +982,6 @@
   function safeParse(s) {
     try { return JSON.parse(s); } catch { return null; }
   }
-
-  // --- 启动 ---
-  refreshAgents();
-  subscribeSSE();
-  refreshMetrics();
-  setInterval(refreshAgents, 10000); // 兜底轮询
-  setInterval(refreshMetrics, 5000); // metrics 轮询
 
   // H5：交互式终端（零依赖原生实现，不用 xterm.js 保持单文件部署）
   state.shellSession = null;
@@ -415,7 +995,7 @@
     term.innerHTML = '<span style="color:#8b949e">正在开启终端...</span>';
 
     try {
-      const r = await fetch(api("/api/shell/open"), {
+      const r = await apiFetch(api("/api/shell/open"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agent_id: state.selected, cols: 80, rows: 24 }),
@@ -451,7 +1031,7 @@
   window.__sendInput = async function (text) {
     if (!state.shellSession) return;
     try {
-      await fetch(api("/api/shell/input"), {
+      await apiFetch(api("/api/shell/input"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -468,7 +1048,7 @@
     var sid = state.shellSession;
     state.shellSession = null;
     try {
-      await fetch(api("/api/shell/close"), {
+      await apiFetch(api("/api/shell/close"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sid, agent_id: state.selected }),
@@ -478,38 +1058,7 @@
     if (content) { content.innerHTML += '\n<span style="color:#8b949e">[会话已关闭]</span>'; }
   };
 
-  // SSE 已订阅 shell_output 事件（在 subscribeSSE 里加监听）
-
-  // J3：大文件传输进度（SSE）
-  if (state.evtSource) {
-    state.evtSource.addEventListener("file_xfer_progress", (e) => {
-      const data = JSON.parse(e.data).data;
-      const el = document.getElementById("xfer-progress");
-      if (el) {
-        const mb = (data.bytes_done / 1048576).toFixed(1);
-        const totalMB = data.total > 0 ? (data.total / 1048576).toFixed(1) : "?";
-        const speedMB = data.speed_bps > 0 ? (data.speed_bps / 1048576).toFixed(1) : "0";
-        el.innerHTML = '<div style="background:#21262d;border-radius:4px;padding:8px">' +
-          '<div style="display:flex;justify-content:between">' +
-          '<span>' + data.percent + '% (' + mb + '/' + totalMB + ' MB)</span>' +
-          '<span style="color:#8b949e">' + speedMB + ' MB/s</span></div>' +
-          '<div style="background:#0d1117;border-radius:2px;height:20px;margin-top:4px">' +
-          '<div style="background:#238636;height:100%;width:' + data.percent + '%;border-radius:2px"></div>' +
-          '</div></div>';
-      }
-    });
-    state.evtSource.addEventListener("file_xfer_complete", (e) => {
-      const data = JSON.parse(e.data).data;
-      const el = document.getElementById("xfer-progress");
-      if (el && data.success) {
-        el.innerHTML += '<div style="color:#3fb950;margin-top:4px">✓ 传输完成 sha256=' + (data.sha256_actual || "").substring(0, 16) + '...</div>';
-      } else if (el) {
-        el.innerHTML += '<div style="color:#f85149;margin-top:4px">✗ 传输失败: ' + esc(data.error || "") + '</div>';
-      }
-    });
-  }
-
-  // J3：上传文件（B2：用 XMLHttpRequest 显示上传进度）
+  // J3：上传文件（B2：用 XMLHttpRequest 显示上传进度;2026-08-12 withCredentials 带 cookie）
   window.__uploadFile = function () {
     if (!state.selected) { alert("请先选择 Agent"); return; }
     var path = document.getElementById("xfer-upload-path").value;
@@ -523,6 +1072,7 @@
     var xhr = new XMLHttpRequest();
     xhr.open("POST", api("/api/transfer/upload?agent_id=" + encodeURIComponent(state.selected) +
       "&path=" + encodeURIComponent(path) + "&transfer_id=" + transferID));
+    xhr.withCredentials = true; // 带会话 cookie
     xhr.upload.onprogress = function (ev) {
       if (ev.lengthComputable) {
         var pct = Math.round(ev.loaded * 100 / ev.total);
@@ -549,6 +1099,7 @@
   };
 
   // J3/B1：下载文件（用浏览器原生流式下载，不用 blob() 防 OOM）
+  // cookie 为 SameSite=Lax + Path=/,浏览器对同源 <a> 下载(GET 顶级导航)自动携带。
   window.__downloadFile = function () {
     if (!state.selected) { alert("请先选择 Agent"); return; }
     var path = document.getElementById("xfer-download-path").value;
@@ -569,32 +1120,6 @@
     }, 2000);
   };
 
-  // shell_output 事件处理
-  if (state.evtSource) {
-    state.evtSource.addEventListener("shell_output", (e) => {
-      const data = JSON.parse(e.data).data;
-      if (data.exit) {
-        const content = document.getElementById("shell-content");
-        if (content) { content.innerHTML += '<span style="color:#8b949e">\n[进程退出 code=' + (data.exit_code !== undefined ? data.exit_code : "?") + "]</span>\n"; }
-        state.shellSession = null;
-        return;
-      }
-      if (data.data_b64) {
-        const decoded = decodeURIComponent(escape(atob(data.data_b64)));
-        state.shellOutput += decoded;
-        const content = document.getElementById("shell-content");
-        if (content) {
-          content.textContent += decoded;
-          // 自动滚动到底
-          const term = document.getElementById("terminal");
-          if (term) { term.scrollTop = term.scrollHeight; }
-        }
-      }
-    });
-    state.evtSource.addEventListener("shell_close", (e) => {
-      const content = document.getElementById("shell-content");
-      if (content) { content.innerHTML += '<span style="color:#8b949e">\n[会话已关闭]</span>\n'; }
-      state.shellSession = null;
-    });
-  }
+  // --- 启动(2026-08-12:先查会话,再决定显示登录页或主 UI)---
+  checkSession();
 })();
