@@ -145,3 +145,39 @@ func TestFlushToCommitOnSuccess(t *testing.T) {
 		t.Fatal("popHead 后应清空")
 	}
 }
+
+// TestPoolSubmitQueuesAndAutoRuns P2-D:池满时 Submit 阻塞排队(不拒绝),
+// 前一个任务完成后排队任务自动执行(替代 TrySubmit 的 NACK 回退风暴)。
+func TestPoolSubmitQueuesAndAutoRuns(t *testing.T) {
+	p := NewWorkerPool(1) // 并发 1
+	var executed atomic.Int32
+
+	// 任务 1:占住唯一 slot,直到 release(started 同步确认已占位)。
+	started := make(chan struct{})
+	block := make(chan struct{})
+	p.Submit(context.Background(), func() {
+		executed.Add(1)
+		close(started)
+		<-block
+	})
+	<-started // 确认任务 1 已拿到 slot
+
+	// 任务 2:池满,排队等待(Submit 在 goroutine 内阻塞,不阻塞调用方)。
+	p.Submit(context.Background(), func() { executed.Add(1) })
+
+	// 任务 2 不应立即执行(池满)。
+	time.Sleep(100 * time.Millisecond)
+	if executed.Load() != 1 {
+		t.Fatalf("池满时任务 2 不应执行, executed=%d", executed.Load())
+	}
+
+	// 释放任务 1 → 任务 2 自动执行。
+	close(block)
+	deadline := time.Now().Add(2 * time.Second)
+	for executed.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if executed.Load() != 2 {
+		t.Fatalf("释放后排队任务未自动执行, executed=%d", executed.Load())
+	}
+}

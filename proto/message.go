@@ -46,6 +46,10 @@ const (
 	TypeTaskCancel = "task_cancel"
 	// TypeTaskNack —— Agent→Relay：任务无法执行（pool 满/连接断），Relay 应回退 pending。
 	TypeTaskNack = "task_nack"
+	// TypeTaskDispatched —— P1-B:EventBus 事件:任务已下发到 Agent(非 WS 消息,供 SSE 订阅)。
+	TypeTaskDispatched = "task_dispatched"
+	// TypeTaskAcknowledged —— P1-B:EventBus 事件:Agent 已 ACK 任务(非 WS 消息,供 SSE 订阅)。
+	TypeTaskAcknowledged = "task_acknowledged"
 	// TypeEnroll —— Agent→Relay：用一次性注册令牌换取客户端证书（mTLS 引导）。
 	// 注：enroll 实际走 HTTP POST /api/enroll（非 WS 消息），此常量保留供协议文档一致性。
 	TypeEnroll = "enroll"

@@ -20,6 +20,7 @@ package main
 import (
 	"crypto/subtle"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -36,6 +37,43 @@ type Identity struct {
 	Tenant string // 租户(空 = 全局 admin)
 	Role   string // 角色(admin/operator/viewer)
 	Secret string // 实际密钥
+}
+
+// identityKey context key(C1:authH 注入 Identity,handler 经 identityFromReq 读取做守卫)。
+type identityKey struct{}
+
+// identityFromReq 从请求 context 提取 Identity。
+// 未走 authH 的请求(如直接注册的 handler)兜底为 admin,保持向后兼容。
+func identityFromReq(req *http.Request) Identity {
+	if id, ok := req.Context().Value(identityKey{}).(Identity); ok {
+		return id
+	}
+	return Identity{Role: RoleAdmin}
+}
+
+// identityFromAuth 从已通过 authorize 的请求提取 Identity(C1:authH 注入用)。
+// token 模式:解析 tenant:role:secret;session/console(无 Bearer):admin(控制台即管理员)。
+func identityFromAuth(req *http.Request) Identity {
+	raw := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+	if raw == "" {
+		return Identity{Role: RoleAdmin} // 控制台会话/cookie 鉴权 = 管理员
+	}
+	return ParseToken(raw)
+}
+
+// RequireRole RBAC 端点守卫(架构短1:让 CanPerform 从死代码变生效)。
+// 必须包在 authH 内层(authH 注入 Identity 后):mux.HandleFunc(path, a(r.RequireRole(action, handler)))。
+// admin 放行;operator 查 operatorBlocked;viewer 查 viewerAllowed;未知角色拒绝(fail-closed)。
+func (r *Relay) RequireRole(action string, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		id := identityFromReq(req)
+		if !id.CanPerform(action) {
+			log.Printf("[rbac] 拒绝 %s 执行 %s (role=%s tenant=%s)", req.RemoteAddr, action, id.Role, id.Tenant)
+			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("角色 %s 无权执行 %s", id.Role, action)))
+			return
+		}
+		h(w, req)
+	}
 }
 
 // ParseToken 解析 token。
@@ -55,11 +93,8 @@ func (r *Relay) authorizeRBAC(req *http.Request) (Identity, error) {
 	if r.cfg.Token == "" {
 		return Identity{Role: RoleAdmin}, nil // 无 token 配置 = 全权限
 	}
-	// 从 header 提取 token
+	// 从 header 提取 token(H4:仅 Authorization 头,移除 ?token= query 防日志/Referer 泄漏)
 	raw := req.Header.Get("Authorization")
-	if raw == "" {
-		raw = "Bearer " + req.URL.Query().Get("token")
-	}
 	raw = strings.TrimPrefix(raw, "Bearer ")
 	// 解析请求方的 token
 	clientIdent := ParseToken(raw)
@@ -99,6 +134,8 @@ var operatorBlocked = map[string]bool{
 	"power.restart":      true,
 	"update.push":        true,
 	"agent.enroll-token": true,
+	"secret.put":         true, // 架构短1:secret 写入 admin-only(原 operator 无限制)
+	"secret.delete":      true,
 }
 
 // viewerAllowed viewer 允许的操作。

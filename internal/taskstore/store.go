@@ -1,4 +1,4 @@
-package main
+package taskstore
 
 import (
 	"bytes"
@@ -18,6 +18,11 @@ import (
 // TaskStore 任务持久化接口(M4 神级提升)。
 // 抽象 Store 为接口,解锁 relay server 层单测(可 mock,不依赖真 bbolt)。
 // 未来水平扩展时,可实现 RedisTaskStore / PostgresTaskStore 替换 bbolt。
+//
+// C2(高吞吐):业务写用 db.Batch 而非 db.Update——bbolt 原生把多个并发 Batch 的写事务
+// 合并为单个事务(单 fsync),写吞吐从 ~125 写/s(每条独立 fsync)提升一个数量级。
+// 安全性:所有写 fn 都是"读-校验-写"(CAS/状态机,幂等),Batch 文档允许 fn 被多次调用,
+// 重复调用时第一次已改变状态、第二次校验拒绝,语义不变。
 type TaskStore interface {
 	SaveTask(t StoredTask) error
 	GetTask(taskID string) (*StoredTask, error)
@@ -112,7 +117,7 @@ func (s *Store) UpdateTaskStatus(taskID, newStatus string) error {
 	if s.db == nil {
 		return ErrStoreClosed
 	}
-	return s.db.Update(func(tx *bolt.Tx) error {
+	return s.db.Batch(func(tx *bolt.Tx) error {
 		raw := tx.Bucket([]byte(bucketTasks)).Get([]byte(taskID))
 		if raw == nil {
 			return fmt.Errorf("任务 %s 不存在", taskID)
@@ -154,8 +159,10 @@ func (s *Store) CASDispatchToPending(taskID string) error {
 	if s.db == nil {
 		return ErrStoreClosed
 	}
-	return s.db.Update(func(tx *bolt.Tx) error {
-		raw := tx.Bucket([]byte(bucketTasks)).Get([]byte(taskID))
+	return s.db.Batch(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketTasks))
+		id := []byte(taskID)
+		raw := bucket.Get(id)
 		if raw == nil {
 			return nil // 任务不在 store(非持久化模式),允许投递
 		}
@@ -163,12 +170,28 @@ func (s *Store) CASDispatchToPending(taskID string) error {
 		if err := json.Unmarshal(raw, &current); err != nil {
 			return nil // 解析失败,不阻塞投递
 		}
-		// 只允许从 pending 转为 dispatched(占坑)
-		// 已是 dispatched/acknowledged 说明并发投递,跳过(幂等)
+		// 只允许从 pending 转 dispatched(占坑)。已是 dispatched/acknowledged/终态则跳过(幂等)。
 		if current.Status != StatusPending {
 			return fmt.Errorf("任务 %s 状态为 %s,已被投递或终态,跳过", taskID, current.Status)
 		}
-		return nil // 放行,真实状态更新由 dispatchTask 后续 UpdateTaskStatus 完成
+		// W2 修复:原子完成 pending→dispatched + Attempt++ + 索引更新(一步到位)。
+		// 原实现"只检查不改",注释称"真实更新由 dispatchTask 后续 UpdateTaskStatus 完成",
+		// 但 dispatchTask 实际用 SaveTask 裸覆盖——若 Agent 极快回 result 使任务 completed,
+		// 后续 SaveTask(StatusDispatched) 会把 completed 覆盖回 dispatched → reaper 重投 → 重复执行。
+		// 现由 CAS 在 writeJSON 前原子完成状态变更,dispatchTask 不再后续覆盖。
+		current.Status = StatusDispatched
+		current.Attempt++
+		current.UpdatedAt = time.Now().UnixMilli()
+		data, err := json.Marshal(current)
+		if err != nil {
+			return err
+		}
+		idxBucket := tx.Bucket([]byte(bucketTasksByStatus))
+		idxBucket.Delete(statusKey(StatusPending, taskID))
+		if err := idxBucket.Put(statusKey(StatusDispatched, taskID), []byte{}); err != nil {
+			return err
+		}
+		return bucket.Put(id, data)
 	})
 }
 
@@ -179,7 +202,7 @@ func (s *Store) ReapToPending(taskID string) error {
 	if s.db == nil {
 		return ErrStoreClosed
 	}
-	return s.db.Update(func(tx *bolt.Tx) error {
+	return s.db.Batch(func(tx *bolt.Tx) error {
 		raw := tx.Bucket([]byte(bucketTasks)).Get([]byte(taskID))
 		if raw == nil {
 			return fmt.Errorf("任务 %s 不存在", taskID)
@@ -276,7 +299,7 @@ func (s *Store) SaveTask(t StoredTask) error {
 	if s.db == nil {
 		return ErrStoreClosed
 	}
-	return s.db.Update(func(tx *bolt.Tx) error {
+	return s.db.Batch(func(tx *bolt.Tx) error {
 		taskID := []byte(t.Request.TaskID)
 		// 若已有旧记录，先清理旧状态索引
 		if old := tx.Bucket([]byte(bucketTasks)).Get(taskID); old != nil {
@@ -330,7 +353,7 @@ func (s *Store) SaveResult(taskID string, r proto.TaskResult) error {
 	if s.db == nil {
 		return ErrStoreClosed
 	}
-	return s.db.Update(func(tx *bolt.Tx) error {
+	return s.db.Batch(func(tx *bolt.Tx) error {
 		return tx.Bucket([]byte(bucketResults)).Put([]byte(taskID), data)
 	})
 }
@@ -418,7 +441,7 @@ func (s *Store) DeleteTask(taskID string) error {
 	if s.db == nil {
 		return ErrStoreClosed
 	}
-	return s.db.Update(func(tx *bolt.Tx) error {
+	return s.db.Batch(func(tx *bolt.Tx) error {
 		id := []byte(taskID)
 		// 先读当前状态以清理索引
 		if raw := tx.Bucket([]byte(bucketTasks)).Get(id); raw != nil {
@@ -445,7 +468,7 @@ func (s *Store) SaveCronRule(rule CronRule) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Update(func(tx *bolt.Tx) error {
+	return s.db.Batch(func(tx *bolt.Tx) error {
 		bucket, err := tx.CreateBucketIfNotExists([]byte(bucketCrons))
 		if err != nil {
 			return err
@@ -459,13 +482,38 @@ func (s *Store) DeleteCronRule(ruleID string) error {
 	if s.db == nil {
 		return ErrStoreClosed
 	}
-	return s.db.Update(func(tx *bolt.Tx) error {
+	return s.db.Batch(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte(bucketCrons))
 		if bucket == nil {
 			return nil
 		}
 		return bucket.Delete([]byte(ruleID))
 	})
+}
+
+// GetCronRule 按 ID 加载单条规则(M1:替代 loadRuleByID 的全表扫描,O(1) Get)。
+func (s *Store) GetCronRule(ruleID string) (*CronRule, error) {
+	if s.db == nil {
+		return nil, ErrStoreClosed
+	}
+	var rule CronRule
+	found := false
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketCrons))
+		if bucket == nil {
+			return nil
+		}
+		v := bucket.Get([]byte(ruleID))
+		if v == nil {
+			return nil // 规则不存在
+		}
+		found = true
+		return json.Unmarshal(v, &rule)
+	})
+	if err != nil || !found {
+		return nil, nil
+	}
+	return &rule, nil
 }
 
 // LoadCronRules 加载所有定时任务规则。
@@ -490,3 +538,21 @@ func (s *Store) LoadCronRules() []CronRule {
 	})
 	return out
 }
+
+// CronRule 定时任务规则(架构中5续:存储 DTO,随 taskstore 拆入;relay 经 alias 引用)。
+type CronRule struct {
+	ID        string            `json:"id"`         // 规则 ID
+	CronExpr  string            `json:"cron_expr"`  // cron 表达式（5 字段：分 时 日 月 周）
+	TaskType  string            `json:"task_type"`  // 任务类型（powershell/script/...）
+	AgentID   string            `json:"agent_id"`   // 目标 Agent
+	Payload   json.RawMessage   `json:"payload"`    // 任务载荷
+	Timeout   int               `json:"timeout"`    // 超时秒
+	Enabled   bool              `json:"enabled"`    // 是否启用
+	CreatedAt int64             `json:"created_at"` // 创建时间
+	LastRun   int64             `json:"last_run"`   // 上次执行时间
+	NextRun   int64             `json:"next_run"`   // 下次执行时间
+	Tags      map[string]string `json:"tags,omitempty"`
+}
+
+// bucketCrons 存 cron 规则的 bbolt bucket。
+const bucketCrons = "crons"

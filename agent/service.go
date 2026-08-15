@@ -50,6 +50,14 @@ func (p *program) run() {
 	if err := a.Run(p.ctx); err != nil && p.ctx.Err() == nil {
 		log.Printf("[service] Agent 异常退出: %v", err)
 	}
+	// U1 修复:自更新成功(pendingRestart)时显式 os.Exit,触发 SCM OnFailure=restart 重启激活新版本。
+	// 原实现 run() 只 return(a.Run 因 pendingRestart 返回 nil),但 run 是 Start 里的 goroutine,
+	// 它退出不影响主进程(SCM 阻塞在 s.Run)→进程不终止→新二进制永不生效。所有服务模式自更新都是假象。
+	// 与回滚路径(health.go:49 os.Exit(0))对齐——回滚有 Exit、成功无 Exit 是原 bug 的铁证。
+	if pendingRestart {
+		log.Printf("[service] 自更新完成,退出进程以激活新版本(SCM 将重启)...")
+		os.Exit(0)
+	}
 }
 
 // serviceConfig 构造 kardianos 服务描述。

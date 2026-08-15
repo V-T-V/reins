@@ -29,6 +29,12 @@ type Metrics struct {
 	TasksNacked    int64 // 收到 NACK 数
 	TasksReaped    int64 // 被 reaper 回退的任务数
 	EventsDropped  int64 // SSE 丢弃事件数（慢消费者）
+	AuditDropped   int64 // 审计丢弃事件数（audit channel 满,M3）
+	// C1:任务延迟直方图(手搓零依赖)。bucket 累计计数(Prom histogram 语义):
+	// taskDurBuckets[i] = 观测值 <= durationBoundaries[i] 的次数;末位 = +Inf = 总 count。
+	taskDurBuckets [numDurationBuckets]int64
+	taskDurCount   int64
+	taskDurSumMs   int64
 	// M1 文件传输指标(Relay 转发时统计,Agent 侧也有自己的计数器但无 HTTP server 暴露)
 	UploadsTotal     int64 // 累计上传次数(成功)
 	DownloadsTotal   int64 // 累计下载次数(含部分成功)
@@ -40,6 +46,11 @@ type Metrics struct {
 }
 
 var metrics = &Metrics{StartedAt: time.Now()}
+
+// durationBoundaries 任务延迟直方图的桶上界(ms),覆盖 100ms~2min(C1)。
+var durationBoundaries = []int64{100, 500, 1000, 2000, 5000, 10000, 30000, 60000, 120000}
+
+const numDurationBuckets = 10 // len(durationBoundaries) + 1(+Inf 桶)
 
 // Inc 原子自增计数器。
 func (m *Metrics) Inc(field string) {
@@ -62,6 +73,8 @@ func (m *Metrics) Inc(field string) {
 		atomic.AddInt64(&m.TasksNacked, 1)
 	case "reaped":
 		atomic.AddInt64(&m.TasksReaped, 1)
+	case "audit_dropped":
+		atomic.AddInt64(&m.AuditDropped, 1)
 	}
 }
 
@@ -87,6 +100,21 @@ func (m *Metrics) IncXfer(field string, n int64) {
 	}
 }
 
+// ObserveDuration 记录一次任务执行耗时(C1:任务延迟直方图)。ms<=0 忽略(异常/未设)。
+// Prom histogram 累计语义:ms 落入所有 le>=ms 的桶。
+func (m *Metrics) ObserveDuration(ms int64) {
+	if ms <= 0 {
+		return
+	}
+	atomic.AddInt64(&m.taskDurCount, 1)
+	atomic.AddInt64(&m.taskDurSumMs, ms)
+	for i, b := range durationBoundaries {
+		if ms <= b {
+			atomic.AddInt64(&m.taskDurBuckets[i], 1)
+		}
+	}
+}
+
 // Snapshot 返回指标快照。
 func (m *Metrics) Snapshot() map[string]any {
 	return map[string]any{
@@ -101,6 +129,7 @@ func (m *Metrics) Snapshot() map[string]any {
 		"tasks_nacked":           atomic.LoadInt64(&m.TasksNacked),
 		"tasks_reaped":           atomic.LoadInt64(&m.TasksReaped),
 		"events_dropped":         atomic.LoadInt64(&m.EventsDropped),
+		"audit_dropped":          atomic.LoadInt64(&m.AuditDropped),
 		"xfer_uploads_total":     atomic.LoadInt64(&m.UploadsTotal),
 		"xfer_downloads_total":   atomic.LoadInt64(&m.DownloadsTotal),
 		"xfer_upload_bytes":      atomic.LoadInt64(&m.UploadBytes),
@@ -166,7 +195,10 @@ func (r *Relay) handlePromMetrics(w http.ResponseWriter, req *http.Request) {
 	writeProm("gormmm_tasks_blocked_total", "被策略拦截的任务数", "counter", toInt64(snap["tasks_blocked"]))
 	writeProm("gormmm_tasks_cancelled_total", "被取消的任务数", "counter", toInt64(snap["tasks_cancelled"]))
 	writeProm("gormmm_tasks_reaped_total", "被 reaper 回退的任务数", "counter", toInt64(snap["tasks_reaped"]))
+	writeProm("gormmm_tasks_acked_total", "收到 ACK 数", "counter", toInt64(snap["tasks_acked"]))
+	writeProm("gormmm_tasks_nacked_total", "收到 NACK 数", "counter", toInt64(snap["tasks_nacked"]))
 	writeProm("gormmm_events_dropped_total", "SSE 丢弃事件数", "counter", toInt64(snap["events_dropped"]))
+	writeProm("gormmm_audit_dropped_total", "审计丢弃事件数(audit channel 满)", "counter", toInt64(snap["audit_dropped"]))
 	// M1 文件传输指标
 	writeProm("gormmm_xfer_uploads_total", "累计上传次数(成功)", "counter", toInt64(snap["xfer_uploads_total"]))
 	writeProm("gormmm_xfer_downloads_total", "累计下载次数", "counter", toInt64(snap["xfer_downloads_total"]))
@@ -176,6 +208,17 @@ func (r *Relay) handlePromMetrics(w http.ResponseWriter, req *http.Request) {
 	writeProm("gormmm_xfer_download_failures_total", "下载失败次数", "counter", toInt64(snap["xfer_download_failures"]))
 	writeProm("gormmm_uptime_seconds", "Relay 运行时长(秒)", "gauge", toInt64(snap["uptime_seconds"]))
 	writeProm("gormmm_goroutines", "Goroutine 数", "gauge", toInt64(snap["goroutines"]))
+
+	// C1:任务延迟直方图(Prometheus histogram exposition 格式,手搓零依赖)
+	fmt.Fprintf(w, "# HELP gormmm_task_duration_ms 任务执行耗时分布(毫秒)\n")
+	fmt.Fprintf(w, "# TYPE gormmm_task_duration_ms histogram\n")
+	for i, b := range durationBoundaries {
+		fmt.Fprintf(w, "gormmm_task_duration_ms_bucket{le=\"%d\"} %d\n", b, atomic.LoadInt64(&metrics.taskDurBuckets[i]))
+	}
+	durCount := atomic.LoadInt64(&metrics.taskDurCount)
+	fmt.Fprintf(w, "gormmm_task_duration_ms_bucket{le=\"+Inf\"} %d\n", durCount)
+	fmt.Fprintf(w, "gormmm_task_duration_ms_count %d\n", durCount)
+	fmt.Fprintf(w, "gormmm_task_duration_ms_sum %d\n", atomic.LoadInt64(&metrics.taskDurSumMs))
 }
 
 // toInt64 安全类型转换(any → int64)。

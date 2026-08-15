@@ -337,6 +337,7 @@ func taskRun(cfg config, args []string) error {
 	script := fs.String("s", "", "脚本内容或路径(快捷方式)")
 	timeout := fs.Int("timeout", 60, "任务超时秒数")
 	idemKey := fs.String("idem", "", "幂等键(防重复执行,默认按内容自动生成)")
+	noIdem := fs.Bool("no-idem", false, "跳过幂等(强制新执行,不命中缓存;适合远端文件已变更的重跑)")
 	noWait := fs.Bool("no-wait", false, "不等待结果,只返回 task_id")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -355,7 +356,10 @@ func taskRun(cfg config, args []string) error {
 	}
 
 	// P2-#10:幂等键默认按 (agent,type,payload-hash) 生成,保证重试不重复执行
-	if *idemKey == "" {
+	if *noIdem {
+		// --no-idem:用带纳秒时间戳的唯一键,保证不命中 relay 幂等缓存(强制新执行)
+		*idemKey = fmt.Sprintf("cli-noidem-%s-%d", *taskType, time.Now().UnixNano())
+	} else if *idemKey == "" {
 		h := sha256.Sum256(append([]byte(*agentID+"|"+*taskType+"|"), payload...))
 		*idemKey = fmt.Sprintf("cli-%x", h[:8])
 	}
@@ -381,22 +385,37 @@ func taskRun(cfg config, args []string) error {
 		return err
 	}
 
-	fmt.Printf("task_id:  %s\n", resp.TaskID)
-	fmt.Printf("agent_id: %s\n", resp.AgentID)
-	fmt.Printf("status:   %s\n", resp.Status)
-	fmt.Printf("idem_key: %s\n", *idemKey)
-	if resp.Message != "" {
-		fmt.Printf("message:  %s\n", resp.Message)
+	// P0-B:JSON 模式输出提交摘要
+	if jsonMode {
+		outputJSON(map[string]any{
+			"command": "task_submitted", "task_id": resp.TaskID,
+			"agent_id": resp.AgentID, "status": resp.Status,
+			"idem_key": *idemKey, "message": resp.Message,
+		})
+	} else {
+		fmt.Printf("task_id:  %s\n", resp.TaskID)
+		fmt.Printf("agent_id: %s\n", resp.AgentID)
+		fmt.Printf("status:   %s\n", resp.Status)
+		fmt.Printf("idem_key: %s\n", *idemKey)
+		if resp.Message != "" {
+			fmt.Printf("message:  %s\n", resp.Message)
+		}
 	}
 
 	if *noWait {
 		return nil
 	}
 	if resp.Status == proto.StatusPending && resp.Message != "" {
-		fmt.Println("\nAgent 离线,任务已缓存。上线后自动投递。")
+		if jsonMode {
+			outputJSON(map[string]any{"command": "task_result", "ok": false, "error": "Agent 离线,任务已缓存,上线后自动投递", "task_id": resp.TaskID, "status": "cached"})
+		} else {
+			fmt.Println("\nAgent 离线,任务已缓存。上线后自动投递。")
+		}
 		return nil
 	}
-	fmt.Printf("\n等待结果...")
+	if !jsonMode {
+		fmt.Printf("\n等待结果...")
+	}
 	// P2-#11:waitResult 现在监听 SIGINT,可 Ctrl+C 中断
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -472,14 +491,37 @@ func waitResult(ctx context.Context, cfg config, taskID string, timeout int) (bo
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
+	// P1-B:SSE 实时通道优先 + 轮询兜底。
+	// 订阅 /api/events 按 task_id 过滤,收到 task_result 立即返回(不再干等 60s);
+	// SSE 失败/断线时 sseWatch 退出,轮询照常兜底,零状态丢失。
+	sseResult := make(chan *proto.TaskResult, 1)
+	go sseWatch(ctx, cfg, taskID, sseResult)
+
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("\n已中断")
+			if jsonMode {
+				outputJSON(map[string]any{"command": "task_result", "ok": false, "error": "已中断", "task_id": taskID})
+			} else {
+				fmt.Println("\n已中断")
+			}
 			return false, nil
+		case r := <-sseResult:
+			if !jsonMode {
+				fmt.Println()
+			}
+			printResult(r)
+			if !r.Success {
+				taskFailed = true
+			}
+			return true, nil
 		case <-ticker.C:
 			if time.Now().After(deadline) {
-				fmt.Println("\n等待超时")
+				if jsonMode {
+					outputJSON(map[string]any{"command": "task_result", "ok": false, "error": "等待超时", "task_id": taskID})
+				} else {
+					fmt.Println("\n等待超时")
+				}
 				return false, nil
 			}
 			var resp struct {
@@ -489,41 +531,136 @@ func waitResult(ctx context.Context, cfg config, taskID string, timeout int) (bo
 				Result *proto.TaskResult `json:"result"`
 			}
 			if err := apiGet(cfg, "/api/tasks/"+url.PathEscape(taskID), &resp); err != nil {
-				fmt.Print(".")
+				if !jsonMode {
+					fmt.Print(".")
+				}
 				continue
 			}
 			if resp.Task == nil {
-				fmt.Print(".")
+				if !jsonMode {
+					fmt.Print(".")
+				}
 				continue
+			}
+			// 兜底：result 已持久化但 task.status 未推进（relay 侧 UpdateTaskStatus 终态竞态），
+			// 直接返回已存 result，避免 CLI 干等到超时。
+			if resp.Result != nil && resp.Result.TaskID == taskID {
+				if !jsonMode {
+					fmt.Println()
+				}
+				printResult(resp.Result)
+				if !resp.Result.Success {
+					taskFailed = true
+				}
+				return true, nil
 			}
 			switch resp.Task.Status {
 			case proto.StatusCompleted:
-				fmt.Println()
+				if !jsonMode {
+					fmt.Println()
+				}
 				printResult(resp.Result)
 				return true, nil
 			case proto.StatusFailed:
-				fmt.Println()
+				if !jsonMode {
+					fmt.Println()
+				}
 				printResult(resp.Result)
 				taskFailed = true // B6:标记任务失败,taskRun 据此返回 exitTaskFail
 				return true, nil
 			case proto.StatusCancelled:
-				fmt.Println("\n任务已取消")
+				if jsonMode {
+					outputJSON(map[string]any{"command": "task_result", "ok": false, "error": "任务已取消", "task_id": taskID, "status": proto.StatusCancelled})
+				} else {
+					fmt.Println("\n任务已取消")
+				}
 				return true, nil
 			default:
-				fmt.Print(".")
+				if !jsonMode {
+					fmt.Print(".")
+				}
 			}
+		}
+	}
+}
+
+// sseWatch 订阅 /api/events,按 task_id 过滤 task_result 事件,命中后送入 out。
+// 任何错误/断线静默退出(waitResult 的轮询兜底继续);ctx 取消时退出,无泄漏。
+func sseWatch(ctx context.Context, cfg config, taskID string, out chan<- *proto.TaskResult) {
+	events := strings.Join([]string{proto.TypeTaskResult, proto.TypeTaskProgress}, ",")
+	u := cfg.relay + "/api/events?events=" + url.QueryEscape(events)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return
+	}
+	if cfg.token != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.token)
+	}
+	resp, err := streamingClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return
+	}
+	scanner := newSSEScanner(resp.Body)
+	for {
+		ev, err := scanner.Next()
+		if err != nil {
+			return
+		}
+		if ev.event != proto.TypeTaskResult {
+			continue
+		}
+		// 事件 data:{"agent_id":..., "data":<TaskResult>, "ts":...}
+		var outer struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if json.Unmarshal(ev.data, &outer) != nil {
+			continue
+		}
+		var r proto.TaskResult
+		if json.Unmarshal(outer.Data, &r) != nil || r.TaskID != taskID {
+			continue
+		}
+		select {
+		case out <- &r:
+			return
+		case <-ctx.Done():
+			return
 		}
 	}
 }
 
 func printResult(r *proto.TaskResult) {
 	if r == nil {
+		if jsonMode {
+			outputJSON(map[string]any{"command": "task_result", "ok": false, "error": "结果为空"})
+			return
+		}
 		fmt.Println("结果为空")
 		return
 	}
 	// P2: 过滤 PowerShell CLIXML 噪音(stderr 中的 #< CLIXML ... <Objs> 块)
 	stdout := filterCLIXML(r.Stdout)
 	stderr := filterCLIXML(r.Stderr)
+	// P0-B:JSON 输出(脚本可解析,与 task run/task result --watch 共用)
+	if jsonMode {
+		outputJSON(map[string]any{
+			"command":     "task_result",
+			"ok":          r.Success,
+			"task_id":     r.TaskID,
+			"success":     r.Success,
+			"exit_code":   r.ExitCode,
+			"duration_ms": r.Duration,
+			"stdout":      stdout,
+			"stderr":      stderr,
+			"error":       r.Error,
+			"data":        string(r.Data),
+		})
+		return
+	}
 	fmt.Printf("\n=== 任务结果 ===\n")
 	fmt.Printf("成功:      %v\n", r.Success)
 	fmt.Printf("退出码:    %d\n", r.ExitCode)
@@ -606,6 +743,17 @@ func taskList(cfg config, args []string) error {
 		}
 		filterDesc = " (过滤: " + strings.Join(parts, ",") + ")"
 	}
+	// P0-B:JSON 列表(脚本可解析)
+	if jsonMode {
+		outputJSON(map[string]any{
+			"command": "task_list",
+			"count":   resp.Count,
+			"shown":   len(filtered),
+			"filter":  filterDesc,
+			"tasks":   filtered,
+		})
+		return nil
+	}
 	fmt.Printf("最近 %d 条任务(共 %d)%s:\n", len(filtered), resp.Count, filterDesc)
 	fmt.Printf("%-40s %-14s %-24s %-12s %s\n", "TASK ID", "TYPE", "AGENT", "STATUS", "CREATED")
 	fmt.Println(strings.Repeat("-", 110))
@@ -667,7 +815,7 @@ func taskResult(cfg config, args []string) error {
 	}
 	// P2:JSON 输出
 	if jsonMode {
-		outputJSON(map[string]any{"task": resp.Task, "result": resp.Result})
+		outputJSON(map[string]any{"command": "task_result", "task": resp.Task, "result": resp.Result})
 		return nil
 	}
 	fmt.Printf("状态: %s\n", resp.Task.Status)
@@ -698,6 +846,10 @@ func taskCancel(cfg config, args []string) error {
 	}
 	if err := apiPost(cfg, "/api/tasks/cancel", body, &resp); err != nil {
 		return err
+	}
+	if jsonMode {
+		outputJSON(map[string]any{"command": "task_cancel", "ok": true, "task_id": resp.TaskID, "status": resp.Status})
+		return nil
 	}
 	fmt.Printf("已取消: %s (status=%s)\n", resp.TaskID, resp.Status)
 	return nil
@@ -804,7 +956,9 @@ func fileUpload(cfg config, args []string) error {
 	}
 	u := cfg.relay + "/api/transfer/upload?" + q.Encode()
 
-	fmt.Printf("上传 %s → %s:%s\n", localPath, agentID, remotePath)
+	if !jsonMode {
+		fmt.Printf("上传 %s → %s:%s\n", localPath, agentID, remotePath)
+	}
 
 	req, err := http.NewRequest("POST", u, tee)
 	if err != nil {
@@ -840,13 +994,31 @@ func fileUpload(cfg config, args []string) error {
 			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
 		if resp.StatusCode == http.StatusForbidden {
-			return errBlocked("上传被拒绝: " + msg) // B6:策略拦截专用退出码
+			// P2-A:策略拦截时给出可操作提示(白名单排查入口)
+			return errBlocked("上传被拒绝: " + msg +
+				"\n提示: 远端路径需在 Agent 白名单(AllowedRoots)内。" +
+				"\n      查看当前白名单: go-rmm config agent-config -a " + agentID +
+				"\n      修改远端 config.json 的 allowed_roots 后重启 agent 服务")
 		}
 		return fmt.Errorf("上传失败: %s", msg)
 	}
 
 	// P0-#1:本地 hasher 此时已完成,与 Agent 回传的 sha256 比对
 	localSHA := fmt.Sprintf("%x", hasher.Sum(nil))
+	shaMatch := result.SHA256 == localSHA
+	// P0-B:JSON 摘要(进度条已抑制)
+	if jsonMode {
+		outputJSON(map[string]any{
+			"command": "file_upload", "ok": shaMatch && result.SHA256 != "",
+			"path": remotePath, "agent_id": agentID,
+			"bytes": result.Bytes, "sha256": result.SHA256,
+			"local_sha256": localSHA, "sha256_match": shaMatch,
+		})
+		if !shaMatch {
+			return errors.New("SHA256 校验失败,文件可能损坏")
+		}
+		return nil
+	}
 	fmt.Println()
 	fmt.Printf("✅ 上传完成: %s\n", formatSize(result.Bytes))
 	fmt.Printf("   Agent SHA256: %s\n", result.SHA256)
@@ -896,7 +1068,9 @@ func fileDownload(cfg config, args []string) error {
 	q.Set("transfer_id", transferID)
 	u := cfg.relay + "/api/transfer/download?" + q.Encode()
 
-	fmt.Printf("下载 %s:%s → %s\n", agentID, remotePath, localPath)
+	if !jsonMode {
+		fmt.Printf("下载 %s:%s → %s\n", agentID, remotePath, localPath)
+	}
 
 	req, err := http.NewRequest("POST", u, nil)
 	if err != nil {
@@ -920,7 +1094,11 @@ func fileDownload(cfg config, args []string) error {
 			errMsg = errBody.Error
 		}
 		if resp.StatusCode == http.StatusForbidden {
-			return errBlocked("下载被拒绝: " + errMsg)
+			// P2-A:策略拦截时给出可操作提示(白名单排查入口)
+			return errBlocked("下载被拒绝: " + errMsg +
+				"\n提示: 远端路径需在 Agent 白名单(AllowedRoots)内。" +
+				"\n      查看当前白名单: go-rmm config agent-config -a " + agentID +
+				"\n      修改远端 config.json 的 allowed_roots 后重启 agent 服务")
 		}
 		if resp.StatusCode == http.StatusNotFound {
 			return errNotFound("下载失败: " + errMsg)
@@ -947,6 +1125,24 @@ func fileDownload(cfg config, args []string) error {
 	}
 
 	totalSize := resp.ContentLength // 可能 -1(流式)
+	// P0-B:JSON 模式输出摘要到 stdout(文件写入仍正常;管道模式 stdout 是数据流,摘要也在 JSON 里区分)
+	if jsonMode {
+		var written int64
+		if pipeMode {
+			written, err = io.Copy(out, resp.Body)
+		} else {
+			written, err = io.Copy(&progressWriter{w: out, total: totalSize, label: "下载", quiet: true}, resp.Body)
+		}
+		if err != nil {
+			return fmt.Errorf("写入失败: %w", err)
+		}
+		outputJSON(map[string]any{
+			"command": "file_download", "ok": true,
+			"path": remotePath, "agent_id": agentID, "local_path": localPath,
+			"bytes": written,
+		})
+		return nil
+	}
 	// P0-P1 修复:管道模式禁止 progressWriter(会污染 stdout 数据流)
 	if pipeMode {
 		written, err := io.Copy(out, resp.Body)
@@ -1444,6 +1640,9 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 }
 
 func (pr *progressReader) maybePrint() {
+	if jsonMode {
+		return // P0-B:JSON 模式抑制进度条,输出保持纯 JSON
+	}
 	now := time.Now()
 	if now.Sub(pr.lastTime) < 200*time.Millisecond && pr.total > 0 && pr.read < pr.total {
 		return // 百分比模式 200ms 限流
@@ -1465,6 +1664,7 @@ type progressWriter struct {
 	written  int64
 	start    time.Time
 	lastTime time.Time
+	quiet    bool // P0-B:JSON 模式/管道模式静默(不输出进度)
 }
 
 func (pw *progressWriter) Write(p []byte) (int, error) {
@@ -1478,6 +1678,9 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 }
 
 func (pw *progressWriter) maybePrint() {
+	if pw.quiet || jsonMode {
+		return // P0-B:quiet(管道/JSON 路径)抑制进度条
+	}
 	now := time.Now()
 	if now.Sub(pw.lastTime) < 200*time.Millisecond && pw.total > 0 && pw.written < pw.total {
 		return

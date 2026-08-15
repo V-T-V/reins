@@ -63,9 +63,10 @@ func (tm *TunnelManager) HandleOpen(open proto.TunnelOpen, writeBin func([]byte)
 	}
 	ready.Accepted = true
 	ready.Latency = time.Since(start).Milliseconds()
-	tm.sendReady(ready, true)
 
-	// 注册会话
+	// P0-A 修复:先注册 session 再发 ready。
+	// 原顺序(sendReady → 注册 session)下,CLI 在收到 ready 后立即发数据,
+	// 数据帧可能先于 session 注册到达 HandleData 而被静默丢弃("隧道已关闭或不存在")。
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := &tunnelSession{
 		id:     open.TunnelID,
@@ -76,13 +77,16 @@ func (tm *TunnelManager) HandleOpen(open proto.TunnelOpen, writeBin func([]byte)
 	tm.mu.Lock()
 	tm.tunnels[open.TunnelID] = sess
 	tm.mu.Unlock()
+
+	tm.sendReady(ready, true)
 	log.Printf("[tunnel] 隧道 %s 就绪 → %s (latency=%dms)",
 		open.TunnelID, open.Target, ready.Latency)
 
 	// goroutine: 远端 → WS(读 conn,发隧道帧)
 	go func() {
 		defer tm.Close(open.TunnelID, "eof")
-		buf := make([]byte, 32*1024)
+		buf := Get32K() // H1:pool 复用(原 make 32K)
+		defer Put32K(buf)
 		for {
 			n, err := conn.Read(buf)
 			if n > 0 {
@@ -110,6 +114,10 @@ func (tm *TunnelManager) HandleData(tunnelID string, data []byte) {
 	if !ok {
 		return // 隧道已关闭或不存在,丢弃
 	}
+	// W4 修复:写远端加超时。原写无超时,慢消费(如向慢远端 SSH 上传)会阻塞 recvLoop,
+	// 导致 Relay 的 heartbeat_ack 堆在 TCP 接收缓冲无人读 → deadConnWatchdog 误判死连接
+	// → 强制重连 → 所有隧道/传输中断。10s 写超时让慢写不拖垮心跳探活。
+	sess.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if _, err := sess.conn.Write(data); err != nil {
 		log.Printf("[tunnel] 远端写失败 %s: %v", tunnelID, err)
 		tm.Close(tunnelID, "write error")

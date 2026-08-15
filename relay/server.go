@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
+	"github.com/QiuShichang/go-rmm/internal/ca"
+	"github.com/QiuShichang/go-rmm/internal/wsx"
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
@@ -24,15 +27,13 @@ import (
 //   - 绑定一个 agentID / consoleID（身份）。
 //   - 串行化 Write（coder/websocket 的 Write 本身并发安全，但封装后便于加业务逻辑）。
 type wsConn struct {
-	conn *websocket.Conn
-	id   string // 连接 ID（UUID，非业务身份）
-	role string // "agent" / "console"
-	biz  string // 业务身份：agentID 或 consoleID
+	*wsx.Writer            // 优先级写引擎(共享 internal/wsx,架构短3)
+	id          string     // 连接 ID（UUID，非业务身份）
+	role        string     // "agent" / "console"
+	biz         string     // 业务身份：agentID 或 consoleID
 	// M2：mTLS 客户端证书身份（非 mTLS 模式为空）
 	certCN  string
 	certDNS []string
-
-	writeMu sync.Mutex
 
 	// B1/P0-C1 修复:二进制帧路由——serveAgent 的 Read 循环拦截二进制帧,
 	// 按 transferID 路由到对应 channel,HTTP handler 从 channel 消费。
@@ -128,7 +129,7 @@ func (w *wsConn) registerXferChannel(transferID string) <-chan []byte {
 		return s.data
 	}
 	s := &xferSession{
-		data: make(chan []byte, 64),
+		data: make(chan []byte, 32), // H3:缓冲调小(64→32),常驻 16→8MB/下载;32 帧窗口仍足够缓冲消费端慢写
 		done: make(chan struct{}),
 	}
 	w.xferChannels[transferID] = s
@@ -209,21 +210,36 @@ func safeCloseCompleteChan(ch chan *proto.FileTransferComplete) {
 	close(ch)
 }
 
+// 写原语共享 internal/wsx(架构短3:消除与 agent/wsconn.go 的逐字节重复实现)。
+// 语义:P0(WriteControl:heartbeat_ack)优先于 P1(WriteData:dispatch/文件/隧道)。
+
+func (w *wsConn) startWriter(ctx context.Context) { w.Writer.Start(ctx) }
+
+func (w *wsConn) writeControlJSON(ctx context.Context, v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return w.WriteControl(ctx, websocket.MessageText, data)
+}
+
 func (w *wsConn) writeJSON(ctx context.Context, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	w.writeMu.Lock()
-	defer w.writeMu.Unlock()
-	return w.conn.Write(ctx, websocket.MessageText, data)
+	return w.WriteData(ctx, websocket.MessageText, data)
+}
+
+func (w *wsConn) writeBinaryData(ctx context.Context, data []byte) error {
+	return w.WriteData(ctx, websocket.MessageBinary, data)
 }
 
 func (w *wsConn) close(code websocket.StatusCode, reason string) {
-	if w == nil || w.conn == nil {
+	if w == nil || w.Writer == nil {
 		return // nil 安全（测试 stub 可能无真实连接）
 	}
-	_ = w.conn.Close(code, reason)
+	_ = w.Conn().Close(code, reason)
 }
 
 // --- 事件总线（Relay → Console 实时推送） ---
@@ -325,7 +341,7 @@ type Relay struct {
 	agents       *Registry
 	console      *EventBus
 	store        TaskStore      // 任务持久化(R2/F1),可为 nil(关闭持久化)
-	ca           *CA            // 内置 CA(C7 身份认证),可为 nil(关闭 mTLS)
+	ca           *ca.CA        // 内置 CA(C7 身份认证),可为 nil(关闭 mTLS)
 	policy       *CommandPolicy // 命令安全策略(S4)
 	audit        *AuditLog      // 审计日志(F1)
 	scheduler    *Scheduler     // H2 定时任务调度器,可为 nil
@@ -379,8 +395,8 @@ func (r *Relay) WithUpdateRepo(u *UpdateRepo) *Relay {
 }
 
 // WithCA 注入内置 CA（C7）。
-func (r *Relay) WithCA(ca *CA) *Relay {
-	r.ca = ca
+func (r *Relay) WithCA(authority *ca.CA) *Relay {
+	r.ca = authority
 	return r
 }
 
@@ -424,19 +440,25 @@ func (r *Relay) authorize(req *http.Request) error {
 	return errors.New("无效的鉴权")
 }
 
-// hasValidBearer 校验 Bearer token(Authorization 头 或 ?token= 查询参数)。
+// hasValidBearer 校验 Bearer token(仅 Authorization 头)。
 // S6 常量时间比较,消除计时侧信道。
+//
+// H4 修复:移除 ?token= query 参数支持。query token 会进 nginx access log、
+// 浏览器历史、Referer 头(外泄给第三方链接),造成 token 泄漏。
+//
+// 架构短1:改为比较 token 的 Secret 部分(而非全串扁平比较)——原实现下
+// `acme:viewer:secret` 与服务端 `acme:admin:secret` 全串不等 → 401,
+// viewer/operator 角色连鉴权都过不了,RequireRole/canPerform 无从生效
+// (这是"RBAC 定义了但没执行"的完整因果链)。现 ParseToken 解析双方后只比 Secret,
+// 纯 secret 旧格式行为不变(向后兼容)。
 func (r *Relay) hasValidBearer(req *http.Request) bool {
-	token := req.Header.Get("Authorization")
+	token := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
 	if token == "" {
-		token = req.URL.Query().Get("token")
-		if token != "" {
-			token = "Bearer " + token
-		}
+		return false
 	}
-	want := "Bearer " + r.cfg.Token
-	// 常量时间比较：长度不同时先 normalize 再比，避免长度泄露
-	return subtle.ConstantTimeCompare([]byte(token), []byte(want)) == 1
+	got := ParseToken(token).Secret
+	want := ParseToken(r.cfg.Token).Secret
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 // hasValidSession 校验控制台会话 cookie(浏览器路径,滑动续期)。
@@ -460,11 +482,15 @@ func (r *Relay) hasValidSession(req *http.Request) bool {
 // /api/console/* 自鉴权、/api/enroll 注册令牌)直接注册 handler,不包 authH。
 func (r *Relay) authH(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
+		// authorize 完整校验(Token/ConsolePassword/session/mTLS),再注入 Identity(C1)。
 		if err := r.authorize(req); err != nil {
 			writeJSON(w, http.StatusUnauthorized, errMap(err))
 			return
 		}
-		h(w, req)
+		// C1:从 token 解析 Identity(tenant:role)注入 context,供 handler 做 CanPerform/CanAccessAgent。
+		// session/console(无 bearer)= admin(控制台即管理员),token 模式按 tenant:role 解析。
+		ctx := context.WithValue(req.Context(), identityKey{}, identityFromAuth(req))
+		h(w, req.WithContext(ctx))
 	}
 }
 
@@ -492,7 +518,9 @@ func (r *Relay) handleAgentWS(w http.ResponseWriter, req *http.Request) {
 	// 限制消息大小（默认 32MiB，支持大截图/文件）
 	c.SetReadLimit(32 << 20)
 
-	wc := &wsConn{conn: c, id: uuid.NewString(), role: "agent"}
+	wc := &wsConn{
+		Writer: wsx.New(c), id: uuid.NewString(), role: "agent",
+	}
 	// M2：提取 mTLS 客户端证书身份（CN + DNSNames），供 serveAgent 校验
 	if req.TLS != nil && len(req.TLS.PeerCertificates) > 0 {
 		wc.certCN = req.TLS.PeerCertificates[0].Subject.CommonName
@@ -505,6 +533,7 @@ func (r *Relay) handleAgentWS(w http.ResponseWriter, req *http.Request) {
 //
 // 流程：循环读取消息 → register 首条登记身份 → 后续按 Type 分发 → 断开时清理。
 func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
+	wc.startWriter(ctx) // A2:写优先级(P0 heartbeat_ack 不被 P1 dispatch/隧道饿死)
 	var agentID string
 	cleanup := func() {
 		if agentID != "" {
@@ -527,7 +556,7 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 	defer cleanup()
 
 	for {
-		msgType, data, err := wc.conn.Read(ctx)
+		msgType, data, err := wc.Conn().Read(ctx)
 		if err != nil {
 			log.Printf("[agent-read] %s 连接断开: %v", wc.id, err)
 			return
@@ -591,7 +620,7 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 				// 隧道/任务在断线窗口内被随机拒绝,表现为"Agent 拒绝"或超时)。
 				ackCtx, ackCancel := context.WithTimeout(ctx, 5*time.Second)
 				if ackEnv, ackErr := proto.NewEnvelope(proto.TypeHeartbeatAck, "relay", agentID, hb); ackErr == nil {
-					_ = wc.writeJSON(ackCtx, ackEnv)
+					_ = wc.writeControlJSON(ackCtx, ackEnv) // A2:P0 高优先(不被 dispatch/隧道饿死)
 				}
 				ackCancel()
 			}
@@ -642,6 +671,10 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 						} else {
 							metrics.Inc("failed")
 						}
+						// C1:记录任务延迟直方图(数据现成 res.Duration,原只进审计不进指标)。
+						metrics.ObserveDuration(int64(res.Duration))
+						// H2:在途计数 -1(任务终态)
+						r.agents.DecInFlight(agentID)
 					} else {
 						// 不再静默吞错：result 已 SaveResult 持久化，但 status 推进失败
 						// （常见于 reaper 已把任务转终态、或 cancel/result 竞态）。
@@ -661,7 +694,7 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 				r.console.Broadcast(Event{
 					Kind:    proto.TypeTaskResult,
 					AgentID: agentID,
-					Payload: mustMarshal(res),
+					Payload: env.Payload, // H4:透传原始 payload(已是 RawMessage),避免 re-marshal
 					TS:      time.Now().UnixMilli(),
 				})
 			}
@@ -672,7 +705,7 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 				r.console.Broadcast(Event{
 					Kind:    proto.TypeTaskProgress,
 					AgentID: agentID,
-					Payload: mustMarshal(p),
+					Payload: env.Payload, // H4:透传原始 payload
 					TS:      time.Now().UnixMilli(),
 				})
 			}
@@ -684,7 +717,7 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 				r.console.Broadcast(Event{
 					Kind:    proto.TypeShellOutput,
 					AgentID: agentID,
-					Payload: mustMarshal(out),
+					Payload: env.Payload, // H4:透传原始 payload
 					TS:      time.Now().UnixMilli(),
 				})
 			}

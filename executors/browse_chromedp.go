@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net"
+	"net/url"
 	"time"
 
 	"github.com/chromedp/cdproto/runtime"
@@ -16,6 +18,27 @@ import (
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
+
+// validateBrowseURL 校验 browse 任务 URL,防 SSRF(H3)。
+// 拒绝:非 http/https scheme(file:// 可读本地敏感文件如 SAM)、私有/回环/链路本地 IP
+// (打内网服务 / 云元数据 169.254.169.254)。注:域名为 host 时无法静态判断 DNS rebinding,
+// 此处为 best-effort(scheme + 字面 IP)。
+func validateBrowseURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("URL 解析失败: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("仅允许 http/https(拒绝 %s,防 file:// 读本地文件)", u.Scheme)
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			return fmt.Errorf("拒绝私有/回环/链路本地 IP %s(防 SSRF 打内网/云元数据)", host)
+		}
+	}
+	return nil
+}
 
 type chromedpBrowseExecutor struct{}
 
@@ -30,6 +53,10 @@ func (e *chromedpBrowseExecutor) Exec(ctx context.Context, payload []byte, progr
 	}
 	if task.URL == "" {
 		return fail("", "url 不能为空")
+	}
+	// H3:SSRF 防护——拒绝 file:// 与私有/回环 IP(browse 既绕命令策略又能读本地文件/打内网)。
+	if err := validateBrowseURL(task.URL); err != nil {
+		return fail("", "browse URL 被拒绝: "+err.Error())
 	}
 
 	// headless Chrome

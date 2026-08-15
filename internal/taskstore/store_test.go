@@ -1,4 +1,4 @@
-package main
+package taskstore
 
 import (
 	"path/filepath"

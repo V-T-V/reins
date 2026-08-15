@@ -21,7 +21,9 @@ const (
 
 // 隧道控制码(二进制帧 flags 字段,ChanTypeTunnelCtrl)。
 const (
-	TunnelCtrlRST byte = 0x01 // 强制重置
+	TunnelCtrlRST  byte = 0x01 // 强制重置
+	TunnelCtrlPing byte = 0x02 // P1-A:心跳探测(WS 隧道模式,Relay→CLI)
+	TunnelCtrlPong byte = 0x03 // P1-A:心跳应答(WS 隧道模式,CLI→Relay)
 )
 
 // TunnelOpen 开隧道请求(Console→Agent→远端服务)。

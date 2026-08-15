@@ -49,7 +49,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
-- **成功标准**:194 Go 文件 / ~39K 行 / 560+ 测试 / 端到端全路径验证通过(rounds 1-10 + 2026-08-12 控制台/AI Agent/架构优化)。
+- **成功标准**:197 Go 文件 / ~39.6K 行 / 447 测试函数 + 22 基准 / 端到端全路径验证通过(rounds 1-10 + 2026-08-12 控制台/AI Agent/架构优化)。
 
 ## 架构假设(4 项显式假设)
 
@@ -94,7 +94,7 @@ go-rmm/
 │   ├── tls_watcher.go  # TLS 证书过期检测
 │   └── *.go            # config/web/main/registry/quickstart/stream_task/buffer_pool/...
 │   # 注:redis_store.go / event_federation.go 此前误列,实际未实现(水平扩展为接口预留)
-├── agent/              # Windows Agent(18 文件)
+├── agent/              # Windows Agent(34 文件)
 │   ├── connection.go   # 主循环 + recvLoop + WS 连接管理
 │   ├── filetransfer.go # 大文件传输引擎(SHA256+续传)
 │   ├── session.go      # 交互式 shell 会话(PTY)
@@ -106,7 +106,7 @@ go-rmm/
 │   ├── service.go      # kardianos 服务管理
 │   ├── config.go       # 配置(Validate)
 │   └── ...
-├── cmd/go-rmm/         # CLI 客户端(18 文件)
+├── cmd/go-rmm/         # CLI 客户端(30 文件)
 │   ├── main.go         # 路由 + task/file/shell + printUsage
 │   ├── commands.go     # status/cron/agent revoke/enroll/task batch
 │   ├── deploy.go       # deploy playbook 引擎
@@ -141,10 +141,10 @@ go-rmm/
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 194 |
-| 代码行 | ~39,000+ |
-| Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 560+(relay 包 280+ 测试/基准函数) |
+| Go 文件 | 197 |
+| 代码行 | ~39,600 |
+| Go 包 | 9 包(relay/agent/cmd/client/proto/console/executors + vision/win32 辅助) |
+| 测试用例 | 447 测试函数(relay 包 258)/ 端到端全路径 |
 | 基准测试 | 22 |
 | CLI 命令 | 51 |
 | API 端点 | 42 |
@@ -188,25 +188,33 @@ go-rmm/
 
 ## 测试覆盖(v4.3.3)
 
-373 测试 + 22 基准。按包分布与重点验证场景:
+447 测试函数 + 22 基准。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
-| **relay** | 198 | 60 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10] |
-| **agent** | 59 | 32 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9] |
-| **executors** | 40 | 24 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控 |
-| **proto** | 44 | 9 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
+| **relay** | 258 | 78 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10] |
+| **agent** | 60 | 34 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9] |
+| **executors** | 41 | 25 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控 |
+| **proto** | 44 | 11 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
 | **client** | 18 | 9 | SDK 方法/流式/工具发现 |
 | **console** | 14 | 4 | 反向代理/事件转发 |
-| **cmd** | 12 | 28 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3 新增测试] |
+| **cmd** | 12 | 30 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3 新增测试] |
 
 **深度测试(rounds 1-10)**:round 1 修复 `TestMultiAgentRoutingE2E` 永久失败;rounds 2-7 逐层加深(relay 路由 → 执行器 → console → mTLS → 审计 → 多租户);round 8 覆盖批量分发不变量(并发投递/聚合/退避重试/幂等/ctx 取消/进度状态机);rounds 9-10 工作区深度推进——补 SecretStore/ScriptLibrary/buffer_pool/rQueue/Envelope 等弱测模块,修复空闲 Agent 掉线循环(S7 heartbeat_ack)、脚本库路径穿越漏洞、Prom 指标前缀 typo、审计写盘静默丢记录。
 
-**并发安全**:批量进度跟踪用 `sync.RWMutex` 保护,`markRunning/markSucceeded/markFailed` 与并发 `Snapshot()` 线程安全(race 检测需 cgo/gcc,本机未启用,靠互斥锁设计保证)。
+**并发安全**:批量进度跟踪用 `sync.RWMutex` 保护,`markRunning/markSucceeded/markFailed` 与并发 `Snapshot()` 线程安全(race 检测已验证:本地 cgo+gcc(MinGW)环境 `go test -race ./relay/ ./agent/ ./executors/ ./cmd/go-rmm/` 全包通过,2026-08;CI 亦配 -race,ci.yml:38)。
 
 **测试运行**:`go test ./... -count=1`(单 relay 包约 10s)。基准:`go test ./relay/ -bench=.`(22 项)。
 
 ---
+
+## 架构演进记录(2026-08 深度推进后)
+
+- **已拆共享包**(internal/,消跨包复制):`cmdpolicy`(命令策略 32 条单一真相源)、`wsx`(P0/P1 优先级写引擎)、`ca`(PKI:enroll/renew/CRL)。
+- **RBAC 已接线执行**:authH 注入 Identity + RequireRole 守卫高危端点(revoke/enroll-token/power/secrets)+ power/update 任务类型守卫;hasValidBearer 按 Secret 部分比较(支持 tenant:role:secret 格式)。
+- **CLI/SDK 双栈决策**:client 包(929 行)当前为孤儿(CLI 自带 HTTP 层)。统一方向是 **SDK 吸收 CLI 的 SSE/重试/分片语义后 CLI 变薄壳**——反向(CLI 改用 SDK)会丢失 CLI 已有的丰富语义,不做。在此之前 SDK 不承诺 API 稳定。
+- **agent 依赖注入(未做)**:11 个包级单例(sessions/transfers/tunnelMgr/resultQueue/idempotencyCache/tunnelReadyCb...)收进 Agent 聚合根需大范围重构(涉及全部 handler 与测试),作为独立重构轮次,不在日常修复中零碎进行。
+- **file 执行器 ContentB64 路径已标 Deprecated**:主路径为流式 /api/transfer/*(分片+SHA256+断点续传)。
 
 ## 下一步(Next Steps)
 

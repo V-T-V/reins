@@ -49,6 +49,8 @@ type PlayStep struct {
 	Cmd    string `json:"cmd,omitempty"`    // exec: powershell 命令
 	Script string `json:"script,omitempty"` // script: 脚本文件路径
 	Lang   string `json:"lang,omitempty"`   // script: ps1/bat
+	// 超时(秒)。exec 默认 60，script 默认 120。长任务(如大软件安装)需显式调大。
+	Timeout int `json:"timeout,omitempty"`
 	// 容错
 	Retry int    `json:"retry,omitempty"` // 失败重试次数(默认 0)
 	Delay string `json:"delay,omitempty"` // 重试间隔(默认 1s)
@@ -205,7 +207,11 @@ func execPlayStep(cfg config, pb PlayBook, step PlayStep, cmd, script, dst strin
 		if cmd == "" {
 			return fmt.Errorf("exec 步骤缺少 cmd")
 		}
-		return runTaskSync(cfg, target, "powershell", cmd, 60)
+		execTimeout := step.Timeout
+		if execTimeout == 0 {
+			execTimeout = 60
+		}
+		return runTaskSync(cfg, target, "powershell", cmd, execTimeout)
 	case "script":
 		if script == "" {
 			return fmt.Errorf("script 步骤缺少 script")
@@ -214,7 +220,11 @@ func execPlayStep(cfg config, pb PlayBook, step PlayStep, cmd, script, dst strin
 		if lang == "" {
 			lang = "ps1"
 		}
-		return runTaskSyncScript(cfg, target, script, lang, 120)
+		scriptTimeout := step.Timeout
+		if scriptTimeout == 0 {
+			scriptTimeout = 120
+		}
+		return runTaskSyncScript(cfg, target, script, lang, scriptTimeout)
 	default:
 		return fmt.Errorf("未知 action: %s", step.Action)
 	}

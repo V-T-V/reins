@@ -48,33 +48,43 @@
 
 ---
 
-## 2. WS 写队列优化(O5)
+## 2. WS 写队列优化(O5)⚠️ 未落地
+
+> **⚠️ 性能审查(2026-08)发现:BatchWriter 是死代码。** `relay/batch_writer.go` 定义了类型但
+> `newBatchWriter` 全仓零生产调用,所有 WS 写仍走 `writeMu.Lock`(router.go/tunnel.go/server.go 等 ~10 处)。
+> 下表"零锁竞争"的宣称**未实现**。当前真实 WS 写仍受 writeMu 串行化限制(大文件传输期间
+> 该 Agent 的心跳/任务/隧道排队)。真正解除需"写优先级/心跳独立通道"重构(非 BatchWriter)。
 
 ### 问题
 writeMu 粗粒度锁:心跳+任务结果+进度+shell 输出并发写同一连接,锁竞争。
 
-### 方案
+### 方案(仅定义,未接入)
 BatchWriter:单 goroutine + channel 队列(无锁串行化)。
 
 | 模式 | 锁竞争 | 延迟 |
 |------|--------|------|
-| writeMu(旧) | 多 goroutine 竞争 | 随并发线性增长 |
-| BatchWriter(新) | **零锁竞争** | channel 投递 ~50ns |
+| writeMu(旧,**当前生效**) | 多 goroutine 竞争 | 随并发线性增长 |
+| BatchWriter(定义未接入) | (宣称)零锁竞争 | (宣称)channel 投递 ~50ns |
 
 ---
 
-## 3. bbolt 批量写(O6)
+## 3. bbolt 批量写(O6)⚠️ 未落地
+
+> **⚠️ 性能审查(2026-08)发现:BatchStore 不存在。** 全仓库无 BatchStore 类型,store.go 仍 10 处
+> `db.Update`(每条独立 fsync)。下表"~8000 写/s / 64x"的宣称**未实现**。当前真实写吞吐仍受
+> bbolt 单写事务限制(~125 写/s,每任务 3 次 fsync ≈ ~40 任务/s 持久化上限)。高并发任务提交/回流时
+> 所有 Agent 的写排队在同一把 bbolt 写锁上。
 
 ### 问题
 每次 SaveTask = 1 个写事务 = 1 次 fsync(8ms),瓶颈 ~125 写/s。
 
-### 方案
+### 方案(未实现)
 BatchStore:攒批(channel 256 缓冲,50ms / 64 条触发批量提交)。
 
 | 模式 | fsync 次数 | 写入吞吐 |
 |------|-----------|----------|
-| 单条事务(旧) | N 次 | ~125 写/s |
-| 攒批(新) | N/64 次 | **~8000 写/s** |
+| 单条事务(**当前生效**) | N 次 | ~125 写/s |
+| 攒批(未实现) | (宣称)N/64 次 | (宣称)~8000 写/s |
 
 ---
 
@@ -109,8 +119,8 @@ BatchStore:攒批(channel 256 缓冲,50ms / 64 条触发批量提交)。
 | v1.0 | 状态索引(F1) | ListTasksByStatus 从全表扫描→索引前缀扫描 | **55x** |
 | v1.0 | 策略预过滤(F2) | CheckCommand 加 quickCheck 子串预过滤 | **28x** |
 | v3.9 | 256KB buffer pool(O2) | 文件传输热路径 make→pool | **1940x** |
-| v3.9 | BatchWriter(O5) | WS 写锁竞争→channel 队列 | 零锁竞争 |
-| v3.9 | BatchStore(O6) | bbolt 攒批事务 | **64x 写入** |
+| v3.9 | BatchWriter(O5) | WS 写锁竞争→channel 队列 | ⚠️ 仅定义未接入(死代码),零锁竞争未实现 |
+| v3.9 | BatchStore(O6) | bbolt 攒批事务 | ⚠️ 未实现(类型不存在),64x 写入未达成 |
 | v3.9 | CLIXML 过滤(P2) | PowerShell 输出噪音过滤 | 用户体验 |
 
 ---

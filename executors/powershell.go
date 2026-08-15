@@ -41,10 +41,13 @@ func (e *PowerShellExecutor) Exec(ctx context.Context, payload []byte, _ Progres
 	}
 	// P0-P3:强制 UTF-8 前缀 + 用 -EncodedCommand 传递
 	// 编码为 UTF16LE 再 Base64,PowerShell 原生支持,彻底规避编码问题
-	fullCmd := "[Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8; " + task.Command
+	// try/catch 包前缀:在无 attached console 的进程(go exec 启动的子进程)里
+	// [Console]::OutputEncoding 可能抛异常,使后续 exit N 不执行、进程 exit 1
+	// (TestPowerShellExitCode 回归)。前缀失败被吞,不影响真实 exit code。
+	fullCmd := "try { [Console]::OutputEncoding=[Text.Encoding]::UTF8; $OutputEncoding=[Text.Encoding]::UTF8 } catch {}; " + task.Command
 	encoded := encodePowerShellCommand(fullCmd)
 
-	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile",
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive",
 		"-ExecutionPolicy", policy, "-EncodedCommand", encoded)
 	setProcAttr(cmd) // P1-A1:进程组,防孙进程孤儿
 	var stdout, stderr bytes.Buffer

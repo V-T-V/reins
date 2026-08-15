@@ -5,8 +5,8 @@
 
 relay:
   image:
-    repository: ghcr.io/qiushichang/go-rmm-relay
-    tag: "2.2.0"
+    repository: ghcr.io/v-t-v/go-rmm-relay
+    tag: "v4.5.0"
     pullPolicy: IfNotPresent
 
   replicas: 1
@@ -42,8 +42,8 @@ persistence:
 agent:
   enabled: false  # 默认不部署 Agent 到 K8s(Agent 通常部署到外部主机)
   image:
-    repository: ghcr.io/qiushichang/go-rmm-agent
-    tag: "2.2.0"
+    repository: ghcr.io/v-t-v/go-rmm-agent
+    tag: "v4.5.0"
   relayUrl: "ws://rmm-relay:7780/agent"
   token: ""
 

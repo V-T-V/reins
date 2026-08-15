@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -49,6 +50,12 @@ func (p *WorkerPool) Submit(ctx context.Context, job func()) {
 				return
 			}
 		}
+		// W3:任务 panic 隔离,防止单任务 panic 崩溃整个 Agent
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[pool] 任务 panic(已恢复,防崩溃): %v\n%s", r, debug.Stack())
+			}
+		}()
 		job()
 	}()
 }
@@ -68,6 +75,11 @@ func (p *WorkerPool) TrySubmit(job func()) bool {
 		go func() {
 			defer p.wg.Done()
 			defer func() { p.slots <- struct{}{} }()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[pool] 任务 panic(已恢复,防崩溃): %v\n%s", r, debug.Stack())
+				}
+			}()
 			job()
 		}()
 		return true
@@ -79,22 +91,34 @@ func (p *WorkerPool) TrySubmit(job func()) bool {
 // Wait 等待所有已提交任务完成。
 func (p *WorkerPool) Wait() { p.wg.Wait() }
 
-// handleTaskWithPool 用 worker pool 包装任务执行（并发限流）。
+// handleTaskWithPool 用 worker pool 包装任务执行(并发限流)。
 //
-// P1-6 修复：用 TrySubmit（非阻塞）。池满时不再静默丢弃，而是发 task_nack
-// 让 Relay 把任务回退 pending，等有空位时重新投递。
+// P2-D 修复:TrySubmit(池满立即 NACK → Relay 回退 pending → 重投)改为
+// 阻塞排队(Submit)。会话实测:master 串行处理 3-4 分钟长任务时,
+// NACK 风暴让后续任务反复回退重投,CLI 表现为"任务卡住/超时"。
+// 排队语义:
+//  1. 立即发 ACK → Relay 侧保持 acknowledged(超时阈值 timeout×3,≥300s),
+//     排队期间不被 reaper 误杀(dispatched 超时仅 timeout×2,≥120s)
+//  2. 池满时阻塞等待空位,任务按到达顺序排队执行
+//  3. 排队超过任务 timeout(极端高并发)→ 不执行,Relay ack 超时后回退重投(自愈)
 func (a *Agent) handleTaskWithPool(ctx context.Context, wc *wsConn, env proto.Envelope, pool *WorkerPool) {
 	var task proto.TaskRequest
 	if err := env.Decode(&task); err != nil {
 		log.Printf("[agent] 任务解析失败: %v", err)
 		return
 	}
-	if !pool.TrySubmit(func() { a.runTask(ctx, wc, env) }) {
-		// 池满：发 NACK，Relay 收到后回退 pending
-		log.Printf("[agent] 任务 %s 被拒（worker pool 满），发 NACK", task.TaskID)
-		nack := proto.TaskNack{TaskID: task.TaskID, Reason: "pool_full"}
-		nctx, ncancel := contextWithTimeout(5 * time.Second)
-		defer ncancel()
-		_ = wc.writeEnvelope(nctx, proto.TypeTaskNack, "relay", nack)
+	// P2-D:排队前先 ACK(Relay 侧 acknowledged,防 reaper 误杀)。
+	ack := proto.TaskAck{TaskID: task.TaskID, Status: proto.StatusAcknowledged}
+	ackCtx, ackCancel := contextWithTimeout(5 * time.Second)
+	_ = wc.writeEnvelope(ackCtx, proto.TypeTaskAck, "relay", ack)
+	ackCancel()
+	// 阻塞排队执行(池满等待空位)。排队上限 = 任务 timeout。
+	// A3:Timeout==0 时兜底 DefaultTaskTimeout,防无限排队 → reaper 180s 回退重投 → 重复执行。
+	timeout := task.Timeout
+	if timeout <= 0 {
+		timeout = proto.DefaultTaskTimeout
 	}
+	qctx, qcancel := contextWithTimeout(time.Duration(timeout) * time.Second)
+	defer qcancel()
+	pool.Submit(qctx, func() { a.runTask(ctx, wc, env) })
 }

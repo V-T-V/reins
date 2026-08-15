@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -207,20 +208,35 @@ func (r *Relay) shouldSecureCookie(req *http.Request) bool {
 	return false
 }
 
-// clientIP 从请求提取客户端 IP(X-Forwarded-For 优先,否则 RemoteAddr)。
-// 仅用于审计日志记录,不用于鉴权决策。
+// clientIP 从请求提取客户端 IP。
+//
+// M1 修复:原实现无条件采信 X-Forwarded-For 首跳,攻击者每请求轮换 XFF 头即可
+// 让每"IP"独立计数,绕过登录限流(5 次失败锁 5 分钟形同虚设)。
+// 现仅在直连来源是本机/私有段(典型反代部署,反代应负责设真实 XFF 覆盖客户端伪造)时
+// 采信 XFF;直连公网场景用 RemoteAddr(不可伪造)。
 func clientIP(req *http.Request) string {
-	if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
 	host := req.RemoteAddr
 	if i := strings.LastIndexByte(host, ':'); i >= 0 {
 		host = host[:i]
 	}
+	if isLocalOrPrivate(host) {
+		if xff := req.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.IndexByte(xff, ','); i >= 0 {
+				return strings.TrimSpace(xff[:i])
+			}
+			return strings.TrimSpace(xff)
+		}
+	}
 	return host
+}
+
+// isLocalOrPrivate 判断 IP 是否为本机/私有/链路本地段(反代部署的典型来源)。
+func isLocalOrPrivate(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
 }
 
 // 控制台鉴权相关错误(集中定义,便于测试断言)。

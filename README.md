@@ -128,8 +128,13 @@
 | **Session 录屏** | asciinema v2,可回放 |
 | **可观测性** | slog + Prometheus + pprof |
 | **Webhook 告警** | Slack/钉钉/企业微信 |
-| **水平扩展** | TaskStore interface + Redis + Pub/Sub |
+| **水平扩展** | TaskStore interface + Redis + Pub/Sub _(见下方成熟度说明)_ |
 | **AI Agent SDK** | `client.New()` → 45+ 方法 + 流式执行 |
+
+> **能力成熟度（诚实标注）**：当前为 **production-ready**：远程命令/脚本执行、文件传输、端口转发、部署编排、自更新、系统监控、服务/进程/电源管理、审计防篡改、Secret 管理、Session 录屏、CLI/SDK、mTLS 安全层、Web 控制台。以下为 **preview / 骨架态**，使用前请知悉：
+> - **多租户 RBAC 管理 API**：`tenant:role:secret` token 鉴权 + Agent 隔离已可用；但组织/角色/配额的 HTTP 管理 API 尚未接入（目前靠启动配置注入，无 CRUD 路由）。
+> - **Relay 水平扩展**：`TaskStore` 接口已就绪，但 Redis 共享状态后端（`redis_store.go` / `event_federation.go`）尚未实现，当前仅单 Relay 模式。
+> - **Linux Agent**：默认面向 Windows；跨平台执行器部分预留，Linux 下能力受限（约 30%）。
 
 ---
 

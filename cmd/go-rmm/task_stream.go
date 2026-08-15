@@ -99,7 +99,10 @@ func taskStream(cfg config, args []string) error {
 			json.Unmarshal(ev.data, &outer)
 			var p proto.TaskProgress
 			json.Unmarshal(outer.Data, &p)
-			if p.Message != "" {
+			// P0-B:JSON 模式输出结构化进度行
+			if jsonMode {
+				outputJSON(map[string]any{"command": "task_progress", "ok": true, "task_id": taskID, "percent": p.Percent, "message": p.Message})
+			} else if p.Message != "" {
 				fmt.Printf("[进度] %s (%d%%)\n", p.Message, p.Percent)
 			}
 		case "task_result":
@@ -109,6 +112,15 @@ func taskStream(cfg config, args []string) error {
 			json.Unmarshal(ev.data, &outer)
 			var r proto.TaskResult
 			json.Unmarshal(outer.Data, &r)
+			// P0-B:JSON 模式直接输出结构化结果
+			if jsonMode {
+				outputJSON(map[string]any{
+					"command": "task_result", "ok": r.Success, "task_id": taskID,
+					"success": r.Success, "exit_code": r.ExitCode, "duration_ms": r.Duration,
+					"stdout": filterCLIXML(r.Stdout), "stderr": filterCLIXML(r.Stderr),
+				})
+				return nil
+			}
 			fmt.Printf("\n=== 结果 ===\n")
 			fmt.Printf("成功: %v  退出码: %d  耗时: %dms\n", r.Success, r.ExitCode, r.Duration)
 			if r.Stdout != "" {

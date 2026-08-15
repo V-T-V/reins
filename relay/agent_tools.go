@@ -364,7 +364,7 @@ func (r *Relay) agentRunTask(ctx context.Context, agentID, taskType string, payl
 	// 安全(审查修复):与 /api/tasks POST 一致复用命令策略黑名单。
 	// 工具 run_task/run_script/shell_exec 的命令由 LLM 生成(可被提示注入),
 	// 若不在此拦截,高危命令可绕过 handlePostTask 的策略检查直接投递。
-	if err := r.policy.CheckPayload(taskType, payload); err != nil {
+	if err := r.policy.CheckCommandPayload(taskType, payload); err != nil {
 		return toolResultErr(fmt.Errorf("命令被策略拦截: %v", err))
 	}
 	taskID := "agt-" + strings.Replace(uuid.NewString()[:8], "-", "", -1) + "-" + fmt.Sprint(time.Now().UnixMilli())

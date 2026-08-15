@@ -118,7 +118,7 @@ sboms:
 
 release:
   github:
-    owner: QiuShichang
+    owner: V-T-V
     name: go-rmm
   draft: true
   prerelease: auto

@@ -15,8 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/coder/websocket"
-
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
@@ -313,7 +311,8 @@ func feedExistingToHash(path string, n int64, h hash.Hash) error {
 		return err
 	}
 	defer f.Close()
-	buf := make([]byte, 64*1024)
+	buf := Get64K() // H1:pool 复用
+	defer Put64K(buf)
 	var read int64
 	for read < n {
 		want := int64(len(buf))
@@ -453,7 +452,8 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 
 	// SHA256 增量
 	h := sha256.New()
-	buf := make([]byte, TransferBufferSize)
+	buf := Get256K() // H1:pool 复用(原 make 256K,1GB 下载少 4096 次 256K 分配)
+	defer Put256K(buf)
 	for {
 		// O3:分片模式 limit > 0 时,只读到 limit 字节就停(而非文件 EOF)
 		if sess.limit > 0 && sess.bytesDone >= sess.limit {
@@ -468,9 +468,9 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 			h.Write(buf[:n])
 			// 构造二进制帧：[transferID_len u8][transferID][isLast u8][data]
 			frame := proto.BuildBinaryFrame(transferID, false, buf[:n])
-			wc.writeMu.Lock()
-			wErr := wc.conn.Write(ctx, websocket.MessageBinary, frame)
-			wc.writeMu.Unlock()
+			writeCtx, writeCancel := context.WithTimeout(ctx, 15*time.Second) // 弱网:下载写 15s deadline(不无限持锁,给心跳间歇窗口)
+			wErr := wc.writeBinaryData(writeCtx, frame)
+			writeCancel()
 			if wErr != nil {
 				completeCb(proto.FileTransferComplete{TransferID: transferID, Success: false, Error: "WS写失败: " + wErr.Error(), Bytes: sess.bytesDone})
 				return
@@ -496,11 +496,15 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 		}
 	}
 
-	// 发送 isLast 标记帧（空数据）
+	// 发送 isLast 标记帧（空数据）。H-5:检查写错——WS 半坏时 isLast 写失败,
+	// 原 ignoring 让 Relay 收不到 EOF→下载 consumer 卡 <-dataCh 直到断线 cleanup(最长 30 分钟)。
+	// 现写错即发 complete(Success=false) 让 Relay 端立即收尾(而非悬挂)。
 	frame := proto.BuildBinaryFrame(transferID, true, nil)
-	wc.writeMu.Lock()
-	wc.conn.Write(ctx, websocket.MessageBinary, frame)
-	wc.writeMu.Unlock()
+	writeErr := wc.writeBinaryData(ctx, frame)
+	if writeErr != nil {
+		completeCb(proto.FileTransferComplete{TransferID: transferID, Success: false, Error: "isLast 帧写失败: " + writeErr.Error(), Bytes: sess.bytesDone})
+		return
+	}
 
 	hash := hex.EncodeToString(h.Sum(nil))
 	te.mu.Lock()

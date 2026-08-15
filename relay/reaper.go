@@ -58,10 +58,11 @@ func (r *Relay) reapStaleTasks() {
 		staleSecs := (now - t.UpdatedAt) / 1000 // P1-C6 修复:先算 stale 再改 UpdatedAt
 		if now-t.UpdatedAt > int64(threshold) {
 			// P0-C2:用 ReapToPending(原子+终态校验),不用裸 SaveTask
-			if err := r.store.ReapToPending(t.Request.TaskID); err != nil {
-				continue // 已是终态或并发改动,skip(不重复执行)
-			}
-			reapedDispatched++
+				if err := r.store.ReapToPending(t.Request.TaskID); err != nil {
+					continue // 已是终态或并发改动,skip(不重复执行)
+				}
+				r.agents.DecInFlight(t.Request.AgentID) // H2:回退→不再在途(-1),重投时 dispatchTask +1
+				reapedDispatched++
 			metrics.Inc("reaped")
 			log.Printf("[reaper] 回退 dispatched→pending task=%s (超时 %ds)", t.Request.TaskID, staleSecs)
 			r.tryRedispatch(t)
@@ -82,10 +83,11 @@ func (r *Relay) reapStaleTasks() {
 		}
 		staleSecs := (now - t.UpdatedAt) / 1000
 		if now-t.UpdatedAt > int64(threshold) {
-			if err := r.store.ReapToPending(t.Request.TaskID); err != nil {
-				continue // P0-C2:终态拒绝回退
-			}
-			reapedAck++
+				if err := r.store.ReapToPending(t.Request.TaskID); err != nil {
+					continue // P0-C2:终态拒绝回退
+				}
+				r.agents.DecInFlight(t.Request.AgentID) // H2:回退→不再在途(-1)
+				reapedAck++
 			metrics.Inc("reaped")
 			log.Printf("[reaper] 回退 acknowledged→pending task=%s (超时 %ds,Agent 可能崩溃)", t.Request.TaskID, staleSecs)
 			r.tryRedispatch(t)

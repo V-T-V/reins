@@ -32,9 +32,10 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/tasks/cancel", a(r.handleCancelTask))            // C6 取消任务
 	mux.HandleFunc("GET /api/tasks", a(r.handleListTasks))                     // C4/F1 任务历史
 	mux.HandleFunc("GET /api/tasks/", a(r.handleGetTask))                      // C4 单任务详情+结果
-	mux.HandleFunc("POST /api/enroll-token", a(r.handleGenEnrollToken))        // C7 生成注册令牌
-	mux.HandleFunc("POST /api/enroll", r.handleEnroll)                         // C7 Agent 换证书(注册令牌自鉴权)
-	mux.HandleFunc("POST /api/agents/revoke", a(r.handleRevokeAgent))          // G2 撤销 Agent 证书
+		mux.HandleFunc("POST /api/enroll-token", a(r.RequireRole("agent.enroll-token", r.handleGenEnrollToken))) // C7 生成注册令牌(架构短1:RBAC 守卫)
+		mux.HandleFunc("POST /api/enroll", r.handleEnroll)                         // C7 Agent 换证书(注册令牌自鉴权)
+		mux.HandleFunc("POST /api/renew", r.handleRenew)                           // W7 证书续签(mTLS 客户端证书自鉴权)
+		mux.HandleFunc("POST /api/agents/revoke", a(r.RequireRole("agent.revoke", r.handleRevokeAgent))) // G2 撤销 Agent 证书(架构短1:RBAC 守卫)
 	mux.HandleFunc("GET /api/crons", a(r.handleListCrons))                     // H2 cron 列表
 	mux.HandleFunc("POST /api/crons", a(r.handleAddCron))                      // H2 新建 cron
 	mux.HandleFunc("DELETE /api/crons/", a(r.handleDeleteCron))                // H2 删除 cron
@@ -57,7 +58,7 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/updates/upload", a(r.handleUpdateUpload))
 	mux.HandleFunc("POST /api/updates/apply", a(r.handleUpdateApply))
 	// 电源操作(标签白名单鉴权)
-	mux.HandleFunc("POST /api/power", a(r.handlePower))
+		mux.HandleFunc("POST /api/power", a(r.RequireRole("power.shutdown", r.handlePower))) // 架构短1:电源操作 RBAC(admin-only)
 	// S6:Prometheus 文本格式(供 Prometheus scraper)
 	// P1:独立 MetricsToken 校验(常量时间),不走 authorize(不接 cookie)
 	mux.HandleFunc("GET /metrics", r.handlePromMetrics)
@@ -71,9 +72,9 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 		mux.Handle("/debug/pprof/trace", http.DefaultServeMux)
 	}
 	// XL1:Secret Management(凭据下发不落 audit)
-	mux.HandleFunc("POST /api/secrets", a(r.handleSecretPut))
-	mux.HandleFunc("GET /api/secrets/", a(r.handleSecretGet))
-	mux.HandleFunc("DELETE /api/secrets/", a(r.handleSecretDelete))
+		mux.HandleFunc("POST /api/secrets", a(r.RequireRole("secret.put", r.handleSecretPut)))         // 架构短1:secret 写 admin-only
+		mux.HandleFunc("GET /api/secrets/", a(r.handleSecretGet))
+		mux.HandleFunc("DELETE /api/secrets/", a(r.RequireRole("secret.delete", r.handleSecretDelete))) // 架构短1:secret 删 admin-only
 	// XL4:审计 SIEM 导出(CEF/JSON/Syslog)
 	mux.HandleFunc("GET /api/audit/export", a(r.handleAuditExport))
 	// XL6:智能调度(负载均衡选择最优 Agent)
@@ -226,7 +227,7 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// P1-1 修复(致命安全洞):批量下发必须经过命令策略校验,否则可绕过 S4 下发 Format-Volume
-	if err := r.policy.CheckPayload(body.Type, body.Payload); err != nil {
+	if err := r.policy.CheckCommandPayload(body.Type, body.Payload); err != nil {
 		log.Printf("[policy] 批量任务被拦截 type=%s: %v", body.Type, err)
 		metrics.Inc("blocked")
 		if r.audit != nil {
@@ -312,21 +313,11 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 // summarizePayload 提取载荷摘要用于审计（命令前 200 字符，避免完整记录敏感数据）。
 func summarizePayload(taskType string, payload []byte) string {
 	const maxLen = 200
-	var text string
-	switch taskType {
-	case "powershell":
-		var t struct {
-			Command string `json:"command"`
-		}
-		json.Unmarshal(payload, &t)
-		text = t.Command
-	case "script":
-		var t struct {
-			Content string `json:"content"`
-		}
-		json.Unmarshal(payload, &t)
-		text = t.Content
-	default:
+	// 建议 B:复用 proto.ExtractCommand(建议 A 的注册表)提取命令文本做审计摘要,
+	// 消除本函数的类型 switch。命令类(powershell/script)摘要=命令文本;非命令类回退到字节数。
+	// 加新命令类任务只需在 proto.init 注册提取器,此处自动生效(无需改本函数)。
+	text := proto.ExtractCommand(taskType, payload)
+	if text == "" {
 		return fmt.Sprintf("%s(%d bytes)", taskType, len(payload))
 	}
 	if len(text) > maxLen {
@@ -382,6 +373,7 @@ func (r *Relay) handleCancelTask(w http.ResponseWriter, req *http.Request) {
 	if r.store != nil {
 		if err := r.store.UpdateTaskStatus(body.TaskID, StatusCancelled); err == nil {
 			metrics.Inc("cancelled") // D7
+			r.agents.DecInFlight(agentID) // H-3:取消也释放在途计数(原漏 -1 致泄漏→调度失衡)
 		}
 	}
 	log.Printf("[task] 取消 task=%s → agent=%s", body.TaskID, agentID)
@@ -416,6 +408,18 @@ func (r *Relay) handleGetTask(w http.ResponseWriter, req *http.Request) {
 func (r *Relay) handleListAgents(w http.ResponseWriter, req *http.Request) {
 	// P2-10 修复：只调一次 Snapshot（原双次调用有 2x 拷贝开销 + 可能不一致）
 	list := r.agents.Snapshot()
+	// C1 修复:多租户隔离——按调用方 Identity 过滤。非 admin(有 tenant)只看自己租户的 agent,
+	// 原实现返回所有租户 agent(cross-tenant 信息泄漏)。
+	id := identityFromReq(req)
+	if id.Tenant != "" {
+		filtered := list[:0]
+		for _, a := range list {
+			if id.CanAccessAgent(a.Tags) {
+				filtered = append(filtered, a)
+			}
+		}
+		list = filtered
+	}
 	// V1:为每个 agent 附带传输画像(ub/db/uc/dc/fc,来自心跳上报)
 	agentsWithStats := make([]map[string]any, 0, len(list))
 	for _, a := range list {
@@ -471,8 +475,22 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// 架构短1:高危任务类型 RBAC 守卫(原任何有效 token 都能下发 power/update——operator/viewer 越权)。
+	if task.Type == proto.TaskPower || task.Type == proto.TaskUpdate {
+		id := identityFromReq(req)
+		action := "power.shutdown"
+		if task.Type == proto.TaskUpdate {
+			action = "update.push"
+		}
+		if !id.CanPerform(action) {
+			log.Printf("[rbac] 拒绝 %s 下发 %s 任务 (role=%s)", req.RemoteAddr, task.Type, id.Role)
+			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("角色 %s 无权下发 %s 任务", id.Role, task.Type)))
+			return
+		}
+	}
+
 	// C9 命令安全策略校验：拦截高危命令
-	if err := r.policy.CheckPayload(task.Type, task.Payload); err != nil {
+	if err := r.policy.CheckCommandPayload(task.Type, task.Payload); err != nil {
 		log.Printf("[policy] 拦截高危任务 task=%s type=%s: %v", task.TaskID, task.Type, err)
 		metrics.Inc("blocked")
 		if r.audit != nil {
@@ -515,19 +533,23 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// S3 修复:能力感知路由——校验 Agent 是否支持该任务类型(在投递前,不管在线否)
-	// 避免向不支持 browse 的 Agent 投递 browse,浪费投递配额
-	if !r.agentSupports(task.AgentID, task.Type) {
-		log.Printf("[task] Agent %s 不支持任务类型 %s,拒绝", task.AgentID, task.Type)
-		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent %s 不支持任务类型 %s (能力: %v)",
-			task.AgentID, task.Type, r.agentCapabilities(task.AgentID))))
-		return
-	}
-
-	// 尝试立即投递(Agent 在线)
+	// H-2 修复:区分"从未上线的离线"(无能力信息→缓存 202) vs "曾注册/在线"(校验能力)。
+	// 原顺序(SaveTask→agentSupports→conn==nil)下离线 Agent 走到 agentSupports 必 400(capabilityCache 空),
+	// 但任务已落库 → 上线补投(不校验)→ 非幂等命令延迟执行(API 400 操作者以为未执行)。
+	// 现仅"从未上线"(conn==nil 且无能力信息)走缓存;曾注册(有能力信息)或在线均校验能力。
 	conn := r.agents.Conn(task.AgentID)
+	caps := r.agentCapabilities(task.AgentID)
+	// H-2 修复:离线(conn==nil)时——曾注册(caps 非空)且不支持该类型→400(避免上线后补投不支持的任务);
+	// 从未上线(caps 空)或支持该类型→缓存 202(conn==nil 无法投递)。原顺序(SaveTask→agentSupports→conn==nil)
+	// 下离线 Agent 必 400(capabilityCache 空),但任务已落库→上线补投(不校验)→非幂等命令延迟执行。
 	if conn == nil {
-		// Agent 离线:保留 pending,等 Agent 上线后 dispatchPendingTasks 投递
+		if len(caps) > 0 && !r.agentSupports(task.AgentID, task.Type) {
+			log.Printf("[task] Agent %s 不支持任务类型 %s,拒绝(曾注册能力 %v)", task.AgentID, task.Type, caps)
+			writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent %s 不支持任务类型 %s (能力: %v)",
+				task.AgentID, task.Type, caps)))
+			return
+		}
+		// 从未上线 或 支持该类型:缓存待上线投递(conn==nil 无法投递;dispatchTask 投递时补校验)
 		log.Printf("[task] 缓存 task=%s type=%s (agent=%s 离线,待上线投递)",
 			task.TaskID, task.Type, task.AgentID)
 		writeJSON(w, http.StatusAccepted, map[string]any{
@@ -536,6 +558,14 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 			"agent_id": task.AgentID,
 			"message":  "agent 离线,任务已缓存待投递",
 		})
+		return
+	}
+
+	// S3:在线(conn!=nil)——校验能力(避免向不支持 browse 的 Agent 投递 browse)
+	if !r.agentSupports(task.AgentID, task.Type) {
+		log.Printf("[task] Agent %s 不支持任务类型 %s,拒绝", task.AgentID, task.Type)
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent %s 不支持任务类型 %s (能力: %v)",
+			task.AgentID, task.Type, caps)))
 		return
 	}
 
@@ -556,7 +586,7 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 // P0-C3 修复:投递前 CAS 占坑(CASDispatchToPending),只允许 pending→dispatched。
 // 防止 reaper.tryRedispatch 与 dispatchPendingTasks 并发向 Agent 发同一任务两次。
 func (r *Relay) dispatchTask(conn *wsConn, task proto.TaskRequest) error {
-	// E2/W1:maxAttempts 兜底,防 poison task 无限重投
+	// E2/W1:maxAttempts 兜底,防 poison task 无限重投(优先于能力校验:poison task 必先转 failed)
 	if r.store != nil {
 		if existing, _ := r.store.GetTask(task.TaskID); existing != nil && existing.Attempt >= MaxTaskAttempts {
 			log.Printf("[task] task=%s 达到最大投递次数 %d,转 failed", task.TaskID, MaxTaskAttempts)
@@ -571,6 +601,13 @@ func (r *Relay) dispatchTask(conn *wsConn, task proto.TaskRequest) error {
 			}
 			return fmt.Errorf("任务 %s 超过最大投递次数", task.TaskID)
 		}
+	}
+	// H-2:投递前校验能力(maxAttempts 之后;防离线缓存任务上线后被 dispatchPendingTasks 补投不支持的能力)
+	if !r.agentSupports(task.AgentID, task.Type) {
+		log.Printf("[task] Agent %s 不支持 %s,跳过投递(留 pending)", task.AgentID, task.Type)
+		return fmt.Errorf("agent %s 不支持任务类型 %s", task.AgentID, task.Type)
+	}
+	if r.store != nil {
 		// P0-C3:CAS 占坑——只允许 pending→dispatched,防止并发重复投递
 		// 已 dispatched/acknowledged/终态的任务跳过(返回 error,调用方可 log 后继续)
 		if err := r.store.CASDispatchToPending(task.TaskID); err != nil {
@@ -593,22 +630,28 @@ func (r *Relay) dispatchTask(conn *wsConn, task proto.TaskRequest) error {
 		}
 		return err
 	}
-	// 更新持久化状态
+	// W2 修复:CASDispatchToPending 已在 writeJSON 前原子完成 pending→dispatched + Attempt++。
+	// 这里不再 SaveTask 裸覆盖——原实现 writeJSON 后用 SaveTask(StatusDispatched) 绕过状态机,
+	// 若 Agent 极快回 result 使任务 completed,这里会把 completed 覆盖回 dispatched →
+	// reaper 重投 → 重复执行。CAS 提前完成状态变更,writeJSON 失败则回退 pending(见上)。
 	if r.store != nil {
-		var st StoredTask
-		if existing, err := r.store.GetTask(task.TaskID); err == nil && existing != nil {
-			st = *existing
-		} else {
-			st = StoredTask{Request: task, CreatedAt: time.Now().UnixMilli()}
+		existing, _ := r.store.GetTask(task.TaskID)
+		if existing == nil {
+			// 任务不在 store(异常/非标准流程):创建初始 dispatched 记录。
+			// 此时无终态可覆盖,SaveTask 安全。
+			_ = r.store.SaveTask(StoredTask{
+				Request: task, Status: StatusDispatched, Attempt: 1,
+				CreatedAt: time.Now().UnixMilli(), UpdatedAt: time.Now().UnixMilli(),
+			})
 		}
-		st.Status = StatusDispatched
-		st.Attempt++
-		st.Request = task
-		st.UpdatedAt = time.Now().UnixMilli()
-		_ = r.store.SaveTask(st)
+		attempt := 1
+		if existing != nil {
+			attempt = existing.Attempt
+		}
 		metrics.Inc("dispatched")
+		r.agents.IncInFlight(task.AgentID) // H2:在途计数 +1(终态·reaper回退 -1)
 		log.Printf("[task] 下发 task=%s type=%s → agent=%s (attempt=%d)",
-			task.TaskID, task.Type, task.AgentID, st.Attempt)
+			task.TaskID, task.Type, task.AgentID, attempt)
 	} else {
 		log.Printf("[task] 下发 task=%s type=%s → agent=%s", task.TaskID, task.Type, task.AgentID)
 	}
@@ -869,6 +912,54 @@ func (r *Relay) handleEnroll(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// POST /api/renew —— Agent 用现有 mTLS 客户端证书续签(W7 修复:不依赖一次性 token)。
+//
+// 鉴权:Agent 的 mTLS 连接(现有有效证书),Relay 从 req.TLS.PeerCertificates 提取 agentID。
+// 不撤销旧证(SignAgentCSRNoRevoke),保留到自然过期,避免续签瞬间旧连接被 CRL 断开。
+// 解决 W7:原续签复用一次性 enrollment_token → 24h 后必然 401 → Agent 永久离线。
+func (r *Relay) handleRenew(w http.ResponseWriter, req *http.Request) {
+	if r.ca == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("CA 未启用")))
+		return
+	}
+	if req.TLS == nil || len(req.TLS.PeerCertificates) == 0 {
+		writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("renew 需要 mTLS 客户端证书")))
+		return
+	}
+	leaf := req.TLS.PeerCertificates[0]
+	agentID := leaf.Subject.CommonName
+	if agentID == "" {
+		writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("客户端证书无 CN")))
+		return
+	}
+	if r.ca.IsRevoked(leaf.SerialNumber) {
+		writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("证书已撤销")))
+		return
+	}
+	var body struct {
+		CSRPEM string `json:"csr_pem"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.CSRPEM == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("csr_pem 不能为空")))
+		return
+	}
+	const certTTL = 24 * time.Hour
+	certPEM, err := r.ca.SignAgentCSRNoRevoke([]byte(body.CSRPEM), agentID, certTTL)
+	if err != nil {
+		log.Printf("[ca] 续签失败 agent=%s: %v", agentID, err)
+		writeJSON(w, http.StatusInternalServerError, errMap(err))
+		return
+	}
+	log.Printf("[ca] 续签证书 agent=%s (24h,renew,不撤销旧证)", agentID)
+	writeJSON(w, http.StatusOK, proto.EnrollResp{
+		AgentID:   agentID,
+		CertPEM:   string(certPEM),
+		CAPEM:     string(r.ca.CAPEM()),
+		ExpiresAt: time.Now().Add(certTTL).Unix(),
+		Success:   true,
+	})
+}
+
 // POST /api/agents/revoke —— 撤销 Agent 证书（G2/A2 修复）。
 //
 // 请求体: {"agent_id": "agent-prod-01"}
@@ -976,7 +1067,7 @@ func (r *Relay) handleAddCron(w http.ResponseWriter, req *http.Request) {
 	}
 	// P0-S2 修复:cron 规则必须经过命令策略校验(原来完全绕过)
 	// cron 是持久化执行,绕过策略 = 永久后门,危害比单次任务更大
-	if err := r.policy.CheckPayload(rule.TaskType, rule.Payload); err != nil {
+	if err := r.policy.CheckCommandPayload(rule.TaskType, rule.Payload); err != nil {
 		log.Printf("[policy] 拦截高危 cron 规则 agent=%s type=%s: %v", rule.AgentID, rule.TaskType, err)
 		metrics.Inc("blocked")
 		if r.audit != nil {
@@ -1244,13 +1335,10 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 		n, readErr := req.Body.Read(buf)
 		if n > 0 {
 			frame := proto.BuildBinaryFrame(transferID, false, buf[:n])
-			conn.writeMu.Lock()
-			if err := conn.conn.Write(ctx, websocket.MessageBinary, frame); err != nil {
-				conn.writeMu.Unlock()
+			if err := conn.writeBinaryData(ctx, frame); err != nil {
 				writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("WS写失败: %w", err)))
 				return
 			}
-			conn.writeMu.Unlock()
 			totalSent += int64(n)
 		}
 		if readErr != nil {
@@ -1266,11 +1354,15 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	if !aborted {
-		// 正常结束:发 isLast 帧
+		// 正常结束:发 isLast 帧。H-5:检查写错——WS 半坏时 isLast 写失败,原 ignoring 让
+		// Agent 收不到 isLast→不 finalize→Relay 卡 <-completeCh 直到 30 分钟 ctx 超时。
+		// 现写错按中断处理(返回 502,不等 complete)。
 		frame := proto.BuildBinaryFrame(transferID, true, nil)
-		conn.writeMu.Lock()
-		conn.conn.Write(ctx, websocket.MessageBinary, frame)
-		conn.writeMu.Unlock()
+		wErr := conn.writeBinaryData(ctx, frame)
+		if wErr != nil {
+			writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("isLast 帧写失败: %w", wErr)))
+			return
+		}
 	} else {
 		// 中断:不等 complete,直接返回错误
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("上传中断: 已传 %d bytes", totalSent)))

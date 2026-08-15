@@ -6,11 +6,12 @@
 //  3. 轻量部署:内存模式(无持久化)的底层存储
 //
 // 并发安全(全程 mu 串行,与 bbolt 单写事务语义一致)。
-package main
+package taskstore
 
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
@@ -131,6 +132,11 @@ func (s *MemoryStore) CASDispatchToPending(taskID string) error {
 	if t.Status != StatusPending {
 		return fmt.Errorf("任务 %s 状态 %s,跳过", taskID, t.Status)
 	}
+	// W2 修复:原子 CAS——pending→dispatched + Attempt++(与 bbolt Store 一致),
+	// 避免 dispatchTask 后续 SaveTask 裸覆盖终态导致重复执行。
+	t.Status = StatusDispatched
+	t.Attempt++
+	t.UpdatedAt = time.Now().UnixMilli()
 	return nil
 }
 

@@ -14,7 +14,7 @@ param(
     [string]$Relay = "",
     [string]$Token = "",
     [string]$Dir = "$env:USERPROFILE\.go-rmm",
-    [string]$Version = "v3.9.0"
+    [string]$Version = "v4.5.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,16 +34,17 @@ function Get-Token {
 # === 编译 ===
 Write-Host "go-rmm $Version" -ForegroundColor Cyan
 
-if (Test-Path "D:\M_X_M\go-rmm\go.mod") {
+$SourceRoot = if ($PSScriptRoot) { Split-Path $PSScriptRoot -Parent } else { (Get-Location).Path }
+if (Test-Path "$SourceRoot\go.mod") {
     Write-Host "[编译] 从源码..." -ForegroundColor Green
-    Push-Location "D:\M_X_M\go-rmm"
+    Push-Location $SourceRoot
     $env:CGO_ENABLED = "0"
     go build -ldflags "-s -w -X main.version=$Version" -o "$Bin\go-rmm-relay.exe" ./relay/
     go build -ldflags "-s -w -X main.version=$Version" -o "$Bin\go-rmm-agent.exe" ./agent/
     go build -ldflags "-s -w -X main.version=$Version" -o "$Bin\go-rmm.exe" ./cmd/go-rmm/
     Pop-Location
 } else {
-    Write-Host "[错误] 需要在源码目录运行,或指定下载地址" -ForegroundColor Red
+    Write-Host "[提示] 未在源码目录找到 go.mod（探测：$SourceRoot）。对外安装请用 scripts/install.ps1（从 Release 下载二进制）。" -ForegroundColor Yellow
     exit 1
 }
 

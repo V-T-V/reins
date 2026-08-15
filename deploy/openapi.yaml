@@ -87,6 +87,16 @@ paths:
                   status: { type: string }
                   agent_id: { type: string }
 
+    get:
+      summary: 列出任务历史
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: 任务列表
+
   /api/tasks/{taskID}:
     get:
       summary: 查询任务状态和结果
@@ -105,17 +115,6 @@ paths:
                 properties:
                   task: { $ref: "#/components/schemas/StoredTask" }
                   result: { $ref: "#/components/schemas/TaskResult" }
-
-  /api/tasks:
-    get:
-      summary: 列出任务历史
-      parameters:
-        - name: limit
-          in: query
-          schema: { type: integer, default: 50 }
-      responses:
-        "200":
-          description: 任务列表
 
   /api/tasks/cancel:
     post:

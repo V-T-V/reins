@@ -18,15 +18,20 @@ import (
 
 // === status 命令 ===
 
-// cmdStatus 一键查看 Relay 状态:healthz + agents + metrics。
-// healthz 和 metrics 都不需要鉴权(even if token set),agents 需要。
+// cmdStatus 一键查看 Relay 状态:healthz + agents + metrics + 任务状态分布(P2-C 补全)。
+// healthz 和 metrics 都不需要鉴权(even if token set),agents/tasks 需要。
 func cmdStatus(cfg config, args []string) error {
-	// 1. healthz
+	// 1. healthz(含文件传输指标)
 	var health struct {
-		Relay    string `json:"relay"`
-		Store    string `json:"store"`
-		Agents   int    `json:"agents"`
-		UptimeS  int    `json:"uptime_s"`
+		Relay             string `json:"relay"`
+		Store             string `json:"store"`
+		Agents            int    `json:"agents"`
+		UptimeS           int    `json:"uptime_s"`
+		XferUploads       int64  `json:"xfer_uploads"`
+		XferDownloads     int64  `json:"xfer_downloads"`
+		XferUploadBytes   int64  `json:"xfer_upload_bytes"`
+		XferDownloadBytes int64  `json:"xfer_download_bytes"`
+		XferFailures      int64  `json:"xfer_failures"`
 	}
 	if err := apiGetNoAuth(cfg, "/healthz", &health); err != nil {
 		// healthz 失败说明 Relay 不可达,直接返回
@@ -35,25 +40,66 @@ func cmdStatus(cfg config, args []string) error {
 
 	// 2. metrics(无需鉴权)
 	var metrics struct {
-		AgentsOnline      int64 `json:"agents_online"`
-		TasksSubmitted    int64 `json:"tasks_submitted"`
-		TasksDispatched   int64 `json:"tasks_dispatched"`
-		TasksCompleted    int64 `json:"tasks_completed"`
-		TasksFailed       int64 `json:"tasks_failed"`
-		TasksBlocked      int64 `json:"tasks_blocked"`
-		TasksCancelled    int64 `json:"tasks_cancelled"`
-		TasksReaped       int64 `json:"tasks_reaped"`
-		EventsDropped     int64 `json:"events_dropped"`
-		UptimeSeconds     int64 `json:"uptime_seconds"`
-		Goroutines        int64 `json:"goroutines"`
+		AgentsOnline    int64 `json:"agents_online"`
+		TasksSubmitted  int64 `json:"tasks_submitted"`
+		TasksDispatched int64 `json:"tasks_dispatched"`
+		TasksCompleted  int64 `json:"tasks_completed"`
+		TasksFailed     int64 `json:"tasks_failed"`
+		TasksBlocked    int64 `json:"tasks_blocked"`
+		TasksCancelled  int64 `json:"tasks_cancelled"`
+		TasksReaped     int64 `json:"tasks_reaped"`
+		EventsDropped   int64 `json:"events_dropped"`
+		UptimeSeconds   int64 `json:"uptime_seconds"`
+		Goroutines      int64 `json:"goroutines"`
 	}
 	_ = apiGetNoAuth(cfg, "/api/metrics", &metrics) // 失败不致命
 
-	// 3. agents(需鉴权)
+	// 3. agents(每-Agent 详情:capabilities/tags/xfer_stats)
 	var agentsResp struct {
-		Count int `json:"count"`
+		Count  int `json:"count"`
+		Agents []struct {
+			AgentID      string   `json:"agent_id"`
+			Hostname     string   `json:"hostname"`
+			OS           string   `json:"os"`
+			Version      string   `json:"version"`
+			Capabilities []string `json:"capabilities"`
+			Tags         []string `json:"tags"`
+			XferStats    *struct {
+				UploadBytes   int64 `json:"upload_bytes"`
+				DownloadBytes int64 `json:"download_bytes"`
+				UploadCount   int64 `json:"upload_count"`
+				DownloadCount int64 `json:"download_count"`
+				FailedCount   int64 `json:"failed_count"`
+			} `json:"xfer_stats"`
+		} `json:"agents"`
 	}
 	_ = apiGet(cfg, "/api/agents", &agentsResp) // 失败不致命
+
+	// 4. 任务实时状态分布(P2-C:原本只显示累计指标,补当前 store 分布)
+	statusCount := map[string]int{}
+	var tasksResp struct {
+		Tasks []struct {
+			Status string `json:"status"`
+		} `json:"tasks"`
+	}
+	_ = apiGet(cfg, "/api/tasks?limit=1000", &tasksResp) // 失败不致命
+	for _, t := range tasksResp.Tasks {
+		statusCount[t.Status]++
+	}
+
+	// P0-B:JSON 模式
+	if jsonMode {
+		outputJSON(map[string]any{
+			"command":        "status",
+			"ok":             true,
+			"relay":          cfg.relay,
+			"health":         health,
+			"metrics":        metrics,
+			"agents":         agentsResp.Agents,
+			"tasks_by_status": statusCount,
+		})
+		return nil
+	}
 
 	fmt.Println("=== go-rmm Relay 状态 ===")
 	fmt.Printf("Relay:    %s\n", cfg.relay)
@@ -68,8 +114,26 @@ func cmdStatus(cfg config, args []string) error {
 		metrics.TasksCompleted, metrics.TasksFailed, metrics.TasksCancelled)
 	fmt.Printf("  拦截(策略): %d  回收(超时): %d  事件丢弃: %d\n",
 		metrics.TasksBlocked, metrics.TasksReaped, metrics.EventsDropped)
+	if len(statusCount) > 0 {
+		fmt.Println("  实时状态分布:")
+		for _, s := range []string{proto.StatusPending, proto.StatusDispatched, proto.StatusAcknowledged, proto.StatusCompleted, proto.StatusFailed, proto.StatusCancelled} {
+			if n := statusCount[s]; n > 0 {
+				fmt.Printf("    %-14s %d\n", s, n)
+			}
+		}
+	}
+	fmt.Println()
+	fmt.Println("--- 文件传输 ---")
+	fmt.Printf("  上传: %d 次 (%s)  下载: %d 次 (%s)  失败: %d\n",
+		health.XferUploads, formatSize(health.XferUploadBytes),
+		health.XferDownloads, formatSize(health.XferDownloadBytes),
+		health.XferFailures)
 	fmt.Println()
 	fmt.Printf("--- Agent: %d 在线 ---\n", agentsResp.Count)
+	for _, a := range agentsResp.Agents {
+		fmt.Printf("  %-40s %-20s %-12s v%s caps=%d tags=%v\n",
+			a.AgentID, a.Hostname, a.OS, a.Version, len(a.Capabilities), a.Tags)
+	}
 	return nil
 }
 

@@ -173,6 +173,80 @@ func (a *AgentCerts) enroll(ctx context.Context, agentID, token string) error {
 	return nil
 }
 
+// renew 用现有 mTLS 证书向 Relay /api/renew 续签(W7 修复:不依赖一次性 token)。
+// 与 enroll 的区别:用现有证书做 mTLS 鉴权(而非 token),Relay 不撤销旧证(续签不断连)。
+// 原子写证书(temp+rename,同时修 E1:防中途崩溃留截断文件致 token 白费)。
+func (a *AgentCerts) renew(ctx context.Context, agentID string) error {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return fmt.Errorf("生成密钥失败: %w", err)
+	}
+	csrTmpl := &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: agentID},
+		DNSNames: []string{agentID},
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTmpl, key)
+	if err != nil {
+		return fmt.Errorf("创建 CSR 失败: %w", err)
+	}
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+
+	renewURL := wsToHTTP(a.relayURL) + "/api/renew"
+	body, _ := json.Marshal(map[string]string{"csr_pem": string(csrPEM)})
+	req, _ := http.NewRequestWithContext(ctx, "POST", renewURL, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	// 用现有 mTLS 证书鉴权(非 http.DefaultClient,区别于 enroll)
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: a.TLSConfig()}}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("renew 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("renew HTTP %d", resp.StatusCode)
+	}
+	var respBody proto.EnrollResp
+	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
+		return fmt.Errorf("renew 响应解析失败: %w", err)
+	}
+	if !respBody.Success {
+		return fmt.Errorf("renew 失败: %s", respBody.Error)
+	}
+	// 原子写证书(E1 修复:temp+rename,防中途崩溃留截断文件)
+	if err := atomicWriteFile(a.certPath, []byte(respBody.CertPEM), 0644); err != nil {
+		return err
+	}
+	keyDER, _ := x509.MarshalPKCS8PrivateKey(key)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	if err := atomicWriteFile(a.keyPath, keyPEM, 0600); err != nil {
+		return err
+	}
+	if err := atomicWriteFile(a.caPath, []byte(respBody.CAPEM), 0644); err != nil {
+		return err
+	}
+	cert, err := tls.X509KeyPair([]byte(respBody.CertPEM), keyPEM)
+	if err != nil {
+		return err
+	}
+	a.cert = &cert
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM([]byte(respBody.CAPEM))
+	a.caPool = pool
+	log.Printf("[enroll] 证书续签成功(经 /api/renew),有效期至 %s",
+		time.Unix(respBody.ExpiresAt, 0).Format("2006-01-02 15:04:05"))
+	return nil
+}
+
+// atomicWriteFile 原子写文件(temp+rename),防中途崩溃留截断文件(E1 修复)。
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 // TLSConfig 返回用于 mTLS 连接的 TLS 配置。
 func (a *AgentCerts) TLSConfig() *tls.Config {
 	if a.cert == nil {

@@ -1,4 +1,4 @@
-package main
+package ca
 
 import (
 	"crypto/ecdsa"
@@ -72,8 +72,12 @@ func LoadOrCreateCA(dataDir string) (*CA, error) {
 
 	// 尝试加载现有 CA
 	if err := ca.load(); err == nil {
-		// 加载 CRL 状态（即使根证书加载成功，状态文件可能不存在——不致命）
-		_ = ca.loadState()
+		// CRL1 修复:loadState 失败(状态文件存在但损坏)fail-closed——原实现 `_ =` 吞错,
+		// revoked 静默清空 → 已撤销的 Agent 证书全部重新放行(吊销失效,失陷主机可重新上线)。
+		// 现拒绝启动,需运维检查/恢复 ca-state.json 后再启动。
+		if err := ca.loadState(); err != nil {
+			return nil, fmt.Errorf("CA 状态文件损坏(fail-closed,拒绝静默清空撤销集,请检查 %s): %w", ca.statePath, err)
+		}
 		return ca, nil
 	}
 
@@ -174,6 +178,9 @@ func (c *CA) createRoot() error {
 // CAPEM 返回根 CA 证书的 PEM（发给 Agent 用于校验 Relay）。
 func (c *CA) CAPEM() []byte { return c.caPEM }
 
+// RootCert 返回根证书对象(拆包后供 relay 构造 TLS ClientCAs 池;架构中5)。
+func (c *CA) RootCert() *x509.Certificate { return c.rootCert }
+
 // GenerateEnrollmentToken 为指定 agentID 生成一次性注册令牌。
 // 同一 agentID 重复生成会覆盖旧令牌。
 // E3：记录 createdAt，校验时用于过期判断。
@@ -218,7 +225,18 @@ func (c *CA) ValidateEnrollmentToken(token, agentID string) bool {
 // P1-S6 修复:重新 enroll 前撤销该 agentID 的所有旧证书(把旧 serial 加入 revoked)。
 // 这样攻击者窃取旧 token 完成 enroll 后,管理员重新 enroll 合法主机时,
 // 攻击者的旧证书会被立即作废。
+// SignAgentCSR 签发证书并撤销旧证(用于 enroll/re-enroll)。
 func (c *CA) SignAgentCSR(csrPEM []byte, agentID string, ttl time.Duration) ([]byte, error) {
+	return c.signAgentCSR(csrPEM, agentID, ttl, true)
+}
+
+// SignAgentCSRNoRevoke 签发证书但不撤销旧证(用于 renew,保留旧证到自然过期)。
+// W7 修复:续签不断连——旧证在自然过期前仍可用于现有连接。
+func (c *CA) SignAgentCSRNoRevoke(csrPEM []byte, agentID string, ttl time.Duration) ([]byte, error) {
+	return c.signAgentCSR(csrPEM, agentID, ttl, false)
+}
+
+func (c *CA) signAgentCSR(csrPEM []byte, agentID string, ttl time.Duration, revokeOld bool) ([]byte, error) {
 	block, _ := pem.Decode(csrPEM)
 	if block == nil {
 		return nil, errors.New("CSR PEM 解码失败")
@@ -248,13 +266,14 @@ func (c *CA) SignAgentCSR(csrPEM []byte, agentID string, ttl time.Duration) ([]b
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// P1-S6:重新 enroll 时撤销该 agentID 的所有旧证书
-	// (旧实现只存最新 serial,旧证书 24h 内仍可用且无法 revoke)
-	for _, oldSerial := range c.issued[agentID] {
-		c.revoked[oldSerial] = true
+	// P1-S6:re-enroll(revokeOld=true)撤销旧证;renew(revokeOld=false)保留旧证(W7:续签不断连)
+	if revokeOld {
+		for _, oldSerial := range c.issued[agentID] {
+			c.revoked[oldSerial] = true
+		}
 	}
 
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, c.rootCert, csr.PublicKey, c.rootKey)
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, c.RootCert(), csr.PublicKey, c.rootKey)
 	if err != nil {
 		return nil, fmt.Errorf("签发证书失败: %w", err)
 	}
@@ -369,5 +388,10 @@ func (c *CA) saveState() {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(c.statePath, data, 0600)
+	// CRL1:原子写(temp+rename),防 saveState 自身写一半断电 → 半截 ca-state.json
+	// → 下次启动 loadState 解析失败(现在会 fail-closed 拒绝启动)。
+	tmp := c.statePath + ".tmp"
+	if os.WriteFile(tmp, data, 0600) == nil {
+		os.Rename(tmp, c.statePath)
+	}
 }

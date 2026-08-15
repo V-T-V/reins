@@ -13,7 +13,7 @@
 #   ./scripts/quickstart.sh agent        # 被控端
 #   ./scripts/quickstart.sh cli          # 操作端
 set -euo pipefail
-VERSION="${VERSION:-v3.9.0}"
+VERSION="${VERSION:-v4.5.0}"
 DIR="${DIR:-$HOME/.go-rmm}"
 MODE="${1:-server}"
 G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; N='\033[0m'

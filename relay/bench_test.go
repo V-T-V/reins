@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QiuShichang/go-rmm/internal/ca"
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
@@ -204,14 +205,14 @@ func BenchmarkPolicyCheck(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		p.Check(cmd)
+		p.CheckCommand(cmd)
 	}
 }
 
 // BenchmarkCASignAgentCSR CA 签发证书吞吐。
 func BenchmarkCASignAgentCSR(b *testing.B) {
 	dir := b.TempDir()
-	ca, _ := LoadOrCreateCA(dir)
+	authority, _ := ca.LoadOrCreateCA(dir)
 
 	// 预生成 CSR（不计时）
 	key := genBenchmarkKey()
@@ -220,7 +221,7 @@ func BenchmarkCASignAgentCSR(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		ca.SignAgentCSR(csrPEM, fmt.Sprintf("bench-%d", i), time.Hour)
+		authority.SignAgentCSR(csrPEM, fmt.Sprintf("bench-%d", i), time.Hour)
 	}
 }
 
@@ -243,4 +244,28 @@ func genBenchmarkCSR(b *testing.B, key *ecdsaPrivateKey, agentID string) []byte 
 		b.Fatal(err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+}
+
+// BenchmarkSaveTaskConcurrent C2 验证:并发写吞吐(db.Batch 自动合并并发写事务)。
+// Batch 的收益在并发——多 goroutine 同时写时合并为单 fsync;串行调用无合并机会。
+func BenchmarkSaveTaskConcurrent(b *testing.B) {
+	dir := b.TempDir()
+	s, _ := OpenStore(filepath.Join(dir, "bench.db"))
+	defer s.Close()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			task := proto.TaskRequest{
+				TaskID:  fmt.Sprintf("benchc-%d-%d", b.N, i),
+				Type:    proto.TaskPowerShell,
+				AgentID: "bench-agent",
+				Payload: json.RawMessage(`{"command":"Get-Process"}`),
+			}
+			s.SaveTask(StoredTask{Request: task, Status: StatusPending})
+			i++
+		}
+	})
 }

@@ -51,6 +51,27 @@
   .result-img { max-width: 100%; margin-top: 8px; border: 1px solid #30363d; border-radius: 4px; }
 
   .hint { color: #6e7681; font-size: 12px; margin-top: 8px; }
+  /* Agent 任务面板(2026-08-06) */
+  .agent-step { display: flex; gap: 10px; align-items: center; padding: 8px 12px; border: 1px solid #30363d; border-radius: 4px; margin-bottom: 6px; background: #0d1117; }
+  .agent-step .idx { width: 22px; height: 22px; line-height: 22px; text-align: center; border-radius: 50%; background: #21262d; font-size: 12px; flex: none; }
+  .agent-step.pending .idx { background: #21262d; }
+  .agent-step.running { border-color: #58a6ff; }
+  .agent-step.running .idx { background: #1f6feb; }
+  .agent-step.done .idx { background: #238636; }
+  .agent-step.failed { border-color: #f85149; }
+  .agent-step.failed .idx { background: #da3633; }
+  .agent-step.replanned .idx { background: #d29922; }
+  .agent-step .goal { flex: 1; color: #e6edf3; }
+  .agent-step .tool { font-size: 11px; color: #8b949e; font-family: monospace; }
+  .agent-step .st { font-size: 11px; color: #8b949e; flex: none; }
+  .agent-step.done .st { color: #3fb950; }
+  .agent-step.failed .st { color: #f85149; }
+  .agent-evt { padding: 2px 0; color: #8b949e; }
+  .agent-evt .k { color: #58a6ff; }
+  .agent-evt .ok { color: #3fb950; }
+  .agent-evt .fail { color: #f85149; }
+  .agent-hist { background: #21262d; border: none; color: #c9d1d9; padding: 3px 10px; border-radius: 12px; font-size: 12px; cursor: pointer; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-hist:hover { background: #30363d; }
   /* D6 metrics 面板 */
   .metric { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 8px 12px; min-width: 90px; }
   .metric-label { display: block; font-size: 11px; color: #8b949e; }
@@ -119,6 +140,34 @@
       <span class="relay-badge" id="relay-info">Relay: 连接中...</span>
     </div>
     <div class="content">
+      <!-- Agent 任务(自然语言编排,2026-08-06) -->
+      <div class="panel">
+        <div class="panel-header">🤖 Agent 任务 <span style="font-weight:400;color:#8b949e;font-size:12px">自然语言描述 → 自动规划 → 逐步执行</span></div>
+        <div class="panel-body">
+          <label for="agent-task-input">任务描述</label>
+          <textarea id="agent-task-input" placeholder="例如：查看所有 Agent 的系统信息，找出 CPU 占用最高的进程&#10;例如：在 agent-01 上运行磁盘空间检查并汇报结果"></textarea>
+          <div class="row" style="margin-top:10px;align-items:flex-end">
+            <div style="flex:0 0 260px">
+              <label for="agent-agent-select">限定 Agent(可选)</label>
+              <select id="agent-agent-select">
+                <option value="">自动选择(工具自行决定)</option>
+              </select>
+            </div>
+            <div style="display:flex;gap:8px;padding-bottom:2px">
+              <button id="agent-run-btn" onclick="window.__runAgentTask()">▶ 执行任务</button>
+              <button id="agent-stop-btn" class="cancel-btn" style="padding:8px 16px;display:none" onclick="window.__stopAgentTask()">⏹ 停止</button>
+            </div>
+          </div>
+          <div id="agent-history" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"></div>
+          <!-- 运行区:计划/事件/结果 -->
+          <div id="agent-run-area" style="margin-top:14px">
+            <div id="agent-status" class="hint" style="display:none"></div>
+            <div id="agent-plan" style="margin-top:8px"></div>
+            <div id="agent-events" style="margin-top:8px;max-height:260px;overflow-y:auto;font-family:monospace;font-size:12px"></div>
+            <div id="agent-answer" style="margin-top:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px;display:none;white-space:pre-wrap"></div>
+          </div>
+        </div>
+      </div>
       <!-- 任务下发 -->
       <div class="panel">
         <div class="panel-header">下发任务</div>

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -61,13 +62,26 @@ func base64Decode(s string) ([]byte, error) {
 //   - streamingClient:数据平面(文件传输/SSE),无超时(靠 ctx)
 // 两者共享一个 Transport,复用连接池。
 
+// proxyFunc 代理决策函数(P2-B)。
+// 对 loopback(localhost/127.0.0.1/[::1])目标直连,不走代理——
+// 用户本机 http_proxy 会劫持 127.0.0.1 流量,导致本地 Relay/隧道请求
+// 被送到代理服务器而假死(会话实测:隧道 8s 超时,curl --noproxy 才通)。
+// 其余目标沿用环境代理(HTTP_PROXY/HTTPS_PROXY/NO_PROXY)。
+func proxyFunc(req *http.Request) (*url.URL, error) {
+	host := req.URL.Hostname()
+	switch host {
+	case "localhost", "127.0.0.1", "::1", "0.0.0.0":
+		return nil, nil // 直连
+	}
+	return http.ProxyFromEnvironment(req)
+}
+
 var (
 	httpTransport = &http.Transport{
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 32,
 		IdleConnTimeout:     90 * time.Second,
-		// Windows 上 ProxyFromEnvironment 会读 HTTP_PROXY/HTTPS_PROXY
-		Proxy: http.ProxyFromEnvironment,
+		Proxy:               proxyFunc,
 	}
 
 	controlClient = &http.Client{
@@ -103,7 +117,7 @@ func applyTLSConfig(cfg config) {
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 32,
 		IdleConnTimeout:     90 * time.Second,
-		Proxy:               http.ProxyFromEnvironment,
+		Proxy:               proxyFunc, // P2-B:loopback 直连
 		TLSClientConfig:     tlsCfg,
 	}
 	controlClient.Transport = httpTransport

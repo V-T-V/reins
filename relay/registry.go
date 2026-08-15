@@ -2,6 +2,7 @@ package main
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -17,6 +18,7 @@ type agentEntry struct {
 	lastSeq      int64           // 最近心跳序号
 	registeredAt time.Time       // 注册时间
 	xferStats    proto.Heartbeat // V1:最近一次心跳携带的传输计数器(ub/db/uc/dc/fc)
+	inFlight     atomic.Int64    // H2:在途任务数(dispatch +1 / 终态·reaper回退 -1),供调度 O(1) 读
 }
 
 // Registry 维护在线 Agent 注册表。
@@ -70,6 +72,46 @@ func (r *Registry) Unregister(agentID string, conn *wsConn) bool {
 	delete(r.agents, agentID)
 	delete(r.capabilityCache, agentID) // D1:清理缓存
 	return true
+}
+
+// IncInFlight / DecInFlight / InFlight:H2 在途任务计数(atomic,供 SelectBestAgent O(1) 读)。
+// 替代 getInflightCount 的 ListTasksByStatus 全扫描(原 2 次 db 事务 + O(任务数) 遍历/Agent)。
+// 语义:dispatch +1;任务终态(completed/failed/cancelled)与 reaper 回退 -1。估算值,漂移可接受。
+func (r *Registry) IncInFlight(agentID string) {
+	r.mu.RLock()
+	e := r.agents[agentID]
+	r.mu.RUnlock()
+	if e != nil {
+		e.inFlight.Add(1)
+	}
+}
+func (r *Registry) DecInFlight(agentID string) {
+	r.mu.RLock()
+	e := r.agents[agentID]
+	r.mu.RUnlock()
+	if e == nil {
+		return
+	}
+	// H-3:下限钳 0。防三类负漂移:cancel 后 result 到、重连清零后旧任务 reap/result、
+	// 以及任何重复 Dec。负值会让 SelectBestAgent 误选(得分极低)→ 该 Agent 被持续过载。
+	for {
+		old := e.inFlight.Load()
+		if old <= 0 {
+			return
+		}
+		if e.inFlight.CompareAndSwap(old, old-1) {
+			return
+		}
+	}
+}
+func (r *Registry) InFlight(agentID string) int64 {
+	r.mu.RLock()
+	e := r.agents[agentID]
+	r.mu.RUnlock()
+	if e == nil {
+		return 0
+	}
+	return e.inFlight.Load()
 }
 
 // Touch 更新心跳时间与序号。

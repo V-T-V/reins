@@ -1,0 +1,26 @@
+{
+  "_comment": "go-rmm Agent 配置示例。拷贝为 config.json 后按实际修改。字段定义见 agent/config.go 的 Config struct。",
+
+  "agent_id": "",
+  "relay_url": "ws://your-relay-host:7780/agent",
+  "token": "your-auth-or-enrollment-token",
+
+  "heartbeat": "15s",
+  "max_concurrent_tasks": 4,
+
+  "mtls": false,
+  "allow_all_roots": true,
+  "allowed_roots": [],
+  "workspace": "",
+
+  "tags": {
+    "env": "prod",
+    "role": "slave"
+  },
+
+  "glm": {
+    "api_key": "",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "model": "glm-5-turbo"
+  }
+}

@@ -21,8 +21,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/coder/websocket"
-
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
@@ -134,9 +132,7 @@ func (r *Relay) handleTunnelData(w http.ResponseWriter, req *http.Request) {
 		n, err := req.Body.Read(buf)
 		if n > 0 {
 			frame := proto.BuildTunnelFrame(proto.ChanTypeTunnelData, tunnelID, 0, buf[:n])
-			conn.writeMu.Lock()
-			werr := conn.conn.Write(ctx, websocket.MessageBinary, frame)
-			conn.writeMu.Unlock()
+			werr := conn.writeBinaryData(ctx, frame)
 			if werr != nil {
 				writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("WS写失败: %w", werr)))
 				return

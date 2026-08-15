@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -29,6 +30,15 @@ type Agent struct {
 	disp  *executors.Dispatcher
 	pool  *WorkerPool  // C6 并发限流
 	certs *AgentCerts  // C8 mTLS 证书（nil=非 mTLS 模式）
+	// activeConn 指向当前到 Relay 的活跃 WS 连接。
+	// 任务执行期间连接可能重连，sendResult 优先用 activeConn（最新连接）
+	// 而非任务派发时捕获的 wc 快照，避免旧半开连接 writeBytes 假成功导致 result 丢失。
+	activeConn atomic.Pointer[wsConn]
+}
+
+// currentConn 返回当前活跃连接（可能为 nil，如连接尚未建立或刚断开）。
+func (a *Agent) currentConn() *wsConn {
+	return a.activeConn.Load()
 }
 
 func NewAgent(cfg Config, disp *executors.Dispatcher) *Agent {
@@ -60,9 +70,23 @@ func mtlsHTTPClient(certs *AgentCerts) *http.Client {
 // 阻塞直到 ctx 取消。断线自动指数退避重连（1s→2s→…→30s 封顶）。
 func (a *Agent) Run(ctx context.Context) error {
 	agentBizID = a.cfg.AgentID
+	// W7:mTLS 证书后台续签(进程级,只启动一次;原只在启动时检查→24h 必过期→永久离线)
+	if a.certs != nil {
+		go a.certRenewLoop(ctx)
+	}
 	backoff := initialBackoff
 	rng := rand.New(rand.NewSource(time.Now().UnixNano())) // S1: jitter 随机源
-	relayIdx := 0 // L2: 当前使用的 relay 索引(RelayURLs 轮询)
+
+	// W1 修复:候选 Relay 列表 = 主 URL 优先 + 备用(去重)。
+	// 原实现 relayIdx 仅在主 URL 为空时生效,主 URL 配置(典型用法)时永远连主 URL,
+	// 故障切换形同虚设——只 log "切换到备用" 却从不真切换,nextRelay 没存回 cfg。
+	// 现统一轮询候选:主 URL 失败 → 备用1 → 备用2 → ... → 回主 URL。
+	candidates := buildRelayCandidates(a.cfg.RelayURL, a.cfg.RelayURLs)
+	if len(candidates) == 0 {
+		return fmt.Errorf("无 relay_url 可用(主 URL + 备用列表均空)")
+	}
+	relayIdx := 0
+
 	for {
 		// 自更新:pendingRestart 标记触发优雅退出,SCM 自动拉新版本
 		if pendingRestart {
@@ -72,15 +96,11 @@ func (a *Agent) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// L2: 选择 relay(主 URL 优先,失败后轮询 RelayURLs)
-		relayURL := a.cfg.RelayURL
-		if relayURL == "" && len(a.cfg.RelayURLs) > 0 {
-			relayURL = a.cfg.RelayURLs[relayIdx%len(a.cfg.RelayURLs)]
-		}
-		if relayURL == "" {
-			return fmt.Errorf("无 relay_url 可用(主 URL + 备用列表均空)")
-		}
-		a.cfg.RelayURL = relayURL // connectAndServe 用此字段
+		// 轮询候选:当前 chosen = candidates[relayIdx],失败后下一轮 relayIdx++ 切下一个
+		chosen := candidates[relayIdx%len(candidates)]
+		a.cfg.RelayURL = chosen // connectAndServe 用此字段
+
+		connectStart := time.Now()
 		err := a.connectAndServe(ctx)
 		// 自更新可能在 connectAndServe 内完成,再次检查
 		if pendingRestart {
@@ -90,11 +110,18 @@ func (a *Agent) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err() // 主动退出,不重连
 		}
-		// L2: 连接失败时切换到下一个备用 relay
-		if len(a.cfg.RelayURLs) > 0 {
-			relayIdx++
-			nextRelay := a.cfg.RelayURLs[relayIdx%len(a.cfg.RelayURLs)]
-			log.Printf("[agent] 连接 %s 断开: %v,切换到备用 %s", relayURL, err, nextRelay)
+		// W5 修复:曾成功保持较久(≥60s)的健康连接断开,说明不是持续性故障,
+		// 重置退避到初值,避免一次抖动后每次断线都等满 30s。
+		if time.Since(connectStart) >= 60*time.Second {
+			backoff = initialBackoff
+		}
+		// W1:连接失败切换到下一个候选(主 URL → 备用 → ... → 回主 URL)
+		relayIdx++
+		nextChosen := candidates[relayIdx%len(candidates)]
+		if len(candidates) > 1 {
+			log.Printf("[agent] 连接 %s 断开: %v,下次将尝试 %s", chosen, err, nextChosen)
+		} else {
+			log.Printf("[agent] 连接 %s 断开: %v", chosen, err)
 		}
 		// S1 修复:full jitter 退避,防 thundering herd
 		jittered := time.Duration(rng.Int63n(int64(backoff)))/10*9 + backoff/10
@@ -110,6 +137,48 @@ func (a *Agent) Run(ctx context.Context) error {
 			backoff = maxBackoff
 		}
 	}
+}
+
+// certRenewLoop 后台定期检查证书是否需要续签,通过 /api/renew 续签(W7 修复)。
+// 原实现只在进程启动时 LoadOrEnroll 检查 needRenew → 续签走 enroll(一次性 token)→ 24h 必失败。
+// 现后台 goroutine 每小时检查,走 /api/renew(mTLS 证书鉴权,不依赖 token)。
+func (a *Agent) certRenewLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if a.certs == nil || !a.certs.needRenew() {
+				continue
+			}
+			log.Printf("[agent] 证书即将过期,后台续签(经 /api/renew)")
+			renewCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if err := a.certs.renew(renewCtx, a.cfg.AgentID); err != nil {
+				log.Printf("[agent] 证书续签失败: %v(用旧证书继续,下次再试)", err)
+			}
+			cancel()
+		}
+	}
+}
+
+// buildRelayCandidates 构建去重的候选 Relay URL 列表:主 URL 优先,后接备用列表(W1)。
+func buildRelayCandidates(primary string, backups []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	add := func(u string) {
+		u = strings.TrimSpace(u)
+		if u != "" && !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	add(primary)
+	for _, u := range backups {
+		add(u)
+	}
+	return out
 }
 
 // connectAndServe 建立一次连接的完整生命周期。
@@ -145,6 +214,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	// 子 ctx：连接级取消（断线时让心跳 goroutine 退出）
 	connCtx, connCancel := context.WithCancel(ctx)
 	defer connCancel()
+	wc.startWriter(connCtx) // 弱网 A1:写优先级 writer goroutine(P0 心跳不被 P1 数据饿死)
 	// H3:连接断开时关闭所有 shell 会话(防资源泄漏)
 	defer sessions.CloseAll()
 	// J1:连接断开时关闭所有文件传输会话
@@ -160,6 +230,9 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	if err := a.sendRegister(connCtx, wc); err != nil {
 		return err
 	}
+	// 注册成功：标记为活跃连接（sendResult 优先用此连接发送 result）
+	a.activeConn.Store(wc)
+	defer a.activeConn.CompareAndSwap(wc, nil) // 连接退出时清理（仅当仍是自己时）
 	// 自更新健康确认:注册成功 = 新版本健康,取消回滚倒计时
 	ConfirmUpdateHealthy()
 	// 2. 连接建立后补发队列中积压的结果（R3 修复核心）
@@ -255,7 +328,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context, wc *wsConn) {
 			// V1:心跳携带 Agent 传输计数器(供 Relay 聚合,打通 per-agent 可观测性)
 			hb.UploadBytes, hb.DownloadBytes, hb.UploadCount, hb.DownloadCount, hb.FailedCount = transfers.SnapshotStats()
 			wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
-			if err := wc.writeEnvelope(wctx, proto.TypeHeartbeat, "relay", hb); err != nil {
+			if err := wc.writeControlEnvelope(wctx, proto.TypeHeartbeat, "relay", hb); err != nil {
 				log.Printf("[agent] 心跳发送失败: %v", err)
 				wcancel()
 				// C2 修复：主动关闭连接，强制打断 recvLoop 的 Read，
@@ -278,7 +351,7 @@ func (a *Agent) deadConnWatchdog(ctx context.Context, wc *wsConn) {
 	if interval < 5*time.Second {
 		interval = 5 * time.Second
 	}
-	threshold := 2 * interval
+	threshold := 3 * interval // B1:弱网容忍度从 2×→3×(45s),防突发丢包致连续 2 次心跳丢失误杀健康连接
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -354,29 +427,33 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 			// S7:Relay 对心跳的确认帧。仅用于证明链路双向可用
 			// (read 已刷新 lastRecv,watchdog 不会误判死连接),无业务动作。
 		case proto.TypeTaskRequest:
-			a.handleTaskWithPool(ctx, wc, env, a.pool)
+			safeCall("task", func() { a.handleTaskWithPool(ctx, wc, env, a.pool) })
 		case proto.TypeTaskCancel:
-			a.handleCancel(env)
+			safeCall("cancel", func() { a.handleCancel(env) })
 		case proto.TypeShellOpen:
-			a.handleShellOpen(ctx, wc, env)
+			safeCall("shell_open", func() { a.handleShellOpen(ctx, wc, env) })
 		case proto.TypeShellInput:
-			a.handleShellInput(env)
+			safeCall("shell_input", func() { a.handleShellInput(env) })
 		case proto.TypeShellClose:
-			a.handleShellClose(env)
+			safeCall("shell_close", func() { a.handleShellClose(env) })
 		case proto.TypeFileTransferInit:
-			a.handleTransferInit(ctx, wc, env)
+			safeCall("xfer_init", func() { a.handleTransferInit(ctx, wc, env) })
 		case proto.TypeFileTransferCancel:
-			var cancel proto.FileTransferCancel
-			if err := env.Decode(&cancel); err == nil {
-				transfers.Cancel(cancel.TransferID)
-			}
+			safeCall("xfer_cancel", func() {
+				var cancel proto.FileTransferCancel
+				if err := env.Decode(&cancel); err == nil {
+					transfers.Cancel(cancel.TransferID)
+				}
+			})
 		case proto.TypeTunnelOpen:
-			a.handleTunnelOpen(ctx, wc, env)
+			safeCall("tunnel_open", func() { a.handleTunnelOpen(ctx, wc, env) })
 		case proto.TypeTunnelClose:
-			var tc proto.TunnelClose
-			if err := env.Decode(&tc); err == nil {
-				tunnelMgr.Close(tc.TunnelID, "remote closed: "+tc.Reason)
-			}
+			safeCall("tunnel_close", func() {
+				var tc proto.TunnelClose
+				if err := env.Decode(&tc); err == nil {
+					tunnelMgr.Close(tc.TunnelID, "remote closed: "+tc.Reason)
+				}
+			})
 		default:
 			log.Printf("[agent] 忽略消息类型 %s", env.Type)
 		}
@@ -434,22 +511,12 @@ func (a *Agent) runTask(parent context.Context, wc *wsConn, env proto.Envelope) 
 	// 5. 执行
 	// update 任务特殊处理:不走标准 Executor(强依赖 agent 包的 os.Executable/version)
 	//
-	// M1 主从架构:master 角色拒绝 update 任务。
-	// 主 Agent 的设计目标是"极简稳定永不更新",任何对主自身的更新尝试都被拒绝,
-	// 防止主被意外/恶意更新导致失去救援能力。
-	var result proto.TaskResult
-	if task.Type == proto.TaskUpdate {
-		if a.cfg.Role == "master" {
-			result = proto.TaskResult{
-				Success: false,
-				Error:   "master 角色拒绝更新:主 Agent 设计为永不更新(保证救援能力)。如需更新主,请手动替换二进制。",
-			}
-		} else {
-			result = updateExec.execUpdate(task.Payload)
-		}
-	} else {
-		result = a.disp.Dispatch(ctx, task, progress)
-	}
+	// 统一经 Dispatcher 分发(建议 C / P0-1 修复)。
+	// 原实现 update 任务硬编码 if task.Type==TaskUpdate 绕过 Dispatcher → 能力协商断裂
+	// (Agent 不上报 update 能力,Relay agentSupports 拒绝所有 update)+ 架构例外。
+	// 现 update 作为标准 Executor 注册(slave 执行 / master 不注册故 fail-closed 拒绝),
+	// 统一走 disp.Dispatch。
+	result := a.disp.Dispatch(ctx, task, progress)
 	// 如果是被取消的,标注
 	if ctx.Err() == context.Canceled {
 		result.Error = "任务被取消"
@@ -466,6 +533,11 @@ func (a *Agent) runTask(parent context.Context, wc *wsConn, env proto.Envelope) 
 
 // sendResult 把结果经队列发送，并补发队列中积压的结果。
 func (a *Agent) sendResult(parent context.Context, wc *wsConn, result proto.TaskResult) {
+	// 优先用当前活跃连接（任务执行期间可能已重连，旧 wc 可能半开）
+	conn := a.currentConn()
+	if conn == nil {
+		conn = wc // fallback 到任务派发时捕获的连接
+	}
 	// 构造 Envelope 入队
 	env, err := proto.NewEnvelope(proto.TypeTaskResult, a.cfg.AgentID, "relay", result)
 	if err != nil {
@@ -474,7 +546,7 @@ func (a *Agent) sendResult(parent context.Context, wc *wsConn, result proto.Task
 	}
 	resultQueue.enqueue(env)
 	// 尝试 flush（发送成功出队，失败留队列）
-	resultQueue.flushTo(wc)
+	resultQueue.flushTo(conn)
 	if resultQueue.len() > 0 {
 		log.Printf("[agent] 结果 %s 入队待发（队列剩 %d），将下次重连补发",
 			result.TaskID, resultQueue.len())
@@ -556,9 +628,7 @@ func (a *Agent) handleTunnelOpen(ctx context.Context, wc *wsConn, env proto.Enve
 	writeBin := func(frame []byte) error {
 		wctx, wcancel := contextWithTimeout(10 * time.Second)
 		defer wcancel()
-		wc.writeMu.Lock()
-		defer wc.writeMu.Unlock()
-		return wc.conn.Write(wctx, websocket.MessageBinary, frame)
+		return wc.writeBinaryData(wctx, frame)
 	}
 	tunnelMgr.HandleOpen(open, writeBin)
 }
@@ -643,4 +713,19 @@ func idempotencySweepLoop(ctx context.Context) {
 			idempotencyCache.sweep()
 		}
 	}
+}
+
+// safeCall 包装 handler 调用,防止单个 handler/任务 panic 崩溃整个 Agent 进程(W3)。
+//
+// 原实现仅 handleUploadData 有 recover,其余 handler(shell/tunnel/transfer/cancel 及
+// 经 pool 执行的 guiclick/browse/powershell 等)panic 会直接带崩 Agent → SCM 重启 →
+// 连接风暴 + 在途 shell/tunnel/transfer 全部 CloseAll。一个坏任务不应放倒整个 Agent。
+// 这里对 recvLoop 的每个 handler 统一兜底,panic 仅记日志 + 堆栈,不影响连接与其他任务。
+func safeCall(name string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[agent] %s 处理 panic(已恢复,防崩溃整个 Agent): %v\n%s", name, r, debug.Stack())
+		}
+	}()
+	fn()
 }

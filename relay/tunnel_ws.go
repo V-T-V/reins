@@ -200,9 +200,7 @@ func (r *Relay) handleTunnelWS(w http.ResponseWriter, req *http.Request) {
 			}
 			// 数据帧 → Agent(与 handleTunnelData 相同:经 Agent WS 二进制帧转发)。
 			frame := proto.BuildTunnelFrame(proto.ChanTypeTunnelData, tunnelID, 0, payload)
-			conn.writeMu.Lock()
-			werr := conn.conn.Write(ctx, websocket.MessageBinary, frame)
-			conn.writeMu.Unlock()
+			werr := conn.writeBinaryData(ctx, frame)
 			if werr != nil {
 				log.Printf("[tunnel-ws] 隧道 %s 转发 Agent 失败: %v", tunnelID, werr)
 				closeTunnel()

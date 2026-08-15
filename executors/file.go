@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -81,7 +82,11 @@ func (e *FileExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFunc)
 	}
 }
 
+// upload [Deprecated 架构中6] ContentB64 内联路径——仅小文件 API 兼容用,
+// 主路径是流式 /api/transfer/*(CLI chunked_upload,分片+SHA256+断点续传)。
+// 本路径无 hash 校验、受 32MiB WS 消息限、base64 +33% 体积,勿用于新集成。
 func (e *FileExecutor) upload(task proto.FileTask) proto.TaskResult {
+	log.Printf("[file] ⚠️ deprecated: ContentB64 内联上传(建议走流式 /api/transfer/upload), path=%s bytes=%d", task.Path, len(task.ContentB64)/4*3)
 	data, err := base64.StdEncoding.DecodeString(task.ContentB64)
 	if err != nil {
 		return fail("", "base64 解码失败: "+err.Error())

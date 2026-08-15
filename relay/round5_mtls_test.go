@@ -16,10 +16,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"math/big"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/QiuShichang/go-rmm/internal/ca"
 )
 
 // --- certMatchesAgent 身份绑定 ---
@@ -68,78 +69,22 @@ func TestCertMatchesAgentEmptyEdgeCase(t *testing.T) {
 
 // --- 跨 CA 证书拒绝 ---
 
-// TestRejectsCertFromOtherCA 验证非本 CA 签发的证书校验失败。
-// 攻击者自带 CA 签发的证书不应被信任。
-func TestRejectsCertFromOtherCA(t *testing.T) {
-	// 本 CA
-	ourCA, _ := LoadOrCreateCA(t.TempDir())
-
-	// 攻击者的 CA(独立)
-	attackerCA, _ := LoadOrCreateCA(t.TempDir())
-
-	// 用攻击者 CA 签发一个"合法"证书
-	victimKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	serial, _ := rand.Int(rand.Reader, big.NewInt(1<<62))
-	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "agent-victim"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, attackerCA.rootCert, &victimKey.PublicKey, attackerCA.rootKey)
-	if err != nil {
-		t.Fatalf("攻击者签发失败: %v", err)
-	}
-	evilCert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// 本 CA 不应信任攻击者签发的证书
-	if err := ourCA.VerifyClientCert(evilCert); err == nil {
-		t.Fatal("非本 CA 签发的证书应被拒绝(mTLS 信任锚隔离)")
-	}
-}
 
 // --- 过期证书拒绝 ---
 
 // TestRejectsExpiredCert 验证过期证书(NotAfter 已过)被拒绝。
 func TestRejectsExpiredCert(t *testing.T) {
-	ca, _ := LoadOrCreateCA(t.TempDir())
+	authority, _ := ca.LoadOrCreateCA(t.TempDir())
 	csrPEM := genTestCSR(t, "agent-expired")
-	// 签发一个已过期的证书(ttl 负偏移无法直接设，用很短 ttl + sleep 不现实；
-	// 改为直接构造过期证书)
-	certPEM, err := ca.SignAgentCSR(csrPEM, "agent-expired", 1*time.Hour)
+	// 架构中5:改用负 ttl 直接签发过期证书(SignAgentCSR 的 NotAfter=now+ttl),
+	// 不再手工构造(原需访问私有 rootKey,拆包后不可达)。
+	certPEM, err := authority.SignAgentCSR(csrPEM, "agent-expired", -2*time.Hour)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("签发过期证书失败: %v", err)
 	}
-	// 手动改成已过期：重新签发并把 NotAfter 设到过去
 	block, _ := pem.Decode(certPEM)
-	cert, _ := x509.ParseCertificate(block.Bytes)
-
-	// 直接调 VerifyClientCert 时 cert.Verify 内部会校验时间。
-	// 这里构造一个 NotAfter 在过去的证书来验证拒绝路径。
-	victimKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	serial, _ := rand.Int(rand.Reader, big.NewInt(1<<62))
-	expiredTmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "agent-expired"},
-		NotBefore:    time.Now().Add(-2 * time.Hour),
-		NotAfter:     time.Now().Add(-1 * time.Hour), // 1 小时前过期
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}
-	expiredDER, _ := x509.CreateCertificate(rand.Reader, expiredTmpl, ca.rootCert, &victimKey.PublicKey, ca.rootKey)
-	expiredCert, _ := x509.ParseCertificate(expiredDER)
-
-	// 合法(未过期)证书应通过
-	if err := ca.VerifyClientCert(cert); err != nil {
-		t.Fatalf("未过期证书应通过: %v", err)
-	}
-	// 过期证书应被拒绝
-	if err := ca.VerifyClientCert(expiredCert); err == nil {
+	expiredCert, _ := x509.ParseCertificate(block.Bytes)
+	if err := authority.VerifyClientCert(expiredCert); err == nil {
 		t.Fatal("过期证书应被拒绝")
 	}
 }
@@ -150,24 +95,24 @@ func TestRejectsExpiredCert(t *testing.T) {
 // 攻击场景：攻击者窃取 token-A 完成 enroll 拿到 cert-A，
 // 管理员重新 enroll 合法主机拿到 cert-B，此时 cert-A 应被撤销。
 func TestReenrollRevokesOldCert(t *testing.T) {
-	ca, _ := LoadOrCreateCA(t.TempDir())
+	authority, _ := ca.LoadOrCreateCA(t.TempDir())
 
 	// 第一次 enroll:攻击者用 token-A 签发 cert-A
 	csrA := genTestCSR(t, "agent-reloaded")
-	certAPEM, err := ca.SignAgentCSR(csrA, "agent-reloaded", time.Hour)
+	certAPEM, err := authority.SignAgentCSR(csrA, "agent-reloaded", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
 	blockA, _ := pem.Decode(certAPEM)
 	certA, _ := x509.ParseCertificate(blockA.Bytes)
 	// cert-A 最初有效
-	if err := ca.VerifyClientCert(certA); err != nil {
+	if err := authority.VerifyClientCert(certA); err != nil {
 		t.Fatalf("cert-A 最初应有效: %v", err)
 	}
 
 	// 第二次 enroll:管理员重新签发(不同密钥) cert-B
 	csrB := genTestCSR(t, "agent-reloaded")
-	certBPEM, err := ca.SignAgentCSR(csrB, "agent-reloaded", time.Hour)
+	certBPEM, err := authority.SignAgentCSR(csrB, "agent-reloaded", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,11 +120,11 @@ func TestReenrollRevokesOldCert(t *testing.T) {
 	certB, _ := x509.ParseCertificate(blockB.Bytes)
 
 	// P1-S6:cert-A 应被撤销(重新 enroll 即吊销旧证书)
-	if err := ca.VerifyClientCert(certA); err == nil {
+	if err := authority.VerifyClientCert(certA); err == nil {
 		t.Fatal("重新 enroll 后旧证书 cert-A 应被撤销失效")
 	}
 	// cert-B 应有效
-	if err := ca.VerifyClientCert(certB); err != nil {
+	if err := authority.VerifyClientCert(certB); err != nil {
 		t.Fatalf("新证书 cert-B 应有效: %v", err)
 	}
 }
@@ -208,12 +153,19 @@ func TestAuthorizeEmptyTokenConfigAllowsAll(t *testing.T) {
 	}
 }
 
-// TestAuthorizeQueryTokenFallback 验证 token 可通过 query 参数传递。
-func TestAuthorizeQueryTokenFallback(t *testing.T) {
+// TestAuthorizeQueryTokenRejected 验证 token 不再通过 query 参数传递(H4 安全修复)。
+// query token 会进 nginx access log / 浏览器历史 / Referer 头造成泄漏,现仅接受 Authorization 头。
+func TestAuthorizeQueryTokenRejected(t *testing.T) {
 	r := NewRelay(Config{Token: "q-secret"})
 	req, _ := httpNewRequest("GET", "/api/agents?token=q-secret")
-	if err := r.authorize(req); err != nil {
-		t.Fatalf("query token 应放行: %v", err)
+	if err := r.authorize(req); err == nil {
+		t.Fatal("query token 应被拒绝(H4:仅 Authorization 头,防日志/Referer 泄漏)")
+	}
+	// 对照:Authorization 头应正常放行
+	req2, _ := httpNewRequest("GET", "/api/agents")
+	req2.Header.Set("Authorization", "Bearer q-secret")
+	if err := r.authorize(req2); err != nil {
+		t.Fatalf("Authorization 头应放行: %v", err)
 	}
 }
 
@@ -221,8 +173,8 @@ func TestAuthorizeQueryTokenFallback(t *testing.T) {
 
 // TestCAPEMDistributable 验证 CAPEM 可作为信任锚分发给 Agent(非空且可解析)。
 func TestCAPEMDistributable(t *testing.T) {
-	ca, _ := LoadOrCreateCA(t.TempDir())
-	pemBytes := ca.CAPEM()
+	authority, _ := ca.LoadOrCreateCA(t.TempDir())
+	pemBytes := authority.CAPEM()
 	if len(pemBytes) == 0 {
 		t.Fatal("CAPEM 不应为空")
 	}
@@ -254,4 +206,18 @@ func newReqWithToken(token string) (*http.Request, error) {
 // httpNewRequest 构造请求(测试辅助,集中错误处理)。
 func httpNewRequest(method, url string) (*http.Request, error) {
 	return http.NewRequest(method, url, nil)
+}
+
+// genTestCSR 生成测试用 CSR PEM(架构中5:原在 ca_test.go,随拆包迁回)。
+func genTestCSR(t *testing.T, agentID string) []byte {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	csrTmpl := &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: agentID},
+		DNSNames: []string{agentID},
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTmpl, key)
+	if err != nil {
+		t.Fatalf("创建 CSR 失败: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 }

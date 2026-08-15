@@ -100,25 +100,11 @@ func matchTagAny(tags map[string]string, filter string) bool {
 	return false
 }
 
-// getInflightCount 返回 Agent 在途任务数(简化:从 store 统计)。
+// getInflightCount 返回 Agent 在途任务数。
+// H2:用 Registry 的 atomic in-flight 计数(O(1)),替代原 2 次 ListTasksByStatus
+// 全扫描 + O(任务数) 遍历。SelectBestAgent 从 2N 次 db 事务降为 0。
 func (r *Relay) getInflightCount(agentID string) int {
-	if r.store == nil {
-		return 0
-	}
-	dispatched, _ := r.store.ListTasksByStatus(StatusDispatched)
-	acknowledged, _ := r.store.ListTasksByStatus(StatusAcknowledged)
-	count := 0
-	for _, t := range dispatched {
-		if t.Request.AgentID == agentID {
-			count++
-		}
-	}
-	for _, t := range acknowledged {
-		if t.Request.AgentID == agentID {
-			count++
-		}
-	}
-	return count
+	return int(r.agents.InFlight(agentID))
 }
 
 // handleSelectBest GET /api/scheduler/best —— 智能选择最优 Agent。

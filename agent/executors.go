@@ -38,6 +38,14 @@ func registerExecutors(cfg Config) *executors.Dispatcher {
 		Role:         cfg.Role,      // M1:master 注册最小能力集
 	})
 
+	// 建议 C / P0-1:自更新执行器纳入统一 Dispatcher(修复能力协商断裂 + 架构例外)。
+	// 仅 slave 注册:master 不上报 update 能力,Relay 不把 update 路由给 master(主永不更新);
+	// 误路由时 Dispatcher fail-closed 拒绝。原实现 runTask 里 if task.Type==TaskUpdate 绕过 Dispatcher,
+	// 导致 Agent 能力清单不含 update → Relay 拒绝所有 update 任务。
+	if cfg.Role != "master" {
+		d.Register(&updateExecutor{})
+	}
+
 	// M1 修复:大文件传输引擎复用与 FileExecutor 一致的路径校验策略。
 	// 创建共享的 FilePolicy 实例,同时用于 file 任务和大文件传输。
 	//

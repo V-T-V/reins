@@ -49,6 +49,7 @@
     count.textContent = state.agents.size;
     if (state.agents.size === 0) {
       list.innerHTML = '<div class="empty">等待 Agent 上线...</div>';
+      refreshAgentSelect();
       return;
     }
     list.innerHTML = "";
@@ -66,6 +67,7 @@
       `;
       list.appendChild(div);
     });
+    refreshAgentSelect(); // Agent 任务面板的下拉与侧栏同步
   }
 
   function selectAgent(id) {
@@ -576,6 +578,214 @@
       const content = document.getElementById("shell-content");
       if (content) { content.innerHTML += '<span style="color:#8b949e">\n[会话已关闭]</span>\n'; }
       state.shellSession = null;
+    });
+  }
+
+  // --- Agent 任务面板(自然语言编排,2026-08-06) ---
+  // 借鉴 agentloop/cli.ts 的事件渲染:plan/step/tool_call/tool_result/final 逐事件展示。
+  const agentUI = {
+    controller: null, // AbortController(停止用)
+    eventsEl: null,
+    history: [], // 会话内最近 5 次任务
+  };
+
+  // 填充 Agent 下拉(与侧栏 Agent 列表同步)
+  function refreshAgentSelect() {
+    const sel = document.getElementById("agent-agent-select");
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">自动选择(工具自行决定)</option>';
+    state.agents.forEach((a) => {
+      const opt = document.createElement("option");
+      opt.value = a.agent_id;
+      opt.textContent = a.agent_id + (a.hostname ? " (" + a.hostname + ")" : "");
+      sel.appendChild(opt);
+    });
+    if (cur && state.agents.has(cur)) sel.value = cur;
+  }
+
+  // 提交自然语言任务 → POST /api/agent/run,读 SSE 流实时渲染
+  window.__runAgentTask = async function () {
+    const input = document.getElementById("agent-task-input");
+    const task = input.value.trim();
+    if (!task) return;
+    const sel = document.getElementById("agent-agent-select");
+    const body = { task: task };
+    if (sel && sel.value) body.agent_id = sel.value;
+
+    // UI 重置
+    const planEl = document.getElementById("agent-plan");
+    const evtEl = document.getElementById("agent-events");
+    const ansEl = document.getElementById("agent-answer");
+    const statusEl = document.getElementById("agent-status");
+    planEl.innerHTML = "";
+    evtEl.innerHTML = "";
+    ansEl.style.display = "none";
+    ansEl.textContent = "";
+    statusEl.style.display = "block";
+    statusEl.textContent = "⏳ 提交任务...";
+    document.getElementById("agent-run-btn").disabled = true;
+    document.getElementById("agent-stop-btn").style.display = "inline-block";
+    agentUI.eventsEl = evtEl;
+
+    agentUI.controller = new AbortController();
+    try {
+      const resp = await fetch(api("/api/agent/run"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: agentUI.controller.signal,
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        statusEl.textContent = "❌ " + (err.error || ("HTTP " + resp.status));
+        return;
+      }
+      statusEl.textContent = "🧠 运行中...";
+      // 读 SSE 流(EventSource 不支持 POST,用 fetch + ReadableStream)
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let pendingKind = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, idx).replace(/\r$/, "");
+          buf = buf.slice(idx + 1);
+          if (line.startsWith("event: ")) {
+            pendingKind = line.slice(7).trim();
+          } else if (line.startsWith("data: ") && pendingKind) {
+            handleAgentEvent(pendingKind, line.slice(6), statusEl);
+            pendingKind = "";
+          }
+        }
+      }
+      if (statusEl.textContent.startsWith("🧠")) statusEl.textContent = "✅ 完成";
+    } catch (e) {
+      if (e.name === "AbortError") {
+        statusEl.textContent = "⏹ 已停止";
+      } else {
+        statusEl.textContent = "❌ " + e.message;
+      }
+    } finally {
+      document.getElementById("agent-run-btn").disabled = false;
+      document.getElementById("agent-stop-btn").style.display = "none";
+      agentUI.controller = null;
+    }
+  };
+
+  window.__stopAgentTask = function () {
+    if (agentUI.controller) agentUI.controller.abort();
+  };
+
+  // 处理 Agent 编排事件(kind + data payload)
+  function handleAgentEvent(kind, dataStr, statusEl) {
+    let outer;
+    try { outer = JSON.parse(dataStr); } catch (e) { return; }
+    const data = outer.data || {};
+    switch (kind) {
+      case "agent_start":
+        addAgentHistory(data.task || "");
+        statusEl.textContent = "🧠 Agent 规划中(model=" + (data.model || "?") + ")";
+        break;
+      case "agent_queued":
+        statusEl.textContent = "⏳ 排队中(有其他任务在跑)...";
+        break;
+      case "agent_plan":
+        renderAgentPlan(data.steps || []);
+        if (data.replanned) addAgentEvent("↻", "失败后重规划,剩余步骤已更新", "");
+        break;
+      case "step_start":
+        markAgentStep(data.index, "running");
+        statusEl.textContent = "▶ 步骤 " + (data.index + 1) + "/" + (data.goal || "");
+        break;
+      case "tool_call":
+        addAgentEvent("🔧 " + data.tool, JSON.stringify(data.args || {}), "");
+        break;
+      case "tool_result":
+        addAgentEvent(data.ok ? "✅" : "❌", data.tool + ": " + (data.summary || ""), data.ok ? "ok" : "fail");
+        break;
+      case "step_done":
+        markAgentStep(data.index, "done");
+        break;
+      case "step_failed":
+        markAgentStep(data.index, "failed");
+        statusEl.textContent = "❌ 步骤 " + (data.index + 1) + " 失败: " + (data.error || "");
+        break;
+      case "agent_delta":
+        const ansEl = document.getElementById("agent-answer");
+        ansEl.style.display = "block";
+        ansEl.textContent += data.delta || "";
+        break;
+      case "agent_final":
+        const ansEl2 = document.getElementById("agent-answer");
+        ansEl2.style.display = "block";
+        if (data.answer) ansEl2.textContent = data.answer;
+        statusEl.textContent = "✅ 完成";
+        break;
+      case "agent_error":
+        statusEl.textContent = "❌ " + (data.error || "未知错误");
+        addAgentEvent("⛔ 错误", data.error || "", "fail");
+        break;
+    }
+  }
+
+  // 计划区:步骤卡片列表(状态着色)
+  function renderAgentPlan(steps) {
+    const planEl = document.getElementById("agent-plan");
+    planEl.innerHTML = "";
+    steps.forEach((s, i) => {
+      const div = document.createElement("div");
+      div.className = "agent-step pending";
+      div.dataset.index = i;
+      div.innerHTML = '<span class="idx"></span><span class="goal"></span><span class="tool"></span><span class="st">待执行</span>';
+      div.querySelector(".idx").textContent = i + 1;
+      div.querySelector(".goal").textContent = s.goal || "";
+      div.querySelector(".tool").textContent = s.tool || "";
+      planEl.appendChild(div);
+    });
+  }
+
+  function markAgentStep(index, status) {
+    const el = document.querySelector('#agent-plan .agent-step[data-index="' + index + '"]');
+    if (!el) return;
+    el.className = "agent-step " + status;
+    const labels = { pending: "待执行", running: "执行中...", done: "✓ 完成", failed: "✗ 失败", replanned: "↻ 已重规划" };
+    const st = el.querySelector(".st");
+    if (st) st.textContent = labels[status] || status;
+  }
+
+  // 事件日志区
+  function addAgentEvent(tag, msg, cls) {
+    const evtEl = agentUI.eventsEl;
+    if (!evtEl) return;
+    const div = document.createElement("div");
+    div.className = "agent-evt";
+    div.innerHTML = '<span class="k"></span>';
+    const k = div.querySelector(".k");
+    k.textContent = tag + " ";
+    if (cls) k.classList.add(cls);
+    div.appendChild(document.createTextNode(msg));
+    evtEl.appendChild(div);
+    evtEl.scrollTop = evtEl.scrollHeight;
+  }
+
+  // 运行历史(会话内最近 5 次,点击回填输入框)
+  function addAgentHistory(task) {
+    agentUI.history.unshift(task);
+    if (agentUI.history.length > 5) agentUI.history.pop();
+    const hist = document.getElementById("agent-history");
+    hist.innerHTML = "";
+    agentUI.history.forEach((t) => {
+      const b = document.createElement("button");
+      b.className = "agent-hist";
+      b.textContent = "↩ " + t;
+      b.title = t;
+      b.onclick = () => { document.getElementById("agent-task-input").value = t; };
+      hist.appendChild(b);
     });
   }
 })();

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
@@ -12,23 +11,9 @@ import (
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
-// bucketCrons 存 cron 规则的 bbolt bucket。
-const bucketCrons = "crons"
 
-// CronRule 定时任务规则。
-type CronRule struct {
-	ID        string            `json:"id"`         // 规则 ID
-	CronExpr  string            `json:"cron_expr"`  // cron 表达式（5 字段：分 时 日 月 周）
-	TaskType  string            `json:"task_type"`  // 任务类型（powershell/script/...）
-	AgentID   string            `json:"agent_id"`   // 目标 Agent
-	Payload   json.RawMessage   `json:"payload"`    // 任务载荷
-	Timeout   int               `json:"timeout"`    // 超时秒
-	Enabled   bool              `json:"enabled"`    // 是否启用
-	CreatedAt int64             `json:"created_at"` // 创建时间
-	LastRun   int64             `json:"last_run"`   // 上次执行时间
-	NextRun   int64             `json:"next_run"`   // 下次执行时间
-	Tags      map[string]string `json:"tags,omitempty"`
-}
+// CronRule 已随 taskstore 拆入 internal/taskstore(架构中5);本包经 store_alias.go alias 引用。
+
 
 // Scheduler 定时任务调度器。
 //
@@ -227,11 +212,7 @@ func (s *Scheduler) loadRuleByID(ruleID string) *CronRule {
 	if s.store == nil {
 		return nil
 	}
-	rules := s.store.LoadCronRules()
-	for _, r := range rules {
-		if r.ID == ruleID {
-			return &r
-		}
-	}
-	return nil
+	// M1:用 GetCronRule 单条 Get(O(1)),替代原全表 LoadCronRules + 线性查找。
+	r, _ := s.store.GetCronRule(ruleID)
+	return r
 }

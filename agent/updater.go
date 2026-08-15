@@ -89,7 +89,8 @@ func computeSHA256(path string) (string, error) {
 	}
 	defer f.Close()
 	h := sha256.New()
-	buf := make([]byte, 64*1024)
+	buf := Get64K() // H1:pool 复用
+	defer Put64K(buf)
 	for {
 		n, err := f.Read(buf)
 		if n > 0 {
@@ -181,20 +182,21 @@ func (e *UpdateExecutor) execUpdate(payload []byte) proto.TaskResult {
 		return proto.TaskResult{Success: false, Error: "写 update-pending 标记失败: " + err.Error()}
 	}
 
-	// 6. rename 当前 exe → .bak(Windows 允许重命名运行中的 exe)
-	//    先删旧 .bak(上次更新留下的)
+	// 6. U2 修复:copy 当前 exe → .bak(备份),exe 保留在原位。
+	//    原实现 rename exe→.bak(移走)再 rename .new→exe:两步之间断电/崩溃 → exe 路径空 →
+	//    SCM 启动找不到 exe → 单 Agent 砖(需现场人工 rename)。
+	//    现改 copy 备份:exe 路径在任何时刻都有效,rename .new→exe 失败/断电只是"更新失败",
+	//    旧 exe 仍在原位可正常运行 → 不砖。
 	os.Remove(bakPath)
-	if err := os.Rename(currentExe, bakPath); err != nil {
+	if err := copyFile(currentExe, bakPath); err != nil {
 		os.Remove(updatePendingMarkerPath()) // 回滚标记
-		return proto.TaskResult{Success: false, Error: "rename 当前 exe→.bak 失败: " + err.Error()}
+		return proto.TaskResult{Success: false, Error: "备份当前 exe→.bak 失败: " + err.Error()}
 	}
 
-	// 7. rename .new → exe
+	// 7. rename .new → exe(原子:exe 全程有效,失败不砖)
 	if err := os.Rename(binaryPath, currentExe); err != nil {
-		// 失败:rename .bak 回去(恢复)
-		os.Rename(bakPath, currentExe)
-		os.Remove(updatePendingMarkerPath())
-		return proto.TaskResult{Success: false, Error: "rename .new→exe 失败(已回滚): " + err.Error()}
+		os.Remove(updatePendingMarkerPath()) // 旧 exe 仍在原位,无需恢复
+		return proto.TaskResult{Success: false, Error: "rename .new→exe 失败(旧版本未受影响): " + err.Error()}
 	}
 
 	// 8. 标记重启(主循环检测后退出,SCM 自动拉新版本)
@@ -210,4 +212,13 @@ func (e *UpdateExecutor) execUpdate(payload []byte) proto.TaskResult {
 // jsonUnmarshalUpdate 辅助:JSON 反序列化。
 func jsonUnmarshalUpdate(payload []byte, v any) error {
 	return json.Unmarshal(payload, v)
+}
+
+// copyFile 复制文件(U2:更新备份用,保持源文件在原位)。
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0755)
 }
