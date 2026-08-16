@@ -41,10 +41,10 @@ jobs:
           CGO_ENABLED: "1"
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
-          # 注意:action 的 latest 解析到 v1.64.8(go1.24 构建,拒绝 go1.25 目标
-          # 且不认 v2 配置),必须显式固定 v2 线版本;升级时同步评估 .golangci.yml
+          # v6 action 只支持 golangci-lint v1(其 latest=v1.64.8,go1.24 构建,
+          # 拒绝 go1.25 目标);v2 配置必须配 v7 action + 显式 v2 版本
           version: v2.12.2
           args: --timeout 5m
 
