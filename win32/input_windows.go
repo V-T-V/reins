@@ -11,43 +11,43 @@ import (
 // --- user32.dll 函数与常量 ---
 
 var (
-	user32                       = syscall.NewLazyDLL("user32.dll")
-	procSetCursorPos             = user32.NewProc("SetCursorPos")
-	procSendInput                = user32.NewProc("SendInput")
-	procGetSystemMetrics         = user32.NewProc("GetSystemMetrics")
-	procGetCursorPos             = user32.NewProc("GetCursorPos")
+	user32               = syscall.NewLazyDLL("user32.dll")
+	procSetCursorPos     = user32.NewProc("SetCursorPos")
+	procSendInput        = user32.NewProc("SendInput")
+	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
+	procGetCursorPos     = user32.NewProc("GetCursorPos")
 )
 
 // SendInput 输入类型与标志位。
 const (
-	inputMouse    = 0
-	inputKeyboard = 1
-	mouseEventMove    = 0x0001 // MOUSEEVENTF_MOVE
-	mouseEventLeftDown = 0x0002
-	mouseEventLeftUp   = 0x0004
+	inputMouse          = 0
+	inputKeyboard       = 1
+	mouseEventMove      = 0x0001 // MOUSEEVENTF_MOVE
+	mouseEventLeftDown  = 0x0002
+	mouseEventLeftUp    = 0x0004
 	mouseEventRightDown = 0x0008
 	mouseEventRightUp   = 0x0010
 	mouseEventAbsolute  = 0x8000
 
-	keyeventfKeyup    = 0x0002
-	keyeventfUnicode  = 0x0004
+	keyeventfKeyup   = 0x0002
+	keyeventfUnicode = 0x0004
 )
 
 type mouseInput struct {
-	Type uint32
-	Dx, Dy int32
+	Type      uint32
+	Dx, Dy    int32
 	MouseData uint32
-	Flags uint32
-	Time uint32
-	Extra uintptr
+	Flags     uint32
+	Time      uint32
+	Extra     uintptr
 }
 
 type keyboardInput struct {
-	Type uint32
-	Vk uint16
-	Scan uint16
+	Type  uint32
+	Vk    uint16
+	Scan  uint16
 	Flags uint32
-	Time uint32
+	Time  uint32
 	Extra uintptr
 }
 
@@ -116,7 +116,7 @@ func GetCursorPos() (x, y int, err error) {
 
 // TypeText 用逐字符 Unicode SendInput 输入文本（避免 SendKeys 转义陷阱）。
 func TypeText(s string) error {
-	var inputs []keyboardInput
+	inputs := make([]keyboardInput, 0, 2*len(s))
 	for _, r := range s {
 		inputs = append(inputs, keyboardInput{
 			Type:  inputKeyboard,

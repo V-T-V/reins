@@ -18,7 +18,7 @@ type Config struct {
 	MTLS        bool   // C7/C8：启用 mTLS（需内置 CA + Agent 证书）
 	CertFile    string // Relay 服务器 TLS 证书（mTLS 模式）
 	KeyFile     string // Relay 服务器 TLS 私钥（mTLS 模式）
-	ExternalURL string // 外部访问地址(经 nginx/反代/TLS 终端时用),如 https://203.0.113.99/rmm
+	ExternalURL string // 外部访问地址(经 nginx/反代/TLS 终端时用),如 https://203.0.113.10/rmm
 	// P1 生产硬化:/metrics 与 /debug/pprof 的访问控制(防指标/内存侦察泄露)
 	MetricsToken string // /metrics 独立 token(空则回退 Token;都空才真无鉴权,生产不推荐)
 	DebugPprof   bool   // 启用 /debug/pprof 调试端点(默认关,生产关闭防 heap/goroutine 泄露)

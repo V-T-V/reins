@@ -1,10 +1,10 @@
 // Package main — 端到端集成测试(P4 神级提升)。
 //
 // 启动真实 Relay 实例(httptest),模拟完整 API 链路:
-//   1. 创建 Relay + MemoryStore + Scheduler
-//   2. 注册 Mock Agent(模拟 WS 连接)
-//   3. 下发任务 → 校验状态机流转
-//   4. 测试文件上传/下载/隧道/电源/脚本库 全链路
+//  1. 创建 Relay + MemoryStore + Scheduler
+//  2. 注册 Mock Agent(模拟 WS 连接)
+//  3. 下发任务 → 校验状态机流转
+//  4. 测试文件上传/下载/隧道/电源/脚本库 全链路
 //
 // 不依赖外部进程,纯 Go httptest 模拟。
 package main
@@ -24,8 +24,8 @@ func newTestRelay(t *testing.T) (*Relay, *httptest.Server) {
 	t.Helper()
 	store := NewMemoryStore()
 	r := &Relay{
-		cfg:    Config{Addr: ":0"},
-		agents: NewRegistry(),
+		cfg:     Config{Addr: ":0"},
+		agents:  NewRegistry(),
 		console: NewEventBus(),
 		policy:  DefaultCommandPolicy(),
 		store:   store,
@@ -228,4 +228,3 @@ func TestE2EMemoryStoreStateMachine(t *testing.T) {
 		t.Error("终态不应能回退")
 	}
 }
-

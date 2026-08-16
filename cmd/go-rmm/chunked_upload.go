@@ -37,10 +37,10 @@ const (
 
 // 运行时可调参数(由 flag 注入,默认值兜底)
 var (
-	chunkSizeArg    int64 = 10 * 1024 * 1024 // --chunk-size,每片大小
-	concurrencyArg  int   = 4                // --concurrency,并发上传数
-	chunkMaxRetryArg int  = 3                // --chunk-retry,每片重试次数
-	fileMaxRetryArg int   = 2                // 整文件级重试次数(应对 Relay 重启/网络抖动)
+	chunkSizeArg     int64 = 10 * 1024 * 1024 // --chunk-size,每片大小
+	concurrencyArg   int   = 4                // --concurrency,并发上传数
+	chunkMaxRetryArg int   = 3                // --chunk-retry,每片重试次数
+	fileMaxRetryArg  int   = 2                // 整文件级重试次数(应对 Relay 重启/网络抖动)
 )
 
 // fileUploadChunked 分片上传大文件。
@@ -255,15 +255,15 @@ func uploadOnce(cfg config, agentID, localPath, remotePath string, totalSize int
 					// R3 流式:用 SectionReader 边读边传(不再 make 10MB slice)。
 					// 内存从 10MB/worker 降到 ~64KB/worker,且 ContentLength 正确。
 					section := io.NewSectionReader(wf, off, thisSize)
-						if err := uploadSingleChunk(cfg, agentID, chunkName, section, thisSize, localPath, j.idx); err != nil {
-							lastErr = err
-							// R3 统计:重试计数(首次失败也算,供最终摘要输出)
-							stats.totalRetries.Add(1)
-							if retry == 0 {
-								stats.retriedChunks.Add(1) // 该片首次重试
-							}
-							// R4 指数退避:1s/2s/4s,上限 30s;"占用冲突"用更长退避让前一个传输完成
-							backoff := time.Duration(1<<retry) * time.Second
+					if err := uploadSingleChunk(cfg, agentID, chunkName, section, thisSize, localPath, j.idx); err != nil {
+						lastErr = err
+						// R3 统计:重试计数(首次失败也算,供最终摘要输出)
+						stats.totalRetries.Add(1)
+						if retry == 0 {
+							stats.retriedChunks.Add(1) // 该片首次重试
+						}
+						// R4 指数退避:1s/2s/4s,上限 30s;"占用冲突"用更长退避让前一个传输完成
+						backoff := time.Duration(1<<retry) * time.Second
 						if backoff > 30*time.Second {
 							backoff = 30 * time.Second
 						}

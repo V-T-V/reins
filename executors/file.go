@@ -57,11 +57,8 @@ func (e *FileExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFunc)
 	}
 
 	// S5 修复：路径穿越校验（分块上传的目标路径也要校验）
-	if task.Op == "upload" || task.Op == "write" || task.Op == "chunk_upload" {
-		if err := e.policy.Check(task.Path); err != nil {
-			return fail("", err.Error())
-		}
-	} else if task.Op == "download" || task.Op == "read" || task.Op == "chunk_download" {
+	switch task.Op {
+	case "upload", "write", "chunk_upload", "download", "read", "chunk_download":
 		if err := e.policy.Check(task.Path); err != nil {
 			return fail("", err.Error())
 		}
@@ -123,7 +120,7 @@ func (e *FileExecutor) download(task proto.FileTask) proto.TaskResult {
 const chunkChunkSize = 1024 * 1024
 
 // M2 修复：per-UploadID 合并锁，防并发合并竞态。
-var chunkMergeMu sync.Mutex           // 保护 chunkMergeLocks map
+var chunkMergeMu sync.Mutex                        // 保护 chunkMergeLocks map
 var chunkMergeLocks = make(map[string]*sync.Mutex) // UploadID → 互斥锁
 
 // getChunkMergeLock 获取（或创建）指定 UploadID 的互斥锁。
@@ -146,20 +143,20 @@ func (e *FileExecutor) chunkUpload(task proto.FileTask) proto.TaskResult {
 	// 临时目录存放分片
 	tmpDir := filepath.Join(os.TempDir(), "go-rmm-chunks-"+task.UploadID)
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		return fail("", "创建临时目录失败: " + err.Error())
+		return fail("", "创建临时目录失败: "+err.Error())
 	}
 	// 写当前分片
 	chunkPath := filepath.Join(tmpDir, fmt.Sprintf("chunk-%06d", task.ChunkIndex))
 	data, err := base64.StdEncoding.DecodeString(task.ContentB64)
 	if err != nil {
-		return fail("", "base64 解码失败: " + err.Error())
+		return fail("", "base64 解码失败: "+err.Error())
 	}
 	// A8 修复：单块大小校验
 	if len(data) > chunkChunkSize*2 {
 		return fail("", fmt.Sprintf("分块 %d 超过上限 %d", len(data), chunkChunkSize*2))
 	}
 	if err := os.WriteFile(chunkPath, data, 0644); err != nil {
-		return fail("", "写分片失败: " + err.Error())
+		return fail("", "写分片失败: "+err.Error())
 	}
 
 	// M2 修复：per-UploadID 互斥锁保护合并临界区，防并发合并
@@ -179,7 +176,7 @@ func (e *FileExecutor) chunkUpload(task proto.FileTask) proto.TaskResult {
 	// 所有分片到齐，合并到目标路径
 	out, err := os.Create(task.Path)
 	if err != nil {
-		return fail("", "创建目标文件失败: " + err.Error())
+		return fail("", "创建目标文件失败: "+err.Error())
 	}
 	defer out.Close()
 	totalBytes := 0
@@ -210,7 +207,7 @@ func (e *FileExecutor) chunkUpload(task proto.FileTask) proto.TaskResult {
 func (e *FileExecutor) chunkDownload(task proto.FileTask) proto.TaskResult {
 	info, err := os.Stat(task.Path)
 	if err != nil {
-		return fail("", "文件不存在: " + err.Error())
+		return fail("", "文件不存在: "+err.Error())
 	}
 	fileSize := int(info.Size())
 	offset := task.ChunkIndex * chunkChunkSize
@@ -228,16 +225,16 @@ func (e *FileExecutor) chunkDownload(task proto.FileTask) proto.TaskResult {
 	// 读取指定段
 	f, err := os.Open(task.Path)
 	if err != nil {
-		return fail("", "打开文件失败: " + err.Error())
+		return fail("", "打开文件失败: "+err.Error())
 	}
 	defer f.Close()
 	if _, err := f.Seek(int64(offset), 0); err != nil {
-		return fail("", "Seek 失败: " + err.Error())
+		return fail("", "Seek 失败: "+err.Error())
 	}
 	buf := make([]byte, end-offset)
 	n, err := f.Read(buf)
 	if err != nil && n == 0 {
-		return fail("", "读文件失败: " + err.Error())
+		return fail("", "读文件失败: "+err.Error())
 	}
 	totalChunks := (fileSize + chunkChunkSize - 1) / chunkChunkSize
 	r := ok("")

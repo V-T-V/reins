@@ -335,14 +335,14 @@ func TestUpdateTaskSerialization(t *testing.T) {
 	// 两种模式
 	pathMode := UpdateTask{BinaryPath: "/tmp/agent.new", SHA256: "abc", Version: "v1.0"}
 	b64Mode := UpdateTask{BinaryB64: "base64data", SHA256: "def", Version: "v2.0", Force: true}
-	
+
 	data1, _ := json.Marshal(pathMode)
 	data2, _ := json.Marshal(b64Mode)
-	
+
 	var d1, d2 UpdateTask
 	json.Unmarshal(data1, &d1)
 	json.Unmarshal(data2, &d2)
-	
+
 	if d1.BinaryPath != "/tmp/agent.new" {
 		t.Errorf("BinaryPath 往返失败")
 	}

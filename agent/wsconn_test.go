@@ -67,7 +67,7 @@ func TestWSConnConcurrentWriteSerializes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	c, _, err := websocket.Dial(ctx, wsURL(srv), nil)
+	c, _, err := websocket.Dial(ctx, wsURL(srv), nil) //nolint:bodyclose // coder/websocket:成功时 resp.Body 为 nil,无需关闭
 	if err != nil {
 		t.Fatalf("dial 失败: %v", err)
 	}

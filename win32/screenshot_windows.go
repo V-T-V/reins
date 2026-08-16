@@ -12,17 +12,17 @@ import (
 )
 
 var (
-	gdi32                  = syscall.NewLazyDLL("gdi32.dll")
-	procGetDC              = user32.NewProc("GetDC")
-	procReleaseDC          = user32.NewProc("ReleaseDC")
-	procCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
+	gdi32                      = syscall.NewLazyDLL("gdi32.dll")
+	procGetDC                  = user32.NewProc("GetDC")
+	procReleaseDC              = user32.NewProc("ReleaseDC")
+	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
-	procSelectObject       = gdi32.NewProc("SelectObject")
-	procDeleteObject       = gdi32.NewProc("DeleteObject")
-	procDeleteDC           = gdi32.NewProc("DeleteDC")
-	procBitBlt             = gdi32.NewProc("BitBlt")
-	procGetDIBits          = gdi32.NewProc("GetDIBits")
-	procPrintWindow        = user32.NewProc("PrintWindow")
+	procSelectObject           = gdi32.NewProc("SelectObject")
+	procDeleteObject           = gdi32.NewProc("DeleteObject")
+	procDeleteDC               = gdi32.NewProc("DeleteDC")
+	procBitBlt                 = gdi32.NewProc("BitBlt")
+	procGetDIBits              = gdi32.NewProc("GetDIBits")
+	procPrintWindow            = user32.NewProc("PrintWindow")
 )
 
 const (

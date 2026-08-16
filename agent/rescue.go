@@ -66,7 +66,7 @@ func rescueSlaveViaRelay(cfg Config, version string, force bool) (string, error)
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("Relay 请求失败: %w", err)
+		return "", fmt.Errorf("relay 请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -74,7 +74,7 @@ func rescueSlaveViaRelay(cfg Config, version string, force bool) (string, error)
 	respStr := string(respBody)
 
 	if resp.StatusCode != http.StatusOK {
-		return respStr, fmt.Errorf("Relay 返回 HTTP %d", resp.StatusCode)
+		return respStr, fmt.Errorf("relay 返回 HTTP %d", resp.StatusCode)
 	}
 	log.Printf("[rescue] 经 Relay 救援从 %s: 推版本 %s force=%v → %s",
 		cfg.SlaveAgentID, version, force, respStr)

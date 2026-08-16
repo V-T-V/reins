@@ -1,6 +1,7 @@
 package executors
 
 import (
+	"context"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -98,7 +99,7 @@ func TestFileExecutorRejectsTraversal(t *testing.T) {
 		"path":        evilPath,
 		"content_b64": b64enc("malicious"),
 	})
-	r := e.Exec(nil, payload, nil)
+	r := e.Exec(context.TODO(), payload, nil)
 	if r.Success {
 		t.Fatal("穿越路径的任务应失败")
 	}

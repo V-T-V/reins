@@ -3,12 +3,12 @@
 // 现有 powershell_test.go 已覆盖命令执行的基础/退出码/超时 + script/file 往返。
 // 本文件补强与现有用例互补的部分，全部为跨平台可跑（不依赖真实 Windows）：
 //
-//   1. 命令(command)：PowerShell 命令策略在 Dispatcher 层的强制拒绝（最后防线）。
-//   2. 文件(file)：路径穿越防御（白名单 + 符号链接 + 8.3 短名 + 相对路径基准）。
-//   3. 进程/服务/注册表(registry)：这些 RMM 能力在 go-rmm 中经 PowerShell 命令承载，
-//      本文件补 PowerShell 编码正确性（UTF16LE+Base64）与命令策略对高危
-//      进程/服务/注册表命令的拦截（kill/shutdown/RemoveItem/reg delete 等）。
-//   4. 脚本(script)：跨平台守卫（非 Windows 明确报错）+ lang 边界 + 空 content。
+//  1. 命令(command)：PowerShell 命令策略在 Dispatcher 层的强制拒绝（最后防线）。
+//  2. 文件(file)：路径穿越防御（白名单 + 符号链接 + 8.3 短名 + 相对路径基准）。
+//  3. 进程/服务/注册表(registry)：这些 RMM 能力在 go-rmm 中经 PowerShell 命令承载，
+//     本文件补 PowerShell 编码正确性（UTF16LE+Base64）与命令策略对高危
+//     进程/服务/注册表命令的拦截（kill/shutdown/RemoveItem/reg delete 等）。
+//  4. 脚本(script)：跨平台守卫（非 Windows 明确报错）+ lang 边界 + 空 content。
 //
 // 这覆盖 6 类：command / file / process / service / registry / script。
 package executors

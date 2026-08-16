@@ -118,10 +118,12 @@ func netPorts(cfg config, args []string) error {
 		state = "listen"
 	}
 	// Windows: Get-NetTCPConnection; Linux: ss/netstat
-	cmd := fmt.Sprintf("Get-NetTCPConnection -State %s | Select-Object LocalAddress,LocalPort,State,OwningProcess | Sort LocalPort | Format-Table -AutoSize | Out-String", strings.Title(state))
+	// PowerShell -State 需首字母大写;strings.Title 已废弃,这里单词参数手动首字母大写即可
+	titled := strings.ToUpper(state[:1]) + state[1:]
+	cmd := fmt.Sprintf("Get-NetTCPConnection -State %s | Select-Object LocalAddress,LocalPort,State,OwningProcess | Sort LocalPort | Format-Table -AutoSize | Out-String", titled)
 	stdout, err := runOpsTask(cfg, agentID, cmd, 15)
 	if err != nil {
-		cmd = fmt.Sprintf("ss -tlnp 2>/dev/null || netstat -tlnp")
+		cmd = "ss -tlnp 2>/dev/null || netstat -tlnp"
 		stdout, err = runOpsTask(cfg, agentID, cmd, 15)
 		if err != nil {
 			return err

@@ -253,12 +253,12 @@ func TestMultiAgentRoutingE2E(t *testing.T) {
 
 	// 起 2 个 Agent，各自记录收到的任务
 	type agentState struct {
-		conn   *websocket.Conn
+		conn    *websocket.Conn
 		gotTask atomic.Int32
 	}
 	startAgent := func(id string, caps []string) *agentState {
 		st := &agentState{}
-		c, _, err := websocket.Dial(ctx, agentURL, nil)
+		c, _, err := websocket.Dial(ctx, agentURL, nil) //nolint:bodyclose // coder/websocket:成功时 resp.Body 为 nil,无需关闭
 		if err != nil {
 			t.Fatalf("agent %s 连接失败: %v", id, err)
 		}
@@ -353,7 +353,7 @@ func TestReconnectOfflineOnlineSequenceE2E(t *testing.T) {
 	// SSE 订阅者记录事件序列
 	events := make(chan string, 16)
 	sseReq, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/events", nil)
-	sseResp, err := http.DefaultClient.Do(sseReq)
+	sseResp, err := http.DefaultClient.Do(sseReq) //nolint:bodyclose // 下方已 defer Close,Body 在 goroutine 中读取,分析器追踪不到
 	if err != nil {
 		t.Fatalf("SSE 连接失败: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestReconnectOfflineOnlineSequenceE2E(t *testing.T) {
 
 	agentURL := strings.Replace(srv.URL+"/agent", "http://", "ws://", 1)
 	dialAndRegister := func() *websocket.Conn {
-		c, _, err := websocket.Dial(ctx, agentURL, nil)
+		c, _, err := websocket.Dial(ctx, agentURL, nil) //nolint:bodyclose // coder/websocket:成功时 resp.Body 为 nil,无需关闭
 		if err != nil {
 			t.Fatalf("agent 连接失败: %v", err)
 		}
@@ -483,7 +483,7 @@ func TestHeartbeatAckKeepsIdleAgentAlive(t *testing.T) {
 	defer cancel()
 
 	agentURL := strings.Replace(srv.URL+"/agent", "http://", "ws://", 1)
-	c, _, err := websocket.Dial(ctx, agentURL, nil)
+	c, _, err := websocket.Dial(ctx, agentURL, nil) //nolint:bodyclose // coder/websocket:成功时 resp.Body 为 nil,无需关闭
 	if err != nil {
 		t.Fatalf("agent 连接失败: %v", err)
 	}

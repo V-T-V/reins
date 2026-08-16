@@ -4,7 +4,9 @@
 // PowerShell 起的孙进程(ping/notepad 等)成为孤儿继续运行。
 //
 // 修复:Windows 用 CREATE_NEW_PROCESS_GROUP 建独立进程组,
-//   cancel 时 kill 整组(配合 Windows Job Object 更彻底,但进程组已能覆盖多数场景)。
+//
+//	cancel 时 kill 整组(配合 Windows Job Object 更彻底,但进程组已能覆盖多数场景)。
+//
 // Linux 用 Setpgid + kill -PGID 杀整个进程组。
 package main
 

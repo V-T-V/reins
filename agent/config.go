@@ -20,8 +20,8 @@ var version = "dev"
 //
 // 服务模式下从配置文件加载；前台调试模式下从命令行参数覆盖。
 type Config struct {
-	AgentID   string            `json:"agent_id"`            // Agent 唯一 ID（空则自动生成并持久化）
-	RelayURL  string            `json:"relay_url"`           // Relay 的 Agent WS 端点，如 ws://host:7780/agent
+	AgentID  string `json:"agent_id"`  // Agent 唯一 ID（空则自动生成并持久化）
+	RelayURL string `json:"relay_url"` // Relay 的 Agent WS 端点，如 ws://host:7780/agent
 	// RelayURLs 备用 Relay 列表(L2 故障切换)。RelayURL 连接失败时按序尝试。
 	// 优先级:RelayURL > RelayURLs[0] > RelayURLs[1] > ...
 	// DNS SRV/域名轮询可用单个域名,N 个 Agent 分布到不同 IP。
@@ -31,10 +31,10 @@ type Config struct {
 	Heartbeat time.Duration     `json:"heartbeat,omitempty"` // 心跳间隔，默认 15s
 	// MTLS 启用 mTLS 模式（wss:// + 客户端证书）。为 true 时 Token 作为 enrollment token（首次），
 	// 证书获取后用 mTLS 连接，不再用 token。为 false 时走 ws://+token 明文模式（向后兼容）。
-	MTLS      bool              `json:"mtls,omitempty"`
+	MTLS bool `json:"mtls,omitempty"`
 	// AllowedRoots 文件操作允许的根目录(file 任务 + 大文件传输共用)。
 	// 留空时按 AllowAllRoots 决定:AllowAllRoots=true 则整盘兜底(兼容),false 则严格拒绝。
-	AllowedRoots []string          `json:"allowed_roots,omitempty"`
+	AllowedRoots []string `json:"allowed_roots,omitempty"`
 	// AllowAllRoots 未配置 AllowedRoots 时是否放开整盘(向后兼容默认 true)。
 	// 生产环境应设 false + 配置 AllowedRoots 做最小权限。
 	AllowAllRoots bool `json:"allow_all_roots,omitempty"`
@@ -47,9 +47,9 @@ type Config struct {
 	MinVersion string `json:"min_version,omitempty"`
 	// MaxConcurrentTasks 最大并发执行任务数(C6 并发限流)。0 或负数表示不限。
 	// 默认 4,防止被并发任务打爆。
-	MaxConcurrentTasks int              `json:"max_concurrent_tasks,omitempty"`
-	Glm       struct {
-		APIKey  string `json:"api_key,omitempty"` // GLM 视觉模型 key（guiclick 执行器需要）
+	MaxConcurrentTasks int `json:"max_concurrent_tasks,omitempty"`
+	Glm                struct {
+		APIKey  string `json:"api_key,omitempty"`  // GLM 视觉模型 key（guiclick 执行器需要）
 		BaseURL string `json:"base_url,omitempty"` // 默认 https://open.bigmodel.cn/api/paas/v4
 		Model   string `json:"model,omitempty"`    // 默认 glm-5-turbo
 	} `json:"glm,omitempty"`
@@ -222,11 +222,12 @@ func saveConfig(cfg Config) error {
 
 // normalizeRelayURL 把用户输入的简写地址补全为完整 WS URL。
 // 支持以下输入格式：
-//   "192.168.1.100"        → ws://192.168.1.100:7780/agent
-//   "192.168.1.100:9999"   → ws://192.168.1.100:9999/agent
-//   "relay.example.com"    → ws://relay.example.com:7780/agent
-//   "ws://host:7780/agent" → 不变（已是完整 URL）
-//   "wss://host/agent"     → 不变
+//
+//	"192.168.1.100"        → ws://192.168.1.100:7780/agent
+//	"192.168.1.100:9999"   → ws://192.168.1.100:9999/agent
+//	"relay.example.com"    → ws://relay.example.com:7780/agent
+//	"ws://host:7780/agent" → 不变（已是完整 URL）
+//	"wss://host/agent"     → 不变
 func normalizeRelayURL(input string) string {
 	if input == "" {
 		return ""

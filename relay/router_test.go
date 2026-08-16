@@ -15,7 +15,13 @@ func TestRouterListAgentsEmpty(t *testing.T) {
 	_, srv := newTestRelay(t)
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/api/agents")
-	if err != nil { t.Fatal(err) }; if err != nil { t.Fatal(err) }; defer resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	var result struct{ Count int }
 	json.NewDecoder(resp.Body).Decode(&result)
 	if result.Count != 0 {
@@ -30,7 +36,13 @@ func TestRouterListAgentsMultiple(t *testing.T) {
 	registerMockAgent(r, "a2", []string{"file"})
 	registerMockAgent(r, "a3", []string{"shell"})
 	resp, err := http.Get(srv.URL + "/api/agents")
-	if err != nil { t.Fatal(err) }; if err != nil { t.Fatal(err) }; defer resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	var result struct{ Count int }
 	json.NewDecoder(resp.Body).Decode(&result)
 	if result.Count != 3 {
@@ -46,7 +58,13 @@ func TestRouterTaskList(t *testing.T) {
 	r.store.SaveTask(StoredTask{Request: proto.TaskRequest{TaskID: "t2"}, Status: StatusFailed})
 
 	resp, err := http.Get(srv.URL + "/api/tasks?limit=10")
-	if err != nil { t.Fatal(err) }; if err != nil { t.Fatal(err) }; defer resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	var result struct {
 		Count   int  `json:"count"`
 		Enabled bool `json:"enabled"`
@@ -67,7 +85,13 @@ func TestRouterTaskGetResult(t *testing.T) {
 	r.store.SaveResult("task-res-1", proto.TaskResult{TaskID: "task-res-1", Success: true, Stdout: "hello"})
 
 	resp, err := http.Get(srv.URL + "/api/tasks/task-res-1")
-	if err != nil { t.Fatal(err) }; if err != nil { t.Fatal(err) }; defer resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	var result struct {
 		Task *struct {
 			Status string `json:"status"`
@@ -87,7 +111,13 @@ func TestRouterTaskGetNonExist(t *testing.T) {
 	_, srv := newTestRelay(t)
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/api/tasks/nonexistent")
-	if err != nil { t.Fatal(err) }; if err != nil { t.Fatal(err) }; defer resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != 404 {
 		t.Errorf("status = %d, 期望 404", resp.StatusCode)
 	}
@@ -100,7 +130,13 @@ func TestRouterSecretPutGet(t *testing.T) {
 	// 存储凭据
 	putBody, _ := json.Marshal(map[string]any{"value": "my-password", "ttl": 60})
 	resp, err := http.Post(srv.URL+"/api/secrets", "application/json", bytes.NewReader(putBody))
-	if err != nil { t.Fatal(err) }; if err != nil { t.Fatal(err) }; defer resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != 201 {
 		t.Errorf("PUT status = %d", resp.StatusCode)
 	}
@@ -132,7 +168,13 @@ func TestRouterSecretOneTime(t *testing.T) {
 	// 一次性凭据
 	putBody, _ := json.Marshal(map[string]any{"value": "secret123", "ttl": 60, "one_time": true})
 	resp, err := http.Post(srv.URL+"/api/secrets", "application/json", bytes.NewReader(putBody))
-	if err != nil { t.Fatal(err) }; if err != nil { t.Fatal(err) }; defer resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	var putResult struct{ Ref string }
 	json.NewDecoder(resp.Body).Decode(&putResult)
 
@@ -145,7 +187,10 @@ func TestRouterSecretOneTime(t *testing.T) {
 
 	// 第二次拉取应失败(一次性已删除)
 	resp2, err2 := http.Get(srv.URL + "/api/secrets/" + putResult.Ref)
-	if err2 != nil { t.Fatal(err2) }; resp2.Body.Close()
+	if err2 != nil {
+		t.Fatal(err2)
+	}
+	resp2.Body.Close()
 	if resp2.StatusCode != 404 {
 		t.Errorf("一次性凭据第二次 GET status = %d, 期望 404", resp2.StatusCode)
 	}
@@ -158,7 +203,13 @@ func TestRouterSchedulerBest(t *testing.T) {
 	registerMockAgent(r, "best-2", []string{"powershell"})
 
 	resp, err := http.Get(srv.URL + "/api/scheduler/best?type=powershell")
-	if err != nil { t.Fatal(err) }; if err != nil { t.Fatal(err) }; defer resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
@@ -178,7 +229,13 @@ func TestRouterAuditExport(t *testing.T) {
 	r.audit = nil // audit 未启用时端点应返回 503
 
 	resp, err := http.Get(srv.URL + "/api/audit/export?format=json")
-	if err != nil { t.Fatal(err) }; if err != nil { t.Fatal(err) }; defer resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	// audit=nil 时返回 503
 	if resp.StatusCode != 503 && resp.StatusCode != 200 {
 		t.Errorf("status = %d", resp.StatusCode)
@@ -189,7 +246,13 @@ func TestRouterHealthzDeep(t *testing.T) {
 	_, srv := newTestRelay(t)
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/healthz")
-	if err != nil { t.Fatal(err) }; if err != nil { t.Fatal(err) }; defer resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 	var result struct {
 		Relay  string `json:"relay"`
 		Store  string `json:"store"`

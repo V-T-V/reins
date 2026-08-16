@@ -1,9 +1,10 @@
 // CLI bootstrap 命令:从 Relay 获取一行安装命令(方案 B 远程部署)。
 //
 // 用法:
-//   go-rmm bootstrap                      # 自动用本机 IP
-//   go-rmm bootstrap --host 203.0.113.99 # 指定公网 IP
-//   go-rmm bootstrap --port 443           # 指定端口
+//
+//	go-rmm bootstrap                      # 自动用本机 IP
+//	go-rmm bootstrap --host 203.0.113.10 # 指定公网 IP
+//	go-rmm bootstrap --port 443           # 指定端口
 //
 // 输出一行可直接复制粘贴到目标 Win10 执行的 PowerShell 命令。
 package main

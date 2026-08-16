@@ -33,21 +33,23 @@ type FilePolicy struct {
 //
 // AllowedRoots 留空——调用方（agent）必须显式配置允许的工作目录。
 func DefaultFilePolicy() FilePolicy {
-	denied := []string{
-		`C:\Windows\System32`,
-		`C:\Windows\SysWOW64`,
-		`C:\Program Files`,
-		`C:\Program Files (x86)`,
-	}
-	if runtime.GOOS != "windows" {
-		denied = []string{
+	denied := make([]string, 0, 11)
+	if runtime.GOOS == "windows" {
+		denied = append(denied,
+			`C:\Windows\System32`,
+			`C:\Windows\SysWOW64`,
+			`C:\Program Files`,
+			`C:\Program Files (x86)`,
+		)
+	} else {
+		denied = append(denied,
 			`/etc`,
 			`/usr`,
 			`/bin`,
 			`/sbin`,
 			`/boot`,
 			`/root`,
-		}
+		)
 	}
 	// 通用敏感文件（不分平台）
 	denied = append(denied, `.ssh`, `.aws`, `.kube`, `id_rsa`, `id_ecdsa`)

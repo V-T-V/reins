@@ -155,4 +155,10 @@ func TestComputeSHA256(t *testing.T) {
 func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0644)
 }
-func removeFile(path string) error { _, err := os.Stat(path); if err != nil { return nil }; return os.Remove(path) }
+func removeFile(path string) error {
+	_, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	return os.Remove(path)
+}

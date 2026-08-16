@@ -26,15 +26,15 @@ const (
 
 // TunnelOpen 开隧道请求(Console→Agent→远端服务)。
 type TunnelOpen struct {
-	TunnelID string `json:"tunnel_id"`          // 隧道唯一 ID(CLI 生成)
-	Network  string `json:"network,omitempty"`   // "tcp"(默认)/"udp"
-	Target   string `json:"target"`              // 远端目标 host:port(在 Agent 所在网络解析)
+	TunnelID string `json:"tunnel_id"`         // 隧道唯一 ID(CLI 生成)
+	Network  string `json:"network,omitempty"` // "tcp"(默认)/"udp"
+	Target   string `json:"target"`            // 远端目标 host:port(在 Agent 所在网络解析)
 }
 
 // TunnelReady Agent 已连接远端服务(Agent→Console)。
 type TunnelReady struct {
 	TunnelID string `json:"tunnel_id"`
-	Accepted bool   `json:"accepted"`            // true=连接成功, false=失败(看 Reason)
+	Accepted bool   `json:"accepted"`             // true=连接成功, false=失败(看 Reason)
 	Reason   string `json:"reason,omitempty"`     // 失败原因
 	Latency  int64  `json:"latency_ms,omitempty"` // Agent→target 的 dial 耗时(诊断用)
 }

@@ -79,7 +79,7 @@ func TestNACKRedispatchE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	agentURL := strings.Replace(relaySrv.URL+"/agent", "http://", "ws://", 1)
-	ac, _, err := websocket.Dial(ctx, agentURL, nil)
+	ac, _, err := websocket.Dial(ctx, agentURL, nil) //nolint:bodyclose // coder/websocket:成功时 resp.Body 为 nil,无需关闭
 	if err != nil {
 		t.Fatalf("Agent 连接失败: %v", err)
 	}

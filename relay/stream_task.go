@@ -133,7 +133,7 @@ func (r *Relay) handleStreamTask(w http.ResponseWriter, req *http.Request) {
 			// 推送
 			writeSSE(w, flusher, ev.Kind, map[string]any{
 				"agent_id": ev.AgentID,
-				"data":     json.RawMessage(ev.Payload),
+				"data":     ev.Payload,
 				"ts":       ev.TS,
 			})
 			flusher.Flush()

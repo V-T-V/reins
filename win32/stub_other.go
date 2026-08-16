@@ -10,11 +10,11 @@ import "errors"
 // ErrNotSupported 当前平台不支持此操作。
 var ErrNotSupported = errors.New("win32 操作仅在 Windows 上可用")
 
-func ScreenSize() (int, int, error)         { return 0, 0, ErrNotSupported }
-func ClickAt(int, int, ClickAction) error   { return ErrNotSupported }
-func MoveTo(int, int) error                 { return ErrNotSupported }
-func GetCursorPos() (int, int, error)       { return 0, 0, ErrNotSupported }
-func TypeText(string) error                 { return ErrNotSupported }
+func ScreenSize() (int, int, error)                           { return 0, 0, ErrNotSupported }
+func ClickAt(int, int, ClickAction) error                     { return ErrNotSupported }
+func MoveTo(int, int) error                                   { return ErrNotSupported }
+func GetCursorPos() (int, int, error)                         { return 0, 0, ErrNotSupported }
+func TypeText(string) error                                   { return ErrNotSupported }
 func EnumWindows(func(WindowInfo) bool) ([]WindowInfo, error) { return nil, ErrNotSupported }
 func FindWindowByProcess(string) (WindowInfo, error)          { return WindowInfo{}, ErrNotSupported }
 func FindWindowByTitle(string) (WindowInfo, error)            { return WindowInfo{}, ErrNotSupported }

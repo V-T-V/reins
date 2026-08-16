@@ -103,9 +103,9 @@ func (e *chromedpBrowseExecutor) Exec(ctx context.Context, payload []byte, progr
 	progress("done", "完成", 100)
 	r := ok("")
 	r.Data, _ = jsonMarshal(map[string]any{
-		"url":      task.URL,
+		"url":        task.URL,
 		"screenshot": "data:image/png;base64," + base64.StdEncoding.EncodeToString(screenshot),
-		"bytes":    len(screenshot),
+		"bytes":      len(screenshot),
 	})
 	return r
 }

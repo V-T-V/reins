@@ -32,7 +32,7 @@ func newBufioReader(r io.Reader) *bufio.Reader {
 // 第二次 newReader 看不到这些 buffer 字节,直接从 fd 当前位置继续读 → 跳过。
 // 用全局单例确保 buffer 状态跨调用保留。
 var (
-	stdinOnce  sync.Once
+	stdinOnce    sync.Once
 	stdinBReader *bufio.Reader
 )
 

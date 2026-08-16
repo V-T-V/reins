@@ -168,11 +168,11 @@ func (r *Relay) handleUpdateUpload(w http.ResponseWriter, req *http.Request) {
 // protoUpdateTaskInline 内联二进制的 update 任务(简化:不经 filetransfer)。
 // 适合中等大小二进制(<20MB,WS 32MB 限制内)。
 type protoUpdateTaskInline struct {
-	BinaryB64 string `json:"binary_b64"` // base64 编码的二进制
-	SHA256    string `json:"sha256"`
-	Version   string `json:"version"`
+	BinaryB64  string `json:"binary_b64"` // base64 编码的二进制
+	SHA256     string `json:"sha256"`
+	Version    string `json:"version"`
 	MinVersion string `json:"min_version"`
-	Force     bool   `json:"force"`
+	Force      bool   `json:"force"`
 }
 
 // handleUpdateApply POST /api/updates/apply —— 触发 Agent 更新。

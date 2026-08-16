@@ -103,8 +103,8 @@ func (e *MonitorExecutor) collect(metrics []string, topN int) proto.MonitorSampl
 
 // collectWindows 用 PowerShell 采集全维度指标(P1 扩展)。
 // 分两次执行避免长输出触发 CLIXML 编码:
-//   1. 基础(cpu/mem/disk/proc) — 始终采集
-//   2. 扩展(diskio/net/gpu/svc/port) — 按需
+//  1. 基础(cpu/mem/disk/proc) — 始终采集
+//  2. 扩展(diskio/net/gpu/svc/port) — 按需
 func (e *MonitorExecutor) collectWindows(metrics []string, topN int) proto.MonitorSample {
 	sample := proto.MonitorSample{Timestamp: time.Now().Unix()}
 

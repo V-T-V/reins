@@ -69,9 +69,8 @@ func TestPowerShellTimeout(t *testing.T) {
 	if r.Success {
 		t.Fatal("期望超时失败")
 	}
-	if !strings.Contains(r.Error, "超时") && !strings.Contains(r.Error, "killed") && ctx.Err() == nil {
-		// exec.CommandContext 超时 kill 后报错形式可能多样，这里宽松校验
-	}
+	// exec.CommandContext 超时 kill 后报错形式可能多样(超时/killed/取消),这里宽松校验,不断言错误文本
+	_ = r.Error
 }
 
 // TestScriptPS1 验证 script 执行器（含 BOM 处理）。

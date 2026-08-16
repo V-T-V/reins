@@ -7,11 +7,12 @@
 // 管理通过 SecretStore 模式(文件系统 + metadata)。
 //
 // API:
-//   POST   /api/scripts          上传脚本(name + content)
-//   GET    /api/scripts          列出脚本
-//   GET    /api/scripts/{name}   读取脚本内容
-//   DELETE /api/scripts/{name}   删除脚本
-//   POST   /api/scripts/{name}/run  在指定 Agent 上运行脚本
+//
+//	POST   /api/scripts          上传脚本(name + content)
+//	GET    /api/scripts          列出脚本
+//	GET    /api/scripts/{name}   读取脚本内容
+//	DELETE /api/scripts/{name}   删除脚本
+//	POST   /api/scripts/{name}/run  在指定 Agent 上运行脚本
 package main
 
 import (
@@ -71,7 +72,7 @@ func NewScriptLibrary(dataDir string) (*ScriptLibrary, error) {
 // ScriptInfo 脚本元信息。
 type ScriptInfo struct {
 	Name       string `json:"name"`
-	Lang       string `json:"lang"`        // ps1/sh/bat
+	Lang       string `json:"lang"` // ps1/sh/bat
 	Size       int64  `json:"size"`
 	CreatedAt  int64  `json:"created_at"`
 	ModifiedAt int64  `json:"modified_at"`
@@ -98,7 +99,7 @@ func (lib *ScriptLibrary) List() []ScriptInfo {
 		}
 		infos = append(infos, ScriptInfo{
 			Name: name, Lang: lang, Size: info.Size(),
-			CreatedAt: info.ModTime().UnixMilli(),
+			CreatedAt:  info.ModTime().UnixMilli(),
 			ModifiedAt: info.ModTime().UnixMilli(),
 		})
 	}
@@ -299,8 +300,8 @@ func (r *Relay) handleScriptRun(w http.ResponseWriter, req *http.Request) {
 		r.audit.Log(AuditEntry{Event: "script_run", AgentID: body.AgentID, TaskID: taskID, Detail: name})
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"script":  name,
-		"task_id": taskID,
+		"script":   name,
+		"task_id":  taskID,
 		"agent_id": body.AgentID,
 	})
 }

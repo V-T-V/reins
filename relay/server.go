@@ -41,7 +41,7 @@ type wsConn struct {
 	// routeXferData 锁内只取 session 引用,锁外用 select+done 发送,
 	// 避免持锁阻塞导致死锁(channel 满时消费者断开会双向死锁)。
 	xferMu       sync.Mutex
-	xferChannels map[string]*xferSession             // transferID → 下载数据会话
+	xferChannels map[string]*xferSession                     // transferID → 下载数据会话
 	xferReady    map[string]chan *proto.FileTransferReady    // transferID → ready 信号
 	xferComplete map[string]chan *proto.FileTransferComplete // transferID → 完成信号
 }
@@ -51,9 +51,9 @@ type wsConn struct {
 // P0-C1 修复:done channel 在 unregister/closeAll 时 close,
 // routeXferData 用 select 监听 done 优雅退出,不再持锁阻塞。
 type xferSession struct {
-	data  chan []byte // 传输数据(满则背压)
-	done  chan struct{} // close 时通知生产者(routeXferData)停止发送
-	once  sync.Once
+	data chan []byte   // 传输数据(满则背压)
+	done chan struct{} // close 时通知生产者(routeXferData)停止发送
+	once sync.Once
 }
 
 // signalDone 幂等关闭 done channel(防重复 close panic)。
@@ -213,7 +213,7 @@ type Event struct {
 type EventBus struct {
 	mu          sync.RWMutex
 	subscribers map[string]chan Event // subID → channel
-	dropped     int64                // 累计丢弃事件数
+	dropped     int64                 // 累计丢弃事件数
 }
 
 func NewEventBus() *EventBus {
@@ -289,15 +289,15 @@ func (b *EventBus) Broadcast(ev Event) {
 // --- Relay 主体 ---
 
 type Relay struct {
-	cfg     Config
-	agents  *Registry
-	console *EventBus
-	store   TaskStore      // 任务持久化(R2/F1),可为 nil(关闭持久化)
-	ca      *CA           // 内置 CA(C7 身份认证),可为 nil(关闭 mTLS)
-	policy  *CommandPolicy // 命令安全策略(S4)
-	audit   *AuditLog     // 审计日志(F1)
-	scheduler *Scheduler  // H2 定时任务调度器,可为 nil
-	updateRepo *UpdateRepo // Agent 版本仓库(自更新分发),可为 nil
+	cfg        Config
+	agents     *Registry
+	console    *EventBus
+	store      TaskStore      // 任务持久化(R2/F1),可为 nil(关闭持久化)
+	ca         *CA            // 内置 CA(C7 身份认证),可为 nil(关闭 mTLS)
+	policy     *CommandPolicy // 命令安全策略(S4)
+	audit      *AuditLog      // 审计日志(F1)
+	scheduler  *Scheduler     // H2 定时任务调度器,可为 nil
+	updateRepo *UpdateRepo    // Agent 版本仓库(自更新分发),可为 nil
 }
 
 func NewRelay(cfg Config) *Relay {
@@ -425,14 +425,14 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			log.Printf("[agent-read] %s 连接断开: %v", wc.id, err)
 			return
 		}
-	if msgType != websocket.MessageText {
-		// B1 修复：二进制帧 = 文件下载数据，路由到 transferID 的 channel
-		transferID, isLast, payload, parseErr := proto.ParseBinaryFrame(data)
-		if parseErr == nil {
-			wc.routeXferData(transferID, payload, isLast)
+		if msgType != websocket.MessageText {
+			// B1 修复：二进制帧 = 文件下载数据，路由到 transferID 的 channel
+			transferID, isLast, payload, parseErr := proto.ParseBinaryFrame(data)
+			if parseErr == nil {
+				wc.routeXferData(transferID, payload, isLast)
+			}
+			continue
 		}
-		continue
-	}
 		var env proto.Envelope
 		if err := json.Unmarshal(data, &env); err != nil {
 			log.Printf("[agent-read] JSON 解析失败: %v", err)

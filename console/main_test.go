@@ -72,10 +72,10 @@ func TestConsoleServesStatic(t *testing.T) {
 // TestPortOrDefault 验证端口提取辅助函数。
 func TestPortOrDefault(t *testing.T) {
 	cases := map[string]string{
-		":7781":      ":7781",
-		"0.0.0.0:7781": ":7781",
+		":7781":          ":7781",
+		"0.0.0.0:7781":   ":7781",
 		"127.0.0.1:7781": ":7781",
-		"7781":        "7781", // 无冒号原样返回
+		"7781":           "7781", // 无冒号原样返回
 	}
 	for in, want := range cases {
 		if got := portOrDefault(in); got != want {

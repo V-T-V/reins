@@ -121,16 +121,16 @@ func TestBootstrapPortOverride(t *testing.T) {
 }
 
 // TestBootstrapExternalURL 验证 ExternalURL 配置(经 nginx 反代/TLS 终端)。
-// 配置 https://203.0.113.99/rmm 应派生出:
-//   - server_url = https://203.0.113.99/rmm
-//   - relay_url  = wss://203.0.113.99/rmm/agent
+// 配置 https://203.0.113.10/rmm 应派生出:
+//   - server_url = https://203.0.113.10/rmm
+//   - relay_url  = wss://203.0.113.10/rmm/agent
 //   - ?host=/?port= 应被忽略(ExternalURL 权威)
 func TestBootstrapExternalURL(t *testing.T) {
 	r := &Relay{
 		cfg: Config{
 			Addr:        ":7780",
 			Token:       "tk",
-			ExternalURL: "https://203.0.113.99/rmm",
+			ExternalURL: "https://203.0.113.10/rmm",
 		},
 		agents:  NewRegistry(),
 		console: NewEventBus(),
@@ -154,13 +154,13 @@ func TestBootstrapExternalURL(t *testing.T) {
 	var info bootstrapInfo
 	json.NewDecoder(resp.Body).Decode(&info)
 
-	if info.ServerURL != "https://203.0.113.99/rmm" {
+	if info.ServerURL != "https://203.0.113.10/rmm" {
 		t.Errorf("ServerURL 应为 ExternalURL,得到 %s", info.ServerURL)
 	}
-	if info.RelayURL != "wss://203.0.113.99/rmm/agent" {
+	if info.RelayURL != "wss://203.0.113.10/rmm/agent" {
 		t.Errorf("RelayURL 应派生为 wss://.../rmm/agent,得到 %s", info.RelayURL)
 	}
-	if !strings.Contains(info.OneLineCmd, "https://203.0.113.99/rmm") {
+	if !strings.Contains(info.OneLineCmd, "https://203.0.113.10/rmm") {
 		t.Errorf("OneLineCmd 应含 ExternalURL,得到 %s", info.OneLineCmd)
 	}
 	if strings.Contains(info.OneLineCmd, "IGNORED") || strings.Contains(info.OneLineCmd, "9999") {

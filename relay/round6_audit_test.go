@@ -63,7 +63,7 @@ func TestReadAuditEntriesLimit(t *testing.T) {
 // TestReadAuditEntriesMissingFile 验证文件不存在时返回空(不 panic)。
 func TestReadAuditEntriesMissingFile(t *testing.T) {
 	got := readAuditEntries("/nonexistent/path/audit.log", 0, 10)
-	if got != nil && len(got) != 0 {
+	if len(got) != 0 {
 		t.Fatalf("不存在的文件应返回空, got %+v", got)
 	}
 }
@@ -97,8 +97,8 @@ func TestReadAuditEntriesMalformedLine(t *testing.T) {
 // TestCEFSeverityLevels 验证 formatCEF 按事件类型分级严重性。
 func TestCEFSeverityLevels(t *testing.T) {
 	cases := []struct {
-		event    string
-		minSev   string // 期望 severity ≥ 此值(CEF 末段)
+		event  string
+		minSev string // 期望 severity ≥ 此值(CEF 末段)
 	}{
 		{"task_submitted", "1"},
 		{"task_blocked", "7"},   // blocked → High
@@ -132,15 +132,14 @@ func TestCEFEscapeExtension(t *testing.T) {
 		t.Fatal("CEF 应含 msg= 扩展")
 	}
 	msgPart := cef[msgIdx:]
-	// msgPart 内的 | 应都被转义为 \|
-	if strings.Contains(msgPart, "|") && !strings.Contains(msgPart, "\\|") {
-		// 有 | 但无转义形式 → 可能未转义
-		// 更严格：所有 | 前应有 \
+	// msgPart 内的 | 应都被转义为 \|:去掉转义形式后不应残留裸 |
+	if strings.Contains(strings.ReplaceAll(msgPart, "\\|", ""), "|") {
+		t.Fatalf("msg= 扩展段存在未转义的 |, got: %q", msgPart)
 	}
 	// 直接验证 escapeCEF 函数
 	esc := escapeCEF(detail)
-	if strings.Contains(esc, "|") && !strings.HasPrefix(strings.SplitAfter(esc, "|")[0], "\\") {
-		// 至少确认转义发生了
+	if strings.Contains(strings.ReplaceAll(esc, "\\|", ""), "|") {
+		t.Fatalf("escapeCEF 后仍存在未转义的 |, got: %q", esc)
 	}
 	if !strings.Contains(esc, "\\|") {
 		t.Fatalf("| 应被转义为 \\|, got: %q", esc)

@@ -12,12 +12,12 @@
 package main
 
 const (
-	exitOK        = 0
-	exitGeneric   = 1
-	exitTaskFail  = 2
-	exitTimeout   = 3
-	exitNotFound  = 4
-	exitBlocked   = 5
+	exitOK       = 0
+	exitGeneric  = 1
+	exitTaskFail = 2
+	exitTimeout  = 3
+	exitNotFound = 4
+	exitBlocked  = 5
 )
 
 // exitError 携带期望的退出码。

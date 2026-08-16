@@ -33,8 +33,8 @@ type RolePolicy struct {
 
 // TenantManager 多租户管理器(内存版骨架)。
 type TenantManager struct {
-	mu    sync.RWMutex
-	orgs  map[string]*Organization // orgID → org
+	mu   sync.RWMutex
+	orgs map[string]*Organization // orgID → org
 }
 
 // NewTenantManager 构造空的多租户管理器。

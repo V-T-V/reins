@@ -32,12 +32,12 @@ func TestChunkUploadMerge(t *testing.T) {
 		}
 		chunk := content[start:end]
 		payload, _ := jsonMarshal(proto.FileTask{
-			Op:         "chunk_upload",
-			Path:       target,
-			UploadID:   "test-upload-1",
-			ChunkIndex: i,
+			Op:          "chunk_upload",
+			Path:        target,
+			UploadID:    "test-upload-1",
+			ChunkIndex:  i,
 			TotalChunks: totalChunks,
-			ContentB64: base64.StdEncoding.EncodeToString(chunk),
+			ContentB64:  base64.StdEncoding.EncodeToString(chunk),
 		})
 		r := e.Exec(context.Background(), payload, nil)
 		if !r.Success {

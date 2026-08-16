@@ -10,6 +10,7 @@
 //  7. 设 pendingRestart flag,主循环检测后优雅退出
 //  8. SCM OnFailure=restart 自动拉起新版本
 //  9. 新版本启动健康自检,成功注册 Relay 后删 .update-pending
+//
 // 10. 若 60s 未注册,健康自检用 .bak 回滚
 package main
 

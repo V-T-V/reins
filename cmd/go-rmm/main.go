@@ -556,9 +556,9 @@ func taskList(cfg config, args []string) error {
 	}
 
 	var resp struct {
-		Tasks []taskListItem `json:"tasks"`
-		Count int            `json:"count"`
-		Enabled bool         `json:"enabled"`
+		Tasks   []taskListItem `json:"tasks"`
+		Count   int            `json:"count"`
+		Enabled bool           `json:"enabled"`
 	}
 	// 扩大查询以补偿客户端过滤的样本损失
 	queryLimit := *limit
@@ -728,6 +728,7 @@ func cmdFile(cfg config, args []string) error {
 //   - 每片用现有 upload 端点传到 <name>.ftpart<NN>
 //   - 已传的分片跳过(断点续传,查目标机文件是否存在)
 //   - 全部传完后发 powershell 合并 + 校验 SHA256
+//
 // 解决单请求传 1GB 经 nginx 504 超时的问题。
 func fileUpload(cfg config, args []string) error {
 	// Q3:统一解析分片 flag(剥离 + 应用 + 校验上限)
@@ -758,9 +759,9 @@ func fileUpload(cfg config, args []string) error {
 
 	// 管道模式:localPath == "-" 从 stdin 读
 	var (
-		f        io.ReadCloser
+		f         io.ReadCloser
 		totalSize int64
-		err      error
+		err       error
 	)
 	if localPath == "-" {
 		f = io.NopCloser(os.Stdin)
@@ -1519,8 +1520,8 @@ type sseEvent struct {
 }
 
 type sseScanner struct {
-	r     *bufioReader
-	cur   sseEvent
+	r            *bufioReader
+	cur          sseEvent
 	pendingEvent string
 }
 

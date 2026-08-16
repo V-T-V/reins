@@ -105,7 +105,7 @@ _go_rmm() {
 complete -F _go_rmm go-rmm
 `, spaceJoin(mainCommands))
 
-var zshCompletion = fmt.Sprintf(`#compdef go-rmm
+var zshCompletion = `#compdef go-rmm
 # go-rmm zsh completion
 _go-rmm() {
     local -a commands
@@ -130,7 +130,7 @@ _go-rmm() {
     _describe 'command' commands
 }
 _go-rmm "$@"
-`)
+`
 
 var powershellCompletion = `# go-rmm PowerShell completion
 Register-ArgumentCompleter -Native -CommandName go-rmm -ScriptBlock {

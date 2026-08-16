@@ -66,7 +66,6 @@ func BenchmarkPooledCopy1MB(b *testing.B) {
 
 // === Envelope 序列化 ===
 
-
 // === 命令策略 quickCheck 性能 ===
 
 func BenchmarkPolicyCheckSafe(b *testing.B) {

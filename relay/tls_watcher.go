@@ -2,9 +2,9 @@
 //
 // 定期检查 Relay 的 TLS 证书过期时间,提前告警。
 // 配合 certbot/Let's Encrypt 实现自动轮换:
-//   1. certbot renew 每周检查 + 续签
-//   2. Relay 重载证书(无需重启,信号触发)
-//   3. 此模块监控证书状态 + Prometheus 告警指标
+//  1. certbot renew 每周检查 + 续签
+//  2. Relay 重载证书(无需重启,信号触发)
+//  3. 此模块监控证书状态 + Prometheus 告警指标
 package main
 
 import (
@@ -19,13 +19,13 @@ import (
 
 // TLSCertInfo 证书信息。
 type TLSCertInfo struct {
-	Path       string
-	NotBefore  time.Time
-	NotAfter   time.Time
-	DaysLeft   int64
-	Issuer     string
-	Subject    string
-	AutoRenew  bool // 是否启用自动轮换(certbot)
+	Path      string
+	NotBefore time.Time
+	NotAfter  time.Time
+	DaysLeft  int64
+	Issuer    string
+	Subject   string
+	AutoRenew bool // 是否启用自动轮换(certbot)
 }
 
 // CheckCertExpiry 检查证书过期状态。

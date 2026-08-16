@@ -44,13 +44,13 @@ func New(apiKey string) *Client {
 
 // Element 视觉模型识别出的可交互元素。
 type Element struct {
-	Text string  `json:"text"`
-	Type string  `json:"type"` // button/input/link/icon/text
-	X    int     `json:"x"`    // 中心点 X（像素，截图左上为原点）
-	Y    int     `json:"y"`    // 中心点 Y
-	W    int     `json:"w"`
-	H    int     `json:"h"`
-	Desc string  `json:"desc,omitempty"`
+	Text string `json:"text"`
+	Type string `json:"type"` // button/input/link/icon/text
+	X    int    `json:"x"`    // 中心点 X（像素，截图左上为原点）
+	Y    int    `json:"y"`    // 中心点 Y
+	W    int    `json:"w"`
+	H    int    `json:"h"`
+	Desc string `json:"desc,omitempty"`
 }
 
 // jsonArrRE 容错提取 JSON 数组（对齐 vision.mjs 的 /\[[\s\S]*\]/）。

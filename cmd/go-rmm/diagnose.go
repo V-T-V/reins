@@ -382,9 +382,13 @@ func setDiff(a, b map[string]bool) []string {
 	return diff
 }
 
-
 // 确保 time 被引用(diagnose 中的超时控制)。
 var _ = time.Second
 
-func getStr(m map[string]interface{}, k string) string { if v,ok := m[k].(string); ok { return v }; return "" }
+func getStr(m map[string]interface{}, k string) string {
+	if v, ok := m[k].(string); ok {
+		return v
+	}
+	return ""
+}
 func splitNewlines(s string) []string { return strings.Split(s, "\n") }

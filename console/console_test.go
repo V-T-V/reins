@@ -81,15 +81,8 @@ func TestBuildMuxSSEHeader(t *testing.T) {
 }
 
 func TestBuildMuxInvalidRelayURL(t *testing.T) {
-	// 无效 URL 应 Fatal(这里用 defer recover 期望 panic)
-	defer func() {
-		if r := recover(); r == nil {
-			// log.Fatalf 会直接 os.Exit, 不会 panic
-			// 这里只验证不 hang
-		}
-	}()
-	// buildMux 用 log.Fatalf(无效 URL),但我们无法捕获 os.Exit
-	// 改为测试一个边界:合法但不可达的 URL
+	// buildMux 对无效 URL 用 log.Fatalf,会直接 os.Exit 而非 panic,无法用 recover 捕获;
+	// 这里仅测试一个边界:合法但不可达的 URL 不会 hang
 	mux := buildMux("http://127.0.0.1:1") // 端口 1 通常不可达
 	if mux == nil {
 		t.Error("mux 不应为 nil")

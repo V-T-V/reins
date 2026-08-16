@@ -104,7 +104,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, task proto.TaskRequest, progr
 	d.mu.RUnlock()
 	if !ok {
 		return proto.TaskResult{
-			TaskID: task.TaskID,
+			TaskID:  task.TaskID,
 			Success: false,
 			Error:   "不支持的任务类型: " + task.Type,
 		}

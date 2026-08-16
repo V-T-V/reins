@@ -93,7 +93,7 @@ func TestRelayEndToEnd(t *testing.T) {
 
 	// 2. Agent 连接并 register
 	agentURL := strings.Replace(srv.URL+"/agent", "http://", "ws://", 1)
-	ac, _, err := websocket.Dial(ctx, agentURL, nil)
+	ac, _, err := websocket.Dial(ctx, agentURL, nil) //nolint:bodyclose // coder/websocket:成功时 resp.Body 为 nil,无需关闭
 	if err != nil {
 		t.Fatalf("Agent WS 连接失败: %v", err)
 	}
@@ -124,8 +124,8 @@ func TestRelayEndToEnd(t *testing.T) {
 		t.Fatalf("查询 agents 失败: %v", err)
 	}
 	var listResp struct {
-		Count int                `json:"count"`
-		Agents []proto.Register  `json:"agents"`
+		Count  int              `json:"count"`
+		Agents []proto.Register `json:"agents"`
 	}
 	json.NewDecoder(agentsResp.Body).Decode(&listResp)
 	agentsResp.Body.Close()
@@ -189,7 +189,7 @@ func TestRegistrySweep(t *testing.T) {
 
 	// 等待后用极小阈值清理，确保超过阈值
 	time.Sleep(3 * time.Millisecond)
-	if len(r.Sweep(1 * time.Millisecond)) != 1 {
+	if len(r.Sweep(1*time.Millisecond)) != 1 {
 		t.Fatal("首次清理应移除 a1")
 	}
 	if r.Conn("a1") != nil {

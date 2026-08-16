@@ -61,8 +61,8 @@ func TestConfigValidateZeroHeartbeatOK(t *testing.T) {
 
 func TestConfigValidateNegativeMaxTasks(t *testing.T) {
 	c := Config{
-		RelayURL:          "ws://relay:7780/agent",
-		AgentID:           "a1",
+		RelayURL:           "ws://relay:7780/agent",
+		AgentID:            "a1",
 		MaxConcurrentTasks: -1,
 	}
 	if err := c.Validate(); err == nil {

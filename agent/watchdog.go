@@ -42,7 +42,7 @@ func slaveStatePath() string {
 type slaveState struct {
 	SlaveAgentID  string    `json:"slave_agent_id"`
 	SlaveService  string    `json:"slave_service"`
-	LastStatus    string    `json:"last_status"`     // running / stopped / unknown
+	LastStatus    string    `json:"last_status"` // running / stopped / unknown
 	LastCheck     time.Time `json:"last_check"`
 	RescueCount   int       `json:"rescue_count"`    // 累计救援次数
 	LastRescue    time.Time `json:"last_rescue"`     // 最近一次救援时间
@@ -206,9 +206,9 @@ func queryServiceStatus(svcName string) string {
 // 供 Relay/CLI 查询救援历史(失败不影响主流程,仅记录)。
 func writeSlaveState(cfg Config, slaveSvc, status, rescueMsg string, failCount int) {
 	state := slaveState{
-		SlaveAgentID: cfg.SlaveAgentID,
-		SlaveService: slaveSvc,
-		LastStatus:   status,
+		SlaveAgentID:  cfg.SlaveAgentID,
+		SlaveService:  slaveSvc,
+		LastStatus:    status,
 		LastCheck:     time.Now(),
 		LastRescueMsg: rescueMsg,
 	}

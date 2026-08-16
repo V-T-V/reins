@@ -26,10 +26,11 @@ jobs:
         run: go mod download
 
       - name: Build all components
-        run: |
-          go build -ldflags "-X main.version=ci" ./relay/
-          go build -ldflags "-X main.version=ci" ./agent/
-          go build -ldflags "-X main.version=ci" ./cmd/go-rmm/
+        # 不带 -o 构建 main 包时,二进制以目录名写入仓库根,与已存在的
+        # relay/ agent/ 目录同名冲突(go: build output "relay" already exists
+        # and is a directory),故用 ./... 做纯编译门禁;产物由 cross-compile
+        # job 用 -o 生成。
+        run: go build -ldflags "-X main.version=ci" ./...
 
       - name: Vet
         run: go vet ./...

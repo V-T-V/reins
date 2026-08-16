@@ -181,7 +181,6 @@ func TestScriptLibraryReadRefusesTraversal(t *testing.T) {
 	}
 }
 
-
 // === buffer_pool 单元测试(此前零覆盖) ===
 // 验证池化 buffer 的容量不变量:Get 返回正确容量,Put 后复用,Put 不同容量不损坏。
 

@@ -24,8 +24,8 @@ import (
 
 // SessionRecorder 录制单个 shell 会话。
 type SessionRecorder struct {
-	mu       sync.Mutex
-	file     *os.File
+	mu        sync.Mutex
+	file      *os.File
 	startTime time.Time
 	sessionID string
 	agentID   string

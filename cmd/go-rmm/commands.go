@@ -23,29 +23,29 @@ import (
 func cmdStatus(cfg config, args []string) error {
 	// 1. healthz
 	var health struct {
-		Relay    string `json:"relay"`
-		Store    string `json:"store"`
-		Agents   int    `json:"agents"`
-		UptimeS  int    `json:"uptime_s"`
+		Relay   string `json:"relay"`
+		Store   string `json:"store"`
+		Agents  int    `json:"agents"`
+		UptimeS int    `json:"uptime_s"`
 	}
 	if err := apiGetNoAuth(cfg, "/healthz", &health); err != nil {
 		// healthz 失败说明 Relay 不可达,直接返回
-		return fmt.Errorf("Relay 不可达: %w", err)
+		return fmt.Errorf("relay 不可达: %w", err)
 	}
 
 	// 2. metrics(无需鉴权)
 	var metrics struct {
-		AgentsOnline      int64 `json:"agents_online"`
-		TasksSubmitted    int64 `json:"tasks_submitted"`
-		TasksDispatched   int64 `json:"tasks_dispatched"`
-		TasksCompleted    int64 `json:"tasks_completed"`
-		TasksFailed       int64 `json:"tasks_failed"`
-		TasksBlocked      int64 `json:"tasks_blocked"`
-		TasksCancelled    int64 `json:"tasks_cancelled"`
-		TasksReaped       int64 `json:"tasks_reaped"`
-		EventsDropped     int64 `json:"events_dropped"`
-		UptimeSeconds     int64 `json:"uptime_seconds"`
-		Goroutines        int64 `json:"goroutines"`
+		AgentsOnline    int64 `json:"agents_online"`
+		TasksSubmitted  int64 `json:"tasks_submitted"`
+		TasksDispatched int64 `json:"tasks_dispatched"`
+		TasksCompleted  int64 `json:"tasks_completed"`
+		TasksFailed     int64 `json:"tasks_failed"`
+		TasksBlocked    int64 `json:"tasks_blocked"`
+		TasksCancelled  int64 `json:"tasks_cancelled"`
+		TasksReaped     int64 `json:"tasks_reaped"`
+		EventsDropped   int64 `json:"events_dropped"`
+		UptimeSeconds   int64 `json:"uptime_seconds"`
+		Goroutines      int64 `json:"goroutines"`
 	}
 	_ = apiGetNoAuth(cfg, "/api/metrics", &metrics) // 失败不致命
 
@@ -269,9 +269,9 @@ func agentEnroll(cfg config, args []string) error {
 	agentID := args[0]
 	body := map[string]string{"agent_id": agentID}
 	var resp struct {
-		AgentID  string `json:"agent_id"`
-		Token    string `json:"token"`
-		ExpiresIn int   `json:"expires_in"`
+		AgentID   string `json:"agent_id"`
+		Token     string `json:"token"`
+		ExpiresIn int    `json:"expires_in"`
 	}
 	if err := apiPost(cfg, "/api/enroll-token", body, &resp); err != nil {
 		return err

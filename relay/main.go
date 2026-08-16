@@ -140,25 +140,28 @@ func main() {
 	defer stop()
 
 	// 零交互:启动成功后打印连接信息
-	port := cfg.Addr
-	if strings.HasPrefix(port, ":") { port = port[1:] }
-	if port == "" { port = "7780" }
+	port := strings.TrimPrefix(cfg.Addr, ":")
+	if port == "" {
+		port = "7780"
+	}
 	localIP := getLocalIP()
 	tokenHint := cfg.Token
-	if len(tokenHint) > 8 { tokenHint = tokenHint[:8] + "..." }
+	if len(tokenHint) > 8 {
+		tokenHint = tokenHint[:8] + "..."
+	}
 
 	fmt.Println()
 	fmt.Println("╔════════════════════════════════════════════════════╗")
 	fmt.Println("║         go-rmm 服务端已启动!                       ║")
-	fmt.Printf( "║  Web UI:  http://localhost:%s                     ║\n", port)
-	fmt.Printf( "║  外网IP:  http://%s:%s                          \n", localIP, port)
-	fmt.Printf( "║  Token:   %s              \n", tokenHint)
+	fmt.Printf("║  Web UI:  http://localhost:%s                     ║\n", port)
+	fmt.Printf("║  外网IP:  http://%s:%s                          \n", localIP, port)
+	fmt.Printf("║  Token:   %s              \n", tokenHint)
 	fmt.Println("║                                                    ║")
 	fmt.Println("║  ─── 在被控端执行 ───                              ║")
-	fmt.Printf( "║  go-rmm-agent run -relay ws://%s:%s/agent -token <token>\n", localIP, port)
+	fmt.Printf("║  go-rmm-agent run -relay ws://%s:%s/agent -token <token>\n", localIP, port)
 	fmt.Println("║                                                    ║")
 	fmt.Println("║  ─── 在操作端执行 ───                              ║")
-	fmt.Printf( "║  go-rmm --relay http://%s:%s --token <token> agent list\n", localIP, port)
+	fmt.Printf("║  go-rmm --relay http://%s:%s --token <token> agent list\n", localIP, port)
 	fmt.Println("╚════════════════════════════════════════════════════╝")
 	fmt.Println()
 

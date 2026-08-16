@@ -29,9 +29,9 @@ const TransferBufferSize = 256 * 1024
 // SHA256 增量校验（io.MultiWriter），.part 临时文件支持断点续传。
 // 不经 bbolt/Executor/任务状态机——文件传输是独立会话。
 type TransferEngine struct {
-	mu       sync.Mutex
-	sessions map[string]*transferSession
-	policy   *fileTransferPolicy // B3 修复：路径校验
+	mu        sync.Mutex
+	sessions  map[string]*transferSession
+	policy    *fileTransferPolicy // B3 修复：路径校验
 	workspace string              // FT:相对路径解析基准(避免落到 SYSTEM CWD)
 	pathInUse map[string]struct{} // R1 修复:upload path 互斥,防并发同 path 双写 .part
 	// Q4:文件传输累计计数器(原子操作,无锁)。供未来 metrics 端点/健康检查读取。
@@ -127,18 +127,18 @@ func resolveToWorkspace(path string) string {
 }
 
 type transferSession struct {
-	id        string
-	direction string // upload / download
-	path      string
-	file      *os.File
-	hash      hash.Hash // C2:增量 SHA256(每次 Write 时更新,isLast 时直接 Sum)
-	bytesDone int64
-	total     int64
-	limit     int64 // O3:download 分片模式本次最多读取的字节数(0=读到 EOF)
+	id             string
+	direction      string // upload / download
+	path           string
+	file           *os.File
+	hash           hash.Hash // C2:增量 SHA256(每次 Write 时更新,isLast 时直接 Sum)
+	bytesDone      int64
+	total          int64
+	limit          int64  // O3:download 分片模式本次最多读取的字节数(0=读到 EOF)
 	expectedSHA256 string // M8: Console 预算的摘要,完成时比对
-	startTime time.Time
-	lastProg  time.Time // 进度限流
-	cancel    context.CancelFunc
+	startTime      time.Time
+	lastProg       time.Time // 进度限流
+	cancel         context.CancelFunc
 	// P0-D1 修复:per-session 互斥锁。
 	// recvLoop 对每个上传帧 `go handleUploadData`,多 goroutine 并发操作同一 session。
 	// 此锁保证 file.Write + hash.Write + bytesDone 串行化,杜绝乱序写入与 data race。
@@ -162,7 +162,8 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 		}
 	}
 
-	if init.Direction == "upload" {
+	switch init.Direction {
+	case "upload":
 		// R1 修复:path 互斥。session map 以 transferID 为 key,但 .part 文件以 path 为 key。
 		// CLI 重试换新 transferID 但相同 path,两个 session 同时 O_APPEND 同一 .part →
 		// 数据双写 → SHA256 不匹配 → HTTP 500。这里用 pathInUse 拒绝并发同 path。
@@ -235,14 +236,14 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 			id: init.TransferID, direction: "upload", path: init.Path,
 			file: f, total: init.Size, startTime: time.Now(),
 			expectedSHA256: init.SHA256,
-			hash: h, // C2/P0-D2:增量 hash(续传时已喂入已有部分)
+			hash:           h, // C2/P0-D2:增量 hash(续传时已喂入已有部分)
 		}
 		te.mu.Unlock()
 		ready.Accepted = true
 		ready.ResumeOffset = resumeOffset
 		log.Printf("[xfer] 上传会话 %s 就绪: path=%s resume=%d", init.TransferID, init.Path, resumeOffset)
 
-	} else if init.Direction == "download" {
+	case "download":
 		// 下载：打开源文件
 		info, err := os.Stat(init.Path)
 		if err != nil {
@@ -454,11 +455,8 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 	// SHA256 增量
 	h := sha256.New()
 	buf := make([]byte, TransferBufferSize)
-	for {
-		// O3:分片模式 limit > 0 时,只读到 limit 字节就停(而非文件 EOF)
-		if sess.limit > 0 && sess.bytesDone >= sess.limit {
-			break
-		}
+	// O3:分片模式 limit > 0 时,只读到 limit 字节就停(而非文件 EOF)
+	for sess.limit <= 0 || sess.bytesDone < sess.limit {
 		n, err := sess.file.Read(buf)
 		if n > 0 {
 			// 分片模式:最后一帧可能超过 limit,截断

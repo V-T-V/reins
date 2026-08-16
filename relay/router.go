@@ -23,24 +23,24 @@ import (
 func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", r.handleListAgents)
 	mux.HandleFunc("POST /api/tasks", r.handlePostTask)
-	mux.HandleFunc("POST /api/tasks/batch", r.handleBatchTask) // C10 批量下发
-	mux.HandleFunc("POST /api/tasks/cancel", r.handleCancelTask) // C6 取消任务
-	mux.HandleFunc("GET /api/tasks", r.handleListTasks)   // C4/F1 任务历史
-	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)    // C4 单任务详情+结果
-	mux.HandleFunc("POST /api/enroll-token", r.handleGenEnrollToken) // C7 生成注册令牌
-	mux.HandleFunc("POST /api/enroll", r.handleEnroll)               // C7 Agent 换证书
-	mux.HandleFunc("POST /api/agents/revoke", r.handleRevokeAgent)   // G2 撤销 Agent 证书
-	mux.HandleFunc("GET /api/crons", r.handleListCrons)             // H2 cron 列表
-	mux.HandleFunc("POST /api/crons", r.handleAddCron)              // H2 新建 cron
-	mux.HandleFunc("DELETE /api/crons/", r.handleDeleteCron)        // H2 删除 cron
-	mux.HandleFunc("POST /api/shell/open", r.handleShellOpen)       // H3 开终端会话
-	mux.HandleFunc("POST /api/shell/input", r.handleShellInput)     // H3 发 stdin
-	mux.HandleFunc("POST /api/shell/close", r.handleShellClose)     // H3 关会话
-	mux.HandleFunc("POST /api/transfer/upload", r.handleTransferUpload)   // J2 上传
+	mux.HandleFunc("POST /api/tasks/batch", r.handleBatchTask)              // C10 批量下发
+	mux.HandleFunc("POST /api/tasks/cancel", r.handleCancelTask)            // C6 取消任务
+	mux.HandleFunc("GET /api/tasks", r.handleListTasks)                     // C4/F1 任务历史
+	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)                      // C4 单任务详情+结果
+	mux.HandleFunc("POST /api/enroll-token", r.handleGenEnrollToken)        // C7 生成注册令牌
+	mux.HandleFunc("POST /api/enroll", r.handleEnroll)                      // C7 Agent 换证书
+	mux.HandleFunc("POST /api/agents/revoke", r.handleRevokeAgent)          // G2 撤销 Agent 证书
+	mux.HandleFunc("GET /api/crons", r.handleListCrons)                     // H2 cron 列表
+	mux.HandleFunc("POST /api/crons", r.handleAddCron)                      // H2 新建 cron
+	mux.HandleFunc("DELETE /api/crons/", r.handleDeleteCron)                // H2 删除 cron
+	mux.HandleFunc("POST /api/shell/open", r.handleShellOpen)               // H3 开终端会话
+	mux.HandleFunc("POST /api/shell/input", r.handleShellInput)             // H3 发 stdin
+	mux.HandleFunc("POST /api/shell/close", r.handleShellClose)             // H3 关会话
+	mux.HandleFunc("POST /api/transfer/upload", r.handleTransferUpload)     // J2 上传
 	mux.HandleFunc("POST /api/transfer/download", r.handleTransferDownload) // J2 下载
 	mux.HandleFunc("GET /api/events", r.handleSSE)
 	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
-	mux.HandleFunc("GET /healthz", r.handleHealthz) // D8 深度健康检查
+	mux.HandleFunc("GET /healthz", r.handleHealthz)     // D8 深度健康检查
 	// 阶段 3.1:隧道(端口转发)
 	mux.HandleFunc("POST /api/tunnel/open", r.handleTunnelOpen)
 	mux.HandleFunc("POST /api/tunnel/data", r.handleTunnelData)
@@ -163,7 +163,7 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var body struct {
-		Tag     string          `json:"tag"`     // 如 "env=prod"
+		Tag     string          `json:"tag"` // 如 "env=prod"
 		Type    string          `json:"type"`
 		Payload json.RawMessage `json:"payload"`
 		Timeout int             `json:"timeout"`
@@ -250,11 +250,15 @@ func summarizePayload(taskType string, payload []byte) string {
 	var text string
 	switch taskType {
 	case "powershell":
-		var t struct{ Command string `json:"command"` }
+		var t struct {
+			Command string `json:"command"`
+		}
 		json.Unmarshal(payload, &t)
 		text = t.Command
 	case "script":
-		var t struct{ Content string `json:"content"` }
+		var t struct {
+			Content string `json:"content"`
+		}
 		json.Unmarshal(payload, &t)
 		text = t.Content
 	default:
@@ -690,7 +694,7 @@ func (r *Relay) handleSSE(w http.ResponseWriter, req *http.Request) {
 			rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if writeSSEErr(w, flusher, ev.Kind, map[string]any{
 				"agent_id": ev.AgentID,
-				"data":     json.RawMessage(ev.Payload),
+				"data":     ev.Payload,
 				"ts":       ev.TS,
 			}) {
 				return // 写失败,退出
@@ -1162,7 +1166,7 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 	select {
 	case ready := <-readyCh:
 		if !ready.Accepted {
-			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("Agent 拒绝: %s", ready.Reason)))
+			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("agent 拒绝: %s", ready.Reason)))
 			return
 		}
 		// A6 修复:续传偏移——丢弃 HTTP body 前 N 字节
@@ -1249,7 +1253,7 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 		} else {
 			log.Printf("[xfer] 上传失败 %s agent=%s %s: %s", transferID, agentID, elapsed.Truncate(time.Millisecond), complete.Error)
 			metrics.IncXfer("upload_fail", 1) // M1:失败计数
-			writeJSON(w, http.StatusInternalServerError, errMap(fmt.Errorf("Agent 校验失败: %s", complete.Error)))
+			writeJSON(w, http.StatusInternalServerError, errMap(fmt.Errorf("agent 校验失败: %s", complete.Error)))
 		}
 	case <-ctx.Done():
 		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("客户端断开等待校验完成")))
@@ -1329,7 +1333,7 @@ func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request)
 	select {
 	case ready := <-readyCh:
 		if !ready.Accepted {
-			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("Agent 拒绝: %s", ready.Reason)))
+			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("agent 拒绝: %s", ready.Reason)))
 			return
 		}
 	case <-time.After(30 * time.Second): // S5:10s→30s
@@ -1382,4 +1386,3 @@ done:
 		r.audit.Log(AuditEntry{Event: "file_download", AgentID: agentID, Detail: fmt.Sprintf("%s %d bytes", transferID, totalWritten)})
 	}
 }
-

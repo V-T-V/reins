@@ -22,22 +22,22 @@ import (
 
 // WorkflowDef 工作流定义(JSON)。
 type WorkflowDef struct {
-	Name        string        `json:"name"`
-	Target      string        `json:"target"`       // 单 agent 或留空用 steps 里的
-	Variables   map[string]string `json:"vars,omitempty"`
-	Steps       []WorkflowStep `json:"steps"`
-	OnFailure   string         `json:"on_failure,omitempty"` // abort(默认) / continue
+	Name      string            `json:"name"`
+	Target    string            `json:"target"` // 单 agent 或留空用 steps 里的
+	Variables map[string]string `json:"vars,omitempty"`
+	Steps     []WorkflowStep    `json:"steps"`
+	OnFailure string            `json:"on_failure,omitempty"` // abort(默认) / continue
 }
 
 // WorkflowStep 单步骤。
 type WorkflowStep struct {
-	Name      string `json:"name"`
-	Command   string `json:"command"`             // PowerShell 命令
-	Timeout   int    `json:"timeout,omitempty"`   // 默认 60
+	Name    string `json:"name"`
+	Command string `json:"command"`           // PowerShell 命令
+	Timeout int    `json:"timeout,omitempty"` // 默认 60
 	// 条件:上一步 stdout 匹配此正则才执行(否则 skip)
 	Condition string `json:"condition,omitempty"`
 	// 提取变量:从 stdout 提取命名捕获组,供后续步骤 ${var} 引用
-	Extract   map[string]string `json:"extract,omitempty"` // varName → 正则
+	Extract map[string]string `json:"extract,omitempty"` // varName → 正则
 }
 
 // cmdWorkflow workflow 子命令入口。
@@ -184,11 +184,11 @@ func workflowRun(cfg config, args []string) error {
 type AlertRule struct {
 	ID         string `json:"id"`
 	AgentID    string `json:"agent_id"`
-	Metric     string `json:"metric"`     // cpu / mem / disk
-	Operator   string `json:"operator"`   // gt / lt
-	Threshold  int    `json:"threshold"`  // 90
+	Metric     string `json:"metric"`      // cpu / mem / disk
+	Operator   string `json:"operator"`    // gt / lt
+	Threshold  int    `json:"threshold"`   // 90
 	ForSeconds int    `json:"for_seconds"` // 持续秒数(简化:单次触发)
-	CronExpr   string `json:"cron_expr"`  // 检查频率(默认 */1 * * * *)
+	CronExpr   string `json:"cron_expr"`   // 检查频率(默认 */1 * * * *)
 }
 
 func cmdAlert(cfg config, args []string) error {

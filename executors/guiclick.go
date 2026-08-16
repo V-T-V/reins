@@ -149,9 +149,9 @@ func (e *GUIClickExecutor) Exec(ctx context.Context, payload []byte, progress Pr
 
 	// 达到最大步数仍未完成
 	r := proto.TaskResult{
-		Success: false,
+		Success:  false,
 		ExitCode: 0,
-		Error: fmt.Sprintf("达到最大步数 %d 未达成目标", maxSteps),
+		Error:    fmt.Sprintf("达到最大步数 %d 未达成目标", maxSteps),
 	}
 	r.Data, _ = jsonMarshal(map[string]any{"steps": stepsLog, "completed": false})
 	log.Printf("[guiclick] 意图 %q 达到最大步数未完成", task.Intent)

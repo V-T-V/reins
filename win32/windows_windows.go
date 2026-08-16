@@ -10,15 +10,15 @@ import (
 )
 
 var (
-	procEnumWindows       = user32.NewProc("EnumWindows")
-	procGetWindowTextW    = user32.NewProc("GetWindowTextW")
-	procGetClassNameW     = user32.NewProc("GetClassNameW")
-	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
-	procGetWindowRect     = user32.NewProc("GetWindowRect")
-	procIsWindowVisible   = user32.NewProc("IsWindowVisible")
-	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
-	procShowWindow        = user32.NewProc("ShowWindow")
-	procIsIconic          = user32.NewProc("IsIconic")
+	procEnumWindows              = user32.NewProc("EnumWindows")
+	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
+	procGetClassNameW            = user32.NewProc("GetClassNameW")
+	procGetWindowThreadProcessID = user32.NewProc("GetWindowThreadProcessId")
+	procGetWindowRect            = user32.NewProc("GetWindowRect")
+	procIsWindowVisible          = user32.NewProc("IsWindowVisible")
+	procSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
+	procShowWindow               = user32.NewProc("ShowWindow")
+	procIsIconic                 = user32.NewProc("IsIconic")
 )
 
 const (
@@ -157,7 +157,7 @@ func getClassName(hwnd uintptr) string {
 
 func getPid(hwnd uintptr) uint32 {
 	var pid uint32
-	procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	procGetWindowThreadProcessID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
 	return pid
 }
 

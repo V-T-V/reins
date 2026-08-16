@@ -84,10 +84,10 @@ type DiskInfo struct {
 
 // DiskIOInfo 磁盘 IO 速率(P1 新增)。
 type DiskIOInfo struct {
-	Device      string  `json:"device"`         // C:, D: 或 PhysicalDrive0
-	ReadMBps    float64 `json:"read_mbps"`      // 读 MB/s
-	WriteMBps   float64 `json:"write_mbps"`     // 写 MB/s
-	IOPS        float64 `json:"iops,omitempty"` // 传输/秒
+	Device      string  `json:"device"`          // C:, D: 或 PhysicalDrive0
+	ReadMBps    float64 `json:"read_mbps"`       // 读 MB/s
+	WriteMBps   float64 `json:"write_mbps"`      // 写 MB/s
+	IOPS        float64 `json:"iops,omitempty"`  // 传输/秒
 	QueueLength float64 `json:"queue,omitempty"` // 当前队列长度
 }
 
@@ -99,9 +99,9 @@ type NetInfo struct {
 
 // NetIOInfo 网络 IO 速率(P1 新增)。
 type NetIOInfo struct {
-	Interface string  `json:"iface"`      // Wi-Fi, 以太网, eth0
-	RxKBps    float64 `json:"rx_kbps"`    // 接收 KB/s
-	TxKBps    float64 `json:"tx_kbps"`    // 发送 KB/s
+	Interface string  `json:"iface"`   // Wi-Fi, 以太网, eth0
+	RxKBps    float64 `json:"rx_kbps"` // 接收 KB/s
+	TxKBps    float64 `json:"tx_kbps"` // 发送 KB/s
 	RxErrs    int64   `json:"rx_errs,omitempty"`
 	TxErrs    int64   `json:"tx_errs,omitempty"`
 }
@@ -127,8 +127,8 @@ type GPUInfo struct {
 
 // SvcHealth 服务健康状态(P1 新增)。
 type SvcHealth struct {
-	Name    string `json:"name"`
-	Status  string `json:"status"` // Stopped/Running
+	Name      string `json:"name"`
+	Status    string `json:"status"` // Stopped/Running
 	StartType string `json:"start_type"`
 }
 
@@ -143,9 +143,9 @@ type PortInfo struct {
 
 // LogEvent 事件日志条目(P1 新增)。
 type LogEvent struct {
-	Time      int64  `json:"ts"`
-	Level     string `json:"level"` // Critical/Error/Warning
-	Source    string `json:"source"`
-	EventID   int32  `json:"event_id"`
-	Message   string `json:"message"`
+	Time    int64  `json:"ts"`
+	Level   string `json:"level"` // Critical/Error/Warning
+	Source  string `json:"source"`
+	EventID int32  `json:"event_id"`
+	Message string `json:"message"`
 }

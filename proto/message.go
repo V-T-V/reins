@@ -55,16 +55,16 @@ const (
 	// TypeError —— 任意方→对方：协议级错误（预留，当前未使用，P4 可用于鉴权失败等场景）。
 	TypeError = "error"
 	// H3 交互式终端消息类型：
-	TypeShellOpen  = "shell_open"  // Console→Relay→Agent：开会话
-	TypeShellInput = "shell_input" // Console→Relay→Agent：发 stdin
+	TypeShellOpen   = "shell_open"   // Console→Relay→Agent：开会话
+	TypeShellInput  = "shell_input"  // Console→Relay→Agent：发 stdin
 	TypeShellOutput = "shell_output" // Agent→Relay→Console：推 stdout/stderr
-	TypeShellClose = "shell_close" // 双向：关闭会话
+	TypeShellClose  = "shell_close"  // 双向：关闭会话
 	// J1 大文件传输消息类型（控制信令走 JSON，数据走二进制 WS 帧）：
-	TypeFileTransferInit     = "file_xfer_init"      // Console→Relay→Agent：发起传输
-	TypeFileTransferReady    = "file_xfer_ready"     // Agent→Relay→Console：就绪 + 续传偏移
-	TypeFileTransferProgress = "file_xfer_progress"  // Agent→Relay→Console：周期进度
-	TypeFileTransferComplete = "file_xfer_complete"  // Agent→Relay→Console：终态 + SHA256
-	TypeFileTransferCancel   = "file_xfer_cancel"    // 双向：取消
+	TypeFileTransferInit     = "file_xfer_init"     // Console→Relay→Agent：发起传输
+	TypeFileTransferReady    = "file_xfer_ready"    // Agent→Relay→Console：就绪 + 续传偏移
+	TypeFileTransferProgress = "file_xfer_progress" // Agent→Relay→Console：周期进度
+	TypeFileTransferComplete = "file_xfer_complete" // Agent→Relay→Console：终态 + SHA256
+	TypeFileTransferCancel   = "file_xfer_cancel"   // 双向：取消
 )
 
 // 任务类型常量，与 TaskRequest.Type 取值对应。
@@ -129,14 +129,14 @@ const DefaultTaskTimeout = 60
 //   - To 为 "*" 时表示广播（仅用于 agent_online/offline 等通知）。
 //   - ID 由发送方生成（UUIDv4），ReplyTo 用于结果/进度回填对应请求。
 type Envelope struct {
-	Version int             `json:"v"`                 // 协议版本，当前 1
-	Type    string          `json:"type"`              // 消息类型，取 Type* 常量
-	From    string          `json:"from"`              // 发送方 ID（agent-xxx / console-xxx / relay）
-	To      string          `json:"to,omitempty"`      // 接收方 ID；"*" 表示广播
-	ID      string          `json:"id"`                // 消息 ID（UUIDv4）
+	Version int             `json:"v"`                  // 协议版本，当前 1
+	Type    string          `json:"type"`               // 消息类型，取 Type* 常量
+	From    string          `json:"from"`               // 发送方 ID（agent-xxx / console-xxx / relay）
+	To      string          `json:"to,omitempty"`       // 接收方 ID；"*" 表示广播
+	ID      string          `json:"id"`                 // 消息 ID（UUIDv4）
 	ReplyTo string          `json:"reply_to,omitempty"` // 对应请求的 ID（结果/进度回填）
-	Payload json.RawMessage `json:"payload,omitempty"` // 按 Type 反序列化
-	TS      int64           `json:"ts"`                // Unix 毫秒时间戳
+	Payload json.RawMessage `json:"payload,omitempty"`  // 按 Type 反序列化
+	TS      int64           `json:"ts"`                 // Unix 毫秒时间戳
 }
 
 // NewEnvelope 构造一个带默认字段的信封。payload 可为 nil。
@@ -171,12 +171,12 @@ func (e Envelope) Decode(v any) error {
 
 // Register 由 Agent 在连接建立后发送，登记身份与支持的任务类型。
 type Register struct {
-	AgentID      string            `json:"agent_id"`              // Agent 唯一 ID
-	Hostname     string            `json:"hostname"`              // 主机名
-	OS           string            `json:"os"`                    // runtime.GOOS/runtime.GOARCH
-	Version      string            `json:"version"`               // Agent 二进制版本
-	Capabilities []string          `json:"capabilities"`          // 支持的任务类型列表
-	Tags         map[string]string `json:"tags,omitempty"`        // 业务自定义标签
+	AgentID      string            `json:"agent_id"`       // Agent 唯一 ID
+	Hostname     string            `json:"hostname"`       // 主机名
+	OS           string            `json:"os"`             // runtime.GOOS/runtime.GOARCH
+	Version      string            `json:"version"`        // Agent 二进制版本
+	Capabilities []string          `json:"capabilities"`   // 支持的任务类型列表
+	Tags         map[string]string `json:"tags,omitempty"` // 业务自定义标签
 }
 
 // Heartbeat 心跳载荷。Seq 为递增序号，用于检测丢包。
@@ -196,11 +196,11 @@ type Heartbeat struct {
 
 // TaskRequest 由控制台构造，经 Relay 路由到指定 Agent。
 type TaskRequest struct {
-	TaskID   string          `json:"task_id"`         // 任务唯一 ID（UUIDv4）
-	Type     string          `json:"type"`            // 任务类型，取 Task* 常量
-	AgentID  string          `json:"agent_id"`        // 目标 Agent ID
-	Payload  json.RawMessage `json:"payload"`         // 按 Type 反序列化
-	Timeout  int             `json:"timeout"`         // 秒，0 表示用 DefaultTaskTimeout
+	TaskID   string          `json:"task_id"`            // 任务唯一 ID（UUIDv4）
+	Type     string          `json:"type"`               // 任务类型，取 Task* 常量
+	AgentID  string          `json:"agent_id"`           // 目标 Agent ID
+	Payload  json.RawMessage `json:"payload"`            // 按 Type 反序列化
+	Timeout  int             `json:"timeout"`            // 秒，0 表示用 DefaultTaskTimeout
 	Priority int             `json:"priority,omitempty"` // 0-9，预留
 	// IdempotencyKey 幂等键：同一 key 在窗口期内只执行一次（防重投重复执行）。
 	// 为空时由 Relay 用 TaskID 兜底。
@@ -233,7 +233,7 @@ type TaskProgress struct {
 
 // PowerShellTask 执行内联 PowerShell 命令。
 type PowerShellTask struct {
-	Command        string `json:"command"`                 // PowerShell 命令文本
+	Command         string `json:"command"`                    // PowerShell 命令文本
 	ExecutionPolicy string `json:"execution_policy,omitempty"` // 默认 Bypass
 }
 
@@ -266,8 +266,8 @@ type ScreenshotTask struct {
 
 // BrowseTask headless 浏览器自动化。
 type BrowseTask struct {
-	URL     string          `json:"url"`     // 起始 URL
-	Actions []BrowseAction  `json:"actions"` // 有序动作序列
+	URL     string         `json:"url"`     // 起始 URL
+	Actions []BrowseAction `json:"actions"` // 有序动作序列
 }
 type BrowseAction struct {
 	Op    string `json:"op"`              // navigate/click/fill/wait/screenshot/eval
@@ -277,8 +277,8 @@ type BrowseAction struct {
 
 // GUIClickTask 视觉驱动的桌面点击。
 type GUIClickTask struct {
-	Intent   string `json:"intent"`            // 自然语言意图描述（如"点击登录按钮"）
-	Target   string `json:"target,omitempty"`  // 目标窗口进程名/标题（限定截图范围）
+	Intent   string `json:"intent"`              // 自然语言意图描述（如"点击登录按钮"）
+	Target   string `json:"target,omitempty"`    // 目标窗口进程名/标题（限定截图范围）
 	MaxSteps int    `json:"max_steps,omitempty"` // 最大交互步数，默认 5
 }
 
@@ -322,12 +322,12 @@ type Enroll struct {
 
 // EnrollResp Relay→Agent：签发的客户端证书 + CA 证书。
 type EnrollResp struct {
-	AgentID    string `json:"agent_id"`
-	CertPEM    string `json:"cert_pem"`    // 签发给 Agent 的客户端证书（短期）
-	CAPEM      string `json:"ca_pem"`      // Relay 的 CA 根证书（Agent 用于校验 Relay）
-	ExpiresAt  int64  `json:"expires_at"`  // 证书过期 Unix 时间戳
-	Success    bool   `json:"success"`
-	Error      string `json:"error,omitempty"`
+	AgentID   string `json:"agent_id"`
+	CertPEM   string `json:"cert_pem"`   // 签发给 Agent 的客户端证书（短期）
+	CAPEM     string `json:"ca_pem"`     // Relay 的 CA 根证书（Agent 用于校验 Relay）
+	ExpiresAt int64  `json:"expires_at"` // 证书过期 Unix 时间戳
+	Success   bool   `json:"success"`
+	Error     string `json:"error,omitempty"`
 }
 
 // --- H3 交互式终端 ---
@@ -349,7 +349,7 @@ type ShellInput struct {
 // ShellOutput 推送 stdout/stderr（Agent→Relay→Console）。
 type ShellOutput struct {
 	SessionID string `json:"session_id"`
-	DataB64   string `json:"data_b64"`   // base64 编码的输出字节
+	DataB64   string `json:"data_b64"`         // base64 编码的输出字节
 	Stream    string `json:"stream,omitempty"` // stdout/stderr
 	Exit      bool   `json:"exit,omitempty"`   // 进程退出标记
 	ExitCode  int    `json:"exit_code,omitempty"`
@@ -365,20 +365,20 @@ type ShellClose struct {
 
 // FileTransferInit 发起传输（Console→Relay→Agent）。
 type FileTransferInit struct {
-	TransferID string `json:"transfer_id"`         // UUID，贯穿全生命周期
-	Direction  string `json:"direction"`           // "upload"(Console→Agent) / "download"(Agent→Console)
-	Path       string `json:"path"`                // Agent 侧绝对路径
-	Size       int64  `json:"size"`                // upload 时已知；download 时 Agent 回填
-	SHA256     string `json:"sha256,omitempty"`    // upload: Console 预算的摘要；download: Agent 算完回填
-	Offset     int64  `json:"offset,omitempty"`    // O3:download 分片起始偏移(Agent Seek 到此处开始读),upload 忽略
+	TransferID string `json:"transfer_id"`      // UUID，贯穿全生命周期
+	Direction  string `json:"direction"`        // "upload"(Console→Agent) / "download"(Agent→Console)
+	Path       string `json:"path"`             // Agent 侧绝对路径
+	Size       int64  `json:"size"`             // upload 时已知；download 时 Agent 回填
+	SHA256     string `json:"sha256,omitempty"` // upload: Console 预算的摘要；download: Agent 算完回填
+	Offset     int64  `json:"offset,omitempty"` // O3:download 分片起始偏移(Agent Seek 到此处开始读),upload 忽略
 }
 
 // FileTransferReady Agent 就绪（含续传偏移）。
 type FileTransferReady struct {
 	TransferID   string `json:"transfer_id"`
 	Accepted     bool   `json:"accepted"`
-	ResumeOffset int64  `json:"resume_offset"`    // 已落盘字节数，发送方 Seek 到此偏移
-	Size         int64  `json:"size,omitempty"`   // download 时 Agent 回填
+	ResumeOffset int64  `json:"resume_offset"`  // 已落盘字节数，发送方 Seek 到此偏移
+	Size         int64  `json:"size,omitempty"` // download 时 Agent 回填
 	Reason       string `json:"reason,omitempty"`
 }
 
@@ -388,7 +388,7 @@ type FileTransferProgress struct {
 	BytesDone  int64  `json:"bytes_done"`
 	Total      int64  `json:"total"`
 	Percent    int    `json:"percent"`
-	SpeedBps   int64  `json:"speed_bps"`         // Agent 按 Δbytes/Δt 估算
+	SpeedBps   int64  `json:"speed_bps"` // Agent 按 Δbytes/Δt 估算
 }
 
 // FileTransferComplete 传输终态。

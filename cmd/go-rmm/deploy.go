@@ -32,12 +32,12 @@ import (
 
 // PlayBook 部署编排描述。
 type PlayBook struct {
-	Name      string         `json:"name"`
-	Target    string         `json:"target,omitempty"`     // 单 agent ID
-	TargetTag string         `json:"target_tag,omitempty"` // 或按标签批量(与 target 互斥)
-	Workspace string         `json:"workspace,omitempty"`  // 覆盖 agent workspace
+	Name      string            `json:"name"`
+	Target    string            `json:"target,omitempty"`     // 单 agent ID
+	TargetTag string            `json:"target_tag,omitempty"` // 或按标签批量(与 target 互斥)
+	Workspace string            `json:"workspace,omitempty"`  // 覆盖 agent workspace
 	Vars      map[string]string `json:"vars,omitempty"`
-	Steps     []PlayStep     `json:"steps"`
+	Steps     []PlayStep        `json:"steps"`
 }
 
 // PlayStep 单个步骤。
@@ -197,7 +197,7 @@ func execPlayStep(cfg config, pb PlayBook, step PlayStep, cmd, script, dst strin
 		}
 		// dst 相对 workspace 时,拼绝对路径(Agent 侧 FilePolicy 校验)
 		remotePath := dst
-		if pb.Workspace != "" && !filepath_IsAbs(dst) {
+		if pb.Workspace != "" && !filepathIsAbs(dst) {
 			remotePath = joinPath(pb.Workspace, dst)
 		}
 		return runFileUpload(cfg, target, step.Src, remotePath)
@@ -233,11 +233,11 @@ func runTaskSync(cfg config, agentID, taskType, cmd string, timeout int) error {
 	}
 	taskID := "deploy-" + fmt.Sprint(time.Now().UnixNano())
 	body := struct {
-		TaskID string          `json:"task_id"`
-		Type   string          `json:"type"`
-		AgentID string         `json:"agent_id"`
+		TaskID  string          `json:"task_id"`
+		Type    string          `json:"type"`
+		AgentID string          `json:"agent_id"`
 		Payload json.RawMessage `json:"payload"`
-		Timeout int            `json:"timeout"`
+		Timeout int             `json:"timeout"`
 	}{
 		TaskID: taskID, Type: taskType, AgentID: agentID,
 		Payload: payload, Timeout: timeout,
@@ -277,11 +277,11 @@ func runTaskSyncScript(cfg config, agentID, scriptPath, lang string, timeout int
 	}
 	taskID := "deploy-script-" + fmt.Sprint(time.Now().UnixNano())
 	body := struct {
-		TaskID string          `json:"task_id"`
-		Type   string          `json:"type"`
-		AgentID string         `json:"agent_id"`
+		TaskID  string          `json:"task_id"`
+		Type    string          `json:"type"`
+		AgentID string          `json:"agent_id"`
 		Payload json.RawMessage `json:"payload"`
-		Timeout int            `json:"timeout"`
+		Timeout int             `json:"timeout"`
 	}{
 		TaskID: taskID, Type: "script", AgentID: agentID,
 		Payload: payload, Timeout: timeout,
@@ -353,8 +353,8 @@ func parseDelay(s string) time.Duration {
 	return d
 }
 
-// filepath_IsAbs 跨平台绝对路径判断(避免 import 路径冲突)。
-func filepath_IsAbs(s string) bool {
+// filepathIsAbs 跨平台绝对路径判断(避免 import 路径冲突)。
+func filepathIsAbs(s string) bool {
 	if len(s) >= 1 && (s[0] == '/' || s[0] == '\\') {
 		return true
 	}

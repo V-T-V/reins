@@ -134,9 +134,9 @@ func (r *Relay) handleSecretPut(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var body struct {
-		Value    string `json:"value"`     // 凭据明文(不记入 audit)
-		TTL      int    `json:"ttl"`       // 秒,默认 3600
-		OneTime  bool   `json:"one_time"`  // 一次性(默认 true)
+		Value   string `json:"value"`    // 凭据明文(不记入 audit)
+		TTL     int    `json:"ttl"`      // 秒,默认 3600
+		OneTime bool   `json:"one_time"` // 一次性(默认 true)
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("解析失败: %w", err)))

@@ -36,7 +36,7 @@ func init() { log.SetOutput(io.Discard) }
 func dialRegisterAgent(ctx context.Context, t *testing.T, srv *httptest.Server, id string, caps []string) (*websocket.Conn, chan struct{}) {
 	t.Helper()
 	url := strings.Replace(srv.URL+"/agent", "http://", "ws://", 1)
-	c, _, err := websocket.Dial(ctx, url, nil)
+	c, _, err := websocket.Dial(ctx, url, nil) //nolint:bodyclose // coder/websocket:成功时 resp.Body 为 nil,无需关闭
 	if err != nil {
 		t.Fatalf("agent %s dial: %v", id, err)
 	}
@@ -75,7 +75,7 @@ func TestMultiConsoleSSEFanout(t *testing.T) {
 		// 复制 i 避免闭包捕获最后一个值。
 		ch := results[i]
 		req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/events?events=task_result", nil)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := http.DefaultClient.Do(req) //nolint:bodyclose // 下方已 defer Close,Body 在 goroutine 中读取,分析器追踪不到
 		if err != nil {
 			t.Fatalf("console %d SSE: %v", i, err)
 		}
@@ -196,9 +196,8 @@ func TestHeartbeatKeepsAgentAlive(t *testing.T) {
 			case <-stop:
 				return
 			case <-tk.C:
-				if r.Touch("alive-1", atomic.AddInt64(&beats, 1)) {
-					// ok
-				}
+				// ok:Touch 返回值无需断言,成功上报即视为存活
+				r.Touch("alive-1", atomic.AddInt64(&beats, 1))
 			}
 		}
 	}()

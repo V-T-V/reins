@@ -58,7 +58,7 @@ func (r *Relay) handleBootstrap(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// 优先级 1:ExternalURL(显式配置,最可靠)
-	// 例如 https://203.0.113.99/rmm,会自动派生 wss://203.0.113.99/rmm/agent
+	// 例如 https://203.0.113.10/rmm,会自动派生 wss://203.0.113.10/rmm/agent
 	extURL := strings.TrimRight(r.cfg.ExternalURL, "/")
 	if extURL != "" {
 		// 允许 ?host=/?port= 不生效(ExternalURL 已是最终权威)

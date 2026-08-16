@@ -2,9 +2,10 @@
 //
 // 现有 console_test / main_test 已覆盖「/api/* 被代理」+「静态前端」+「SSE header」。
 // 本文件补全 round 4 目标的三个具体 API 链路契约（console → relay 透传不变量）：
-//   1. 设备列表：GET /api/agents 透传 + JSON 契约(count/agents)保真。
-//   2. 任务下发：POST /api/tasks 透传请求体 + 鉴权 header + 回传 relay 状态码(202)。
-//   3. 结果收集：GET /api/tasks/{id} 透传路径参数 + 回传 task/result 契约。
+//  1. 设备列表：GET /api/agents 透传 + JSON 契约(count/agents)保真。
+//  2. 任务下发：POST /api/tasks 透传请求体 + 鉴权 header + 回传 relay 状态码(202)。
+//  3. 结果收集：GET /api/tasks/{id} 透传路径参数 + 回传 task/result 契约。
+//
 // 并覆盖：未匹配路由回静态前端、relay 5xx 透传不吞、Authorization header 透传。
 package main
 

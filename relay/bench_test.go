@@ -227,7 +227,7 @@ func BenchmarkCASignAgentCSR(b *testing.B) {
 // genBenchmarkKey 生成 ECDSA 测试密钥。
 func genBenchmarkKey() *ecdsaPrivateKey {
 	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	return (*ecdsaPrivateKey)(k)
+	return k
 }
 
 type ecdsaPrivateKey = ecdsa.PrivateKey

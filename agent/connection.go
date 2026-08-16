@@ -27,8 +27,8 @@ var agentBizID string
 type Agent struct {
 	cfg   Config
 	disp  *executors.Dispatcher
-	pool  *WorkerPool  // C6 并发限流
-	certs *AgentCerts  // C8 mTLS 证书（nil=非 mTLS 模式）
+	pool  *WorkerPool // C6 并发限流
+	certs *AgentCerts // C8 mTLS 证书（nil=非 mTLS 模式）
 }
 
 func NewAgent(cfg Config, disp *executors.Dispatcher) *Agent {
@@ -62,7 +62,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	agentBizID = a.cfg.AgentID
 	backoff := initialBackoff
 	rng := rand.New(rand.NewSource(time.Now().UnixNano())) // S1: jitter 随机源
-	relayIdx := 0 // L2: 当前使用的 relay 索引(RelayURLs 轮询)
+	relayIdx := 0                                          // L2: 当前使用的 relay 索引(RelayURLs 轮询)
 	for {
 		// 自更新:pendingRestart 标记触发优雅退出,SCM 自动拉新版本
 		if pendingRestart {
@@ -132,7 +132,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	c, _, err := websocket.Dial(dialCtx, a.cfg.RelayURL, dialOpts)
+	c, _, err := websocket.Dial(dialCtx, a.cfg.RelayURL, dialOpts) //nolint:bodyclose // coder/websocket:成功时 resp.Body 为 nil,无需关闭
 	if err != nil {
 		return err
 	}

@@ -11,12 +11,12 @@ import (
 
 // agentEntry 一个在线 Agent 的全部状态。
 type agentEntry struct {
-	info       proto.Register   // 注册信息
-	conn       *wsConn          // WS 连接
-	lastBeat   time.Time        // 最近一次心跳时间
-	lastSeq    int64            // 最近心跳序号
-	registeredAt time.Time      // 注册时间
-	xferStats  proto.Heartbeat  // V1:最近一次心跳携带的传输计数器(ub/db/uc/dc/fc)
+	info         proto.Register  // 注册信息
+	conn         *wsConn         // WS 连接
+	lastBeat     time.Time       // 最近一次心跳时间
+	lastSeq      int64           // 最近心跳序号
+	registeredAt time.Time       // 注册时间
+	xferStats    proto.Heartbeat // V1:最近一次心跳携带的传输计数器(ub/db/uc/dc/fc)
 }
 
 // Registry 维护在线 Agent 注册表。
@@ -27,7 +27,7 @@ type agentEntry struct {
 // D1 优化:capabilityCache 缓存 Agent 能力(避免 Supports() 每次遍历)。
 type Registry struct {
 	mu              sync.RWMutex
-	agents          map[string]*agentEntry // agentID → entry
+	agents          map[string]*agentEntry     // agentID → entry
 	capabilityCache map[string]map[string]bool // agentID → {taskType: true}(D1 缓存)
 }
 

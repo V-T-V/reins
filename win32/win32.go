@@ -26,11 +26,11 @@ func (r Rect) Height() int { return int(r.Bottom - r.Top) }
 
 // WindowInfo 窗口信息快照。
 type WindowInfo struct {
-	Hwnd     uintptr
-	Title    string
+	Hwnd      uintptr
+	Title     string
 	ClassName string
-	PID      uint32
-	Rect     Rect
+	PID       uint32
+	Rect      Rect
 }
 
 // ClickAction 鼠标动作类型。

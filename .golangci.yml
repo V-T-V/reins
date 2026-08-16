@@ -1,46 +1,61 @@
-# go-rmm golangci-lint 配置
-# 世界级 Go 项目的标准 linter 集合
+# go-rmm golangci-lint 配置（v2 schema）
+#
+# 背景：CI 的 build step 自仓库建立起就因二进制输出与源码目录撞名而必红，
+# lint 从未真正执行过。2026-08-16 首次启用：本轮已清零 gofmt(130)/
+# staticcheck(16)/bodyclose(12)/unconvert(3)/prealloc(2) 全部存量问题，
+# 以下 linter 因存量问题量大（合计约 363 条）暂缓启用，建议按批消化后
+# 从 disable 移回 enable：
+#   - errcheck  104 条：未处理 error（多为 Close/Write 返回值）
+#   - gocritic  155 条：风格/性能建议（0o755 八进制、http.NoBody、大结构体传值）
+#   - revive     74 条：风格（未用参数命名 _、空块、内置名遮蔽 max）
+#   - unused     23 条：疑似预留未接线代码（batchWriter/webhook notify* 等）
+#   - nilerr      7 条：err 非 nil 仍返回 nil（多为刻意的"记录后继续"，需逐个确认语义）
+
+version: "2"
 
 run:
-  timeout: 5m
   go: "1.25"
 
 linters:
+  default: standard
+  disable:
+    - errcheck
+    - gocritic
+    - revive
+    - unused
+    - nilerr
   enable:
-    - errcheck       # 检查未处理的 error
-    - gosimple       # 简化代码
-    - govet          # go vet
-    - ineffassign    # 检查无效赋值
-    - staticcheck    # 综合静态检查
-    - unused         # 检查未使用的代码
-    - misspell       # 拼写检查
-    - revive         # Go 社区风格
-    - gofmt          # 格式检查
-    - goimports      # import 顺序
-    - bodyclose      # 检查 http.Response.Body 是否 Close
-    - prealloc       # slice 预分配建议
-    - unconvert      # 检查不必要的类型转换
-    - gocritic       # 代码改进建议
-    - nilerr         # 检查 nil error 返回
-
-linters-settings:
-  gocritic:
-    enabled-tags:
-      - performance
-      - style
-  staticcheck:
-    checks: ["all"]
+    - misspell
+    - bodyclose
+    - prealloc
+    - unconvert
+  settings:
+    staticcheck:
+      checks:
+        - all
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 
 issues:
-  exclude-rules:
-    # 测试文件放宽部分检查
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gocritic
-    # 平台特定文件(Windows/Unix)
-    - path: procattr_
-      linters:
-        - unused
   max-issues-per-linter: 0
   max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

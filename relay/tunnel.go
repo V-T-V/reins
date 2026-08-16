@@ -79,7 +79,7 @@ func (r *Relay) handleTunnelOpen(w http.ResponseWriter, req *http.Request) {
 	select {
 	case ready := <-readyCh:
 		if ready == nil {
-			writeJSON(w, http.StatusGatewayTimeout, errMap(fmt.Errorf("Agent 返回空 ready")))
+			writeJSON(w, http.StatusGatewayTimeout, errMap(fmt.Errorf("agent 返回空 ready")))
 			return
 		}
 		// ready.TunnelID 匹配检查(复用 ready 的 TransferID 字段语义)

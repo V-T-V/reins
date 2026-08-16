@@ -1,17 +1,20 @@
 // Package main — 多租户 RBAC 基础(L8 神级提升)。
 //
 // token 格式扩展(向后兼容):
-//   旧: "secret123"           → 无租户,全权限(admin)
-//   新: "tenant:role:secret"   → 租户隔离 + 角色权限
+//
+//	旧: "secret123"           → 无租户,全权限(admin)
+//	新: "tenant:role:secret"   → 租户隔离 + 角色权限
 //
 // 角色:
-//   admin   — 全权限(默认,旧 token 等效)
-//   operator — 可下发任务/管理 Agent,不可 revoke/电源
-//   viewer  — 只读(查看 agents/tasks/metrics,不能下发)
+//
+//	admin   — 全权限(默认,旧 token 等效)
+//	operator — 可下发任务/管理 Agent,不可 revoke/电源
+//	viewer  — 只读(查看 agents/tasks/metrics,不能下发)
 //
 // 租户隔离:
-//   tenant=acme 的 token 只能看到 Tags["tenant"]="acme" 的 Agent
-//   旧 token(无 tenant)看所有 Agent(admin 等效)
+//
+//	tenant=acme 的 token 只能看到 Tags["tenant"]="acme" 的 Agent
+//	旧 token(无 tenant)看所有 Agent(admin 等效)
 package main
 
 import (
@@ -91,25 +94,25 @@ func (id Identity) CanPerform(action string) bool {
 
 // operatorBlocked operator 被禁止的操作。
 var operatorBlocked = map[string]bool{
-	"agent.revoke":      true,
-	"power.shutdown":    true,
-	"power.restart":     true,
-	"update.push":       true,
+	"agent.revoke":       true,
+	"power.shutdown":     true,
+	"power.restart":      true,
+	"update.push":        true,
 	"agent.enroll-token": true,
 }
 
 // viewerAllowed viewer 允许的操作。
 var viewerAllowed = map[string]bool{
-	"agent.list":     true,
-	"task.list":      true,
-	"task.result":    true,
-	"metrics":        true,
-	"healthz":        true,
-	"status":         true,
-	"monitor.top":    true,
-	"sysinfo":        true,
-	"service.list":   true,
-	"proc.list":      true,
+	"agent.list":   true,
+	"task.list":    true,
+	"task.result":  true,
+	"metrics":      true,
+	"healthz":      true,
+	"status":       true,
+	"monitor.top":  true,
+	"sysinfo":      true,
+	"service.list": true,
+	"proc.list":    true,
 }
 
 // CanAccessAgent 检查身份是否可访问指定 Agent(租户隔离)。
