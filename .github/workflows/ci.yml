@@ -43,7 +43,9 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # 注意:action 的 latest 解析到 v1.64.8(go1.24 构建,拒绝 go1.25 目标
+          # 且不认 v2 配置),必须显式固定 v2 线版本;升级时同步评估 .golangci.yml
+          version: v2.12.2
           args: --timeout 5m
 
       - name: Vulnerability scan
