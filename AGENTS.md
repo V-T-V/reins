@@ -224,6 +224,7 @@ go-rmm/
 - ✅ **`-t <数字>` 误用提示**:`-t 30` 原报"未知任务类型"无引导,现提示"-t 是任务类型,设置超时请用 -timeout <秒>"。
 - ✅ **script 执行器补 `-NonInteractive` + usage 发现性强化**(5 会话全部手工绕路"写 ps1→BOM 规范化→upload→-File"):`-s <本地文件>` 本就自动 BOM+UTF-8 头+远端临时文件执行,但无人知晓;usage/flag 描述现明确"复杂命令请写本地 .ps1 后用 -s 执行,规避内联转义与编码问题"。
 - ✅ **`-o json` 补齐 task run 终态与 task list**(2026-08-06 会话"-o json 无效"实证):jsonMode 自 v4.1.0 存在且覆盖 task result/agent list/net/ops/diagnose 等 7 处,但最高频的 `task run` 终态仍输出人类可读文本块、`task list` 仅表格。现 task run 终态/`--no-wait`/离线缓存三路径输出 `{task_id,status,result}` 纯 JSON(等待前缀与轮询点静默,stdout 无污染),task list 输出 `{tasks,count,enabled}`;httptest mock Relay 端到端断言 stdout 可直接 `json.Unmarshal`。
+- ✅ **输出流纪律 + 版本一致性**(2026-08-18):`file download` 写文件路径的 `✅ 下载完成` 从 stderr 挪到 stdout(管道模式保留 stderr——stdout 是下载数据流),修复成功提示被 PS 5.1 `$ErrorActionPreference='Stop'` 误判为错误(passport-service 发布会话实证);printUsage 标头硬编码 `v3.9` 改为动态 `version` 变量(ldflags 注入,与 `version` 子命令一致);`checkRoots` 空白名单拒绝错误补配置指引(指向 agent `allowed_roots`/`allow_all_roots`,2026-08-17 会话"未配置允许根目录"无从下手实证)。
 
 ### P1 — 能力补全
 4. **Linux Agent**:补齐 Linux 执行器(systemd 服务/包管理/journalctl),打通跨平台。

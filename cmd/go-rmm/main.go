@@ -1039,7 +1039,9 @@ func fileDownload(cfg config, args []string) error {
 	}
 	pw.finish()
 	fmt.Println()
-	fmt.Fprintf(os.Stderr, "✅ 下载完成: %s\n", formatSize(written))
+	// 成功提示打 stdout(与 upload 路径一致);写文件模式 stdout 无数据流,不会互相污染。
+	// 使用会话实证(2026-08):成功信息打 stderr 会被 PS 5.1 $ErrorActionPreference='Stop' 误判为错误。
+	fmt.Printf("✅ 下载完成: %s\n", formatSize(written))
 	return nil
 }
 
@@ -1657,7 +1659,7 @@ func readLine() (string, error) {
 }
 
 func printUsage() {
-	fmt.Print(`go-rmm v3.9 —— 企业级零信任远程访问平台 CLI
+	fmt.Print(`go-rmm ` + version + ` —— 企业级零信任远程访问平台 CLI
 
 用法:
   go-rmm [全局 flags] <command> [args]

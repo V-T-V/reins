@@ -133,7 +133,7 @@ func (p FilePolicy) Check(path string) error {
 // checkRoots 校验 abs 是否落在 AllowedRoots 内。
 func (p FilePolicy) checkRoots(abs, originalPath string) error {
 	if len(p.AllowedRoots) == 0 {
-		return fmt.Errorf("未配置允许根目录,拒绝路径 %s", originalPath)
+		return fmt.Errorf("未配置允许根目录,拒绝路径 %s (在 agent 配置设置 allowed_roots;临时放开可设 allow_all_roots=true,不建议)", originalPath)
 	}
 	for _, root := range p.AllowedRoots {
 		rootAbs, err := filepath.Abs(filepath.Clean(root))
