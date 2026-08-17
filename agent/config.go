@@ -42,6 +42,10 @@ type Config struct {
 	// 留空则默认 <exeDir>/workspace/。启动时自动 MkdirAll。
 	// AllowedRoots 会自动追加此目录(部署目录始终可写)。
 	Workspace string `json:"workspace,omitempty"`
+	// PolicyAllow 命令白名单正则(P1-6,可选)。非空时 Agent 侧切换 allow-only:
+	// 命令必须命中至少一条规则,且仍受黑名单兜底(交集语义)。
+	// Agent 是强制底线——即使 Relay 被绕过(交互式 shell/cron)也生效。
+	PolicyAllow []string `json:"policy_allow,omitempty"`
 	// MinVersion 允许的最低版本(防降级)。
 	// 自更新时若新版本 < MinVersion 则拒绝。留空则不强制。
 	MinVersion string `json:"min_version,omitempty"`

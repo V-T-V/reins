@@ -22,6 +22,10 @@ type Config struct {
 	// P1 生产硬化:/metrics 与 /debug/pprof 的访问控制(防指标/内存侦察泄露)
 	MetricsToken string // /metrics 独立 token(空则回退 Token;都空才真无鉴权,生产不推荐)
 	DebugPprof   bool   // 启用 /debug/pprof 调试端点(默认关,生产关闭防 heap/goroutine 泄露)
+	// P1-6 命令策略白名单(逗号分隔正则)。非空时 Relay 切换 allow-only:
+	// 命令必须命中至少一条白名单规则,且仍受 32 条黑名单兜底(交集语义)。
+	// 例:-policy-allow '^Get-Service,^Get-Process,^node '
+	PolicyAllow string
 }
 
 // parseFlags 解析命令行参数。
@@ -39,6 +43,8 @@ func parseFlags() Config {
 	// P1 生产硬化:metrics/pprof 访问控制
 	flag.StringVar(&c.MetricsToken, "metrics-token", getEnv("GO_RMM_METRICS_TOKEN", ""), "/metrics 独立 token(空则回退主 Token;生产推荐配独立低权 token 或 nginx IP 白名单)")
 	flag.BoolVar(&c.DebugPprof, "debug-pprof", getEnv("GO_RMM_DEBUG_PPROF", "") != "", "启用 /debug/pprof(默认关,生产关闭防内存侦察;dev 模式自动开)")
+	// P1-6:命令策略白名单(黑名单 best-effort 可绕,白名单 allow-only 收紧)
+	flag.StringVar(&c.PolicyAllow, "policy-allow", getEnv("GO_RMM_POLICY_ALLOW", ""), "命令白名单(逗号分隔正则;非空则 allow-only:须命中白名单且不碰黑名单)")
 	flag.Parse()
 	return c
 }

@@ -38,6 +38,16 @@ func registerExecutors(cfg Config) *executors.Dispatcher {
 		Role:         cfg.Role,      // M1:master 注册最小能力集
 	})
 
+	// P1-6:命令白名单(可选)。非空时 Agent 侧切换 allow-only(交集语义,黑名单兜底)。
+	// Agent 是强制底线——即使 Relay 被绕过(交互式 shell/cron)也生效;
+	// 正则编译失败 fail-fast,启动即报错。
+	if len(cfg.PolicyAllow) > 0 {
+		if err := d.SetAllowlist(cfg.PolicyAllow); err != nil {
+			log.Fatalf("[agent] %v", err)
+		}
+		log.Printf("[agent] 命令白名单已启用(allow-only,%d 条规则,黑名单仍兜底)", len(cfg.PolicyAllow))
+	}
+
 	// M1 修复:大文件传输引擎复用与 FileExecutor 一致的路径校验策略。
 	// 创建共享的 FilePolicy 实例,同时用于 file 任务和大文件传输。
 	//

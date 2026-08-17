@@ -41,6 +41,15 @@ func main() {
 
 	relay := NewRelay(cfg)
 
+	// P1-6:命令策略白名单(非空则 allow-only,编译失败 fail-fast)
+	if cfg.PolicyAllow != "" {
+		patterns := strings.Split(cfg.PolicyAllow, ",")
+		if err := relay.policy.SetAllowlist(patterns); err != nil {
+			log.Fatalf("[relay] %v", err)
+		}
+		log.Printf("[relay] 命令白名单已启用(allow-only,%d 条规则,黑名单仍兜底)", len(patterns))
+	}
+
 	// C4：打开持久化存储（data/tasks.db）
 	store, err := OpenStore(filepath.Join(dataDir(), "tasks.db"))
 	if err != nil {

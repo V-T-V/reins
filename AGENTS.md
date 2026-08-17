@@ -39,7 +39,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 **不做(明确假设)**:
 - 单 Relay 为默认(水平扩展需 Redis 共享状态,已预留 TaskStore interface)
 - Agent 默认 Windows(Linux 预留,部分执行器跨平台)
-- 命令策略 best-effort(黑名单可绕过,Agent 侧二次校验兜底)
+- 命令策略默认黑名单 best-effort(可绕过);可选 allow-only 白名单(Relay -policy-allow / Agent policy_allow,交集语义黑名单兜底)
 - 文件传输/终端 best-effort(非 at-least-once,靠 SHA256/录屏兜底)
 
 ## 目标(Goal)
@@ -49,7 +49,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
-- **成功标准**:169 Go 文件 / 31.8K 行 / 382 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
+- **成功标准**:169 Go 文件 / 31.8K 行 / 385 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
 
 ## 架构假设(4 项显式假设)
 
@@ -138,7 +138,7 @@ go-rmm/
 | Go 文件 | 169 |
 | 代码行 | 31,800+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 382 |
+| 测试用例 | 385 |
 | 基准测试 | 22 |
 | CLI 命令 | 51 |
 | API 端点 | 42 |
@@ -175,14 +175,14 @@ go-rmm/
 **安全假设(显式)**:
 - 单 Relay 为默认(水平扩展需 Redis 共享状态,接口已就绪)。
 - Agent 默认 Windows(Linux 预留,部分执行器跨平台)。
-- 命令策略 best-effort(黑名单可绕过,Agent 侧二次校验兜底)。
+- 命令策略默认黑名单 best-effort(可绕过);可选 allow-only 白名单(Relay -policy-allow / Agent policy_allow,交集语义黑名单兜底)。
 - 文件传输/终端 best-effort(非 at-least-once,靠 SHA256/录屏兜底)。
 
 ---
 
 ## 测试覆盖(v4.3.3)
 
-382 测试 + 22 基准。按包分布与重点验证场景:
+385 测试 + 22 基准。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
@@ -225,11 +225,11 @@ go-rmm/
 - ✅ **`-o json` 补齐 task run 终态与 task list**(2026-08-06 会话"-o json 无效"实证):jsonMode 自 v4.1.0 存在且覆盖 task result/agent list/net/ops/diagnose 等 7 处,但最高频的 `task run` 终态仍输出人类可读文本块、`task list` 仅表格。现 task run 终态/`--no-wait`/离线缓存三路径输出 `{task_id,status,result}` 纯 JSON(等待前缀与轮询点静默,stdout 无污染),task list 输出 `{tasks,count,enabled}`;httptest mock Relay 端到端断言 stdout 可直接 `json.Unmarshal`。
 - ✅ **输出流纪律 + 版本一致性**(2026-08-18):`file download` 写文件路径的 `✅ 下载完成` 从 stderr 挪到 stdout(管道模式保留 stderr——stdout 是下载数据流),修复成功提示被 PS 5.1 `$ErrorActionPreference='Stop'` 误判为错误(passport-service 发布会话实证);printUsage 标头硬编码 `v3.9` 改为动态 `version` 变量(ldflags 注入,与 `version` 子命令一致);`checkRoots` 空白名单拒绝错误补配置指引(指向 agent `allowed_roots`/`allow_all_roots`,2026-08-17 会话"未配置允许根目录"无从下手实证)。
 - ✅ **多租户持久化 + 鉴权接入**(2026-08-18,原 P0-1):`TenantManager` 注入 `*taskstore.Store`(与任务/cron 共用 tasks.db 的 `tenants` bucket),组织创建/启停/删除写盘、启动恢复,重启不丢组织与配额;`authorize` 链挂 `OrgEnabled` 校验——组织禁用/删除后该租户 token 立即失效(fail-closed)。**行为变更**:`tenant:role:secret` 语法的 token 现在要求组织已创建且启用(不存在=拒绝);纯 secret 部署(空 tenant)不受影响,现网向后兼容。`RolePolicy` 仍为内存态(角色策略为启动期配置,无运行时变更路径,暂无持久化需求)。
+- ✅ **命令策略白名单**(2026-08-18,原 P1-6):`cmdpolicy.Policy` 增 `SetAllowlist`(正则,自动 `(?i)`)——非空时 allow-only **交集语义**(须命中白名单且不碰黑名单;白名单写宽如 `^Get-` 也有 NTUSER.DAT/凭据导出等黑名单兜底)。配置入口:Relay `-policy-allow` flag / `GO_RMM_POLICY_ALLOW` env(逗号分隔),Agent config `policy_allow` 数组(Dispatcher.SetAllowlist,Agent 强制底线即使 Relay 被绕过也生效);非法正则启动 fail-fast。EncodedCommand 拦截错误附 script 任务(`-s` 本地脚本文件)指引——使用会话实证用户手动 `-EncodedCommand` 规避转义被拦后无从知晓正解。默认不配置 = 纯黑名单,行为不变。
 
 ### P1 — 能力补全
 4. **Linux Agent**:补齐 Linux 执行器(systemd 服务/包管理/journalctl),打通跨平台。
 5. **任务 at-least-once**:文件传输/终端结果可靠投递(当前 best-effort),减少 SHA256/录屏兜底依赖。
-6. **命令策略白名单**:从黑名单升级到可配置白名单 + 正则,提升防绕过。
 
 ### P2 — 可观测/体验
 7. **OpenAPI 同步**:`deploy/openapi.yaml` 补全至 42 端点(批量分发/进度/SIEM 导出),生成 typed client。

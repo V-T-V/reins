@@ -6,6 +6,7 @@ package executors
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/QiuShichang/go-rmm/proto"
@@ -59,6 +60,18 @@ func (d *Dispatcher) SetCommandPolicy(p *CommandPolicy) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.commandPolicy = p
+}
+
+// SetAllowlist 在现有命令策略上叠加白名单(P1-6,allow-only;黑名单仍兜底)。
+// 命令策略被显式禁用(nil)时返回错误。
+func (d *Dispatcher) SetAllowlist(patterns []string) error {
+	d.mu.RLock()
+	policy := d.commandPolicy
+	d.mu.RUnlock()
+	if policy == nil {
+		return errors.New("命令策略已禁用,无法设置白名单")
+	}
+	return policy.SetAllowlist(patterns)
 }
 
 // Register 注册一个执行器。重复注册同一类型会覆盖（便于测试替换）。
