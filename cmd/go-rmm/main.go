@@ -112,6 +112,8 @@ func run(args []string) error {
 		return cmdAgent(cfg, posArgs[1:])
 	case "task":
 		return cmdTask(cfg, posArgs[1:])
+	case "batch":
+		return cmdBatch(cfg, posArgs[1:])
 	case "file":
 		return cmdFile(cfg, posArgs[1:])
 	case "shell":

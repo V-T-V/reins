@@ -414,6 +414,12 @@ func (d *batchDispatcher) DispatchTracked(ctx context.Context, req BatchRequest)
 // DispatchWithRetryTracked 带重试 + 进度跟踪的版本。
 func (d *batchDispatcher) DispatchWithRetryTracked(ctx context.Context, req BatchRequest) (BatchResult, *BatchProgress) {
 	progress := newBatchProgress(req.BatchID, len(req.AgentIDs))
+	return d.dispatchWithRetryTracked(ctx, req, progress), progress
+}
+
+// dispatchWithRetryTracked 主体:progress 由调用方传入——异步端点(P0-1 批量
+// 分发端点化)需要在 goroutine 启动前就持有跟踪器,否则查询端点拿不到进度。
+func (d *batchDispatcher) dispatchWithRetryTracked(ctx context.Context, req BatchRequest, progress *BatchProgress) BatchResult {
 	base := BatchResult{
 		BatchID:   req.BatchID,
 		StartedAt: time.Now().UnixMilli(),
@@ -458,7 +464,7 @@ func (d *batchDispatcher) DispatchWithRetryTracked(ctx context.Context, req Batc
 
 	if req.MaxRetries <= 0 {
 		base.FinishedAt = time.Now().UnixMilli()
-		return base, progress
+		return base
 	}
 	// 重试:只对失败目标
 	for attempt := 1; attempt <= req.MaxRetries; attempt++ {
@@ -479,10 +485,10 @@ func (d *batchDispatcher) DispatchWithRetryTracked(ctx context.Context, req Batc
 		case <-time.After(backoff):
 		case <-ctx.Done():
 			base.FinishedAt = time.Now().UnixMilli()
-			return base, progress
+			return base
 		}
 		dispatchRound(attempt+1, failedIdx)
 	}
 	base.FinishedAt = time.Now().UnixMilli()
-	return base, progress
+	return base
 }

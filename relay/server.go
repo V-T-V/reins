@@ -313,6 +313,7 @@ type Relay struct {
 	scheduler  *Scheduler     // H2 定时任务调度器,可为 nil
 	updateRepo *UpdateRepo    // Agent 版本仓库(自更新分发),可为 nil
 	tenants    *TenantManager // 多租户组织管理(P0-1),可为 nil(禁用租户校验)
+	batches    sync.Map       // P0-1 批量分发注册表: batchID → *trackedBatch(TTL 懒清理)
 }
 
 func NewRelay(cfg Config) *Relay {
