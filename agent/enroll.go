@@ -197,3 +197,71 @@ func wsToHTTP(wsURL string) string {
 	u = strings.TrimSuffix(u, "/agent")
 	return u
 }
+
+// renew 用现有 mTLS 证书向 Relay /api/renew 续签(W7:不依赖一次性 token)。
+func (a *AgentCerts) renew(ctx context.Context, agentID string) error {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return fmt.Errorf("生成密钥失败: %w", err)
+	}
+	csrTmpl := &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: agentID},
+		DNSNames: []string{agentID},
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTmpl, key)
+	if err != nil {
+		return fmt.Errorf("创建 CSR 失败: %w", err)
+	}
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+	renewURL := wsToHTTP(a.relayURL) + "/api/renew"
+	body, _ := json.Marshal(map[string]string{"csr_pem": string(csrPEM)})
+	req, _ := http.NewRequestWithContext(ctx, "POST", renewURL, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: a.TLSConfig()}}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("renew 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("renew HTTP %d", resp.StatusCode)
+	}
+	var respBody proto.EnrollResp
+	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
+		return fmt.Errorf("renew 响应解析失败: %w", err)
+	}
+	if !respBody.Success {
+		return fmt.Errorf("renew 失败: %s", respBody.Error)
+	}
+	if err := atomicWriteFile(a.certPath, []byte(respBody.CertPEM), 0644); err != nil {
+		return err
+	}
+	keyDER, _ := x509.MarshalPKCS8PrivateKey(key)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	if err := atomicWriteFile(a.keyPath, keyPEM, 0600); err != nil {
+		return err
+	}
+	if err := atomicWriteFile(a.caPath, []byte(respBody.CAPEM), 0644); err != nil {
+		return err
+	}
+	cert, err := tls.X509KeyPair([]byte(respBody.CertPEM), keyPEM)
+	if err != nil {
+		return err
+	}
+	a.cert = &cert
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM([]byte(respBody.CAPEM))
+	a.caPool = pool
+	log.Printf("[enroll] 证书续签成功(经 /api/renew),有效期至 %s",
+		time.Unix(respBody.ExpiresAt, 0).Format("2006-01-02 15:04:05"))
+	return nil
+}
+
+// atomicWriteFile 原子写文件(temp+rename,防中途崩溃留截断文件)。
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}

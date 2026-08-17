@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -49,6 +50,12 @@ func (p *WorkerPool) Submit(ctx context.Context, job func()) {
 				return
 			}
 		}
+		// W3:任务 panic 隔离
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[pool] 任务 panic(已恢复): %v\n%s", r, debug.Stack())
+			}
+		}()
 		job()
 	}()
 }

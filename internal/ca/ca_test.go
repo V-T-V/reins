@@ -1,4 +1,4 @@
-package main
+package ca
 
 import (
 	"crypto/ecdsa"
@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
 	"path/filepath"
 	"testing"
 	"time"
@@ -213,5 +214,42 @@ func TestRevokeAgentAPI(t *testing.T) {
 	// 撤销后：校验失败
 	if err := ca.VerifyClientCert(cert); err == nil {
 		t.Fatal("撤销后 VerifyClientCert 应失败")
+	}
+}
+
+
+
+// TestRejectsCertFromOtherCA 验证非本 CA 签发的证书校验失败。
+// 攻击者自带 CA 签发的证书不应被信任。
+func TestRejectsCertFromOtherCA(t *testing.T) {
+	// 本 CA
+	ourCA, _ := LoadOrCreateCA(t.TempDir())
+
+	// 攻击者的 CA(独立)
+	attackerCA, _ := LoadOrCreateCA(t.TempDir())
+
+	// 用攻击者 CA 签发一个"合法"证书
+	victimKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	serial, _ := rand.Int(rand.Reader, big.NewInt(1<<62))
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "agent-victim"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, attackerCA.rootCert, &victimKey.PublicKey, attackerCA.rootKey)
+	if err != nil {
+		t.Fatalf("攻击者签发失败: %v", err)
+	}
+	evilCert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 本 CA 不应信任攻击者签发的证书
+	if err := ourCA.VerifyClientCert(evilCert); err == nil {
+		t.Fatal("非本 CA 签发的证书应被拒绝(mTLS 信任锚隔离)")
 	}
 }

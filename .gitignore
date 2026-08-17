@@ -4,7 +4,6 @@ bin/
 *.exe~
 *.dll
 *.so
-*.dylog
 
 # 测试/运行时产物
 *.png
@@ -18,22 +17,66 @@ config.local.json
 .env
 .env.local
 
-# IDE
+# IDE / OS
 .idea/
 .vscode/
 *.swp
-
-# OS
 Thumbs.db
 .DS_Store
 
-# 传输测试残留(本地产物,勿入库)
+# 传输测试残留
 test*.bin
 ft-sim-*.bin
-test-resume.bin
-test60-resume.bin
 DigitalHuman-*.zip
 dist/
 d4-test.txt
 remote-test.txt
 test-local.md
+
+# scripts/ 临时调试产物(与 RMM 无关，勿入库)
+scripts/*.wav
+scripts/*.zip
+scripts/tmp_*
+scripts/*_lf.bat
+scripts/*_lf.ps1
+scripts/dbg_*
+scripts/app*.log
+scripts/appjs_*.js
+scripts/bsw*
+scripts/sox*
+scripts/cosyvoice*
+scripts/qwen*
+scripts/lva*
+scripts/tts*
+scripts/vad*
+scripts/twoturn*
+scripts/partial_*
+scripts/wtest*.txt
+scripts/ws_*.txt
+scripts/ws_*.py
+scripts/h.json
+scripts/h3.json
+scripts/h_cv.json
+scripts/health*.json
+scripts/cfg_*.json
+scripts/verify72*
+scripts/stage3*
+scripts/imp_err.txt
+scripts/cv_*.txt
+scripts/test_exit*.txt
+scripts/build_*.txt
+scripts/guard_open_test.py
+scripts/pack_lva*.py
+scripts/worker_*.py
+scripts/install_task*.bat
+scripts/deploy_lva*.bat
+scripts/restart_lva*.bat
+scripts/run_worker*.bat
+
+# 根目录临时产物
+tmp_*.ps1
+tmp_*.bat
+asr-hotwords.json
+download_largev3.py
+deploy-out/
+*.mjs

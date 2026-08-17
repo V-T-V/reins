@@ -6,9 +6,10 @@
 //  3. 轻量部署:内存模式(无持久化)的底层存储
 //
 // 并发安全(全程 mu 串行,与 bbolt 单写事务语义一致)。
-package main
+package taskstore
 
 import (
+	"time"
 	"fmt"
 	"sync"
 
@@ -131,6 +132,10 @@ func (s *MemoryStore) CASDispatchToPending(taskID string) error {
 	if t.Status != StatusPending {
 		return fmt.Errorf("任务 %s 状态 %s,跳过", taskID, t.Status)
 	}
+	// W2:原子 CAS(与 Store 一致)
+	t.Status = StatusDispatched
+	t.Attempt++
+	t.UpdatedAt = time.Now().UnixMilli()
 	return nil
 }
 

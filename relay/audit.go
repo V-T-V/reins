@@ -136,8 +136,8 @@ func (a *AuditLog) Log(entry AuditEntry) {
 	select {
 	case a.ch <- entry:
 	default:
-		// channel 满(256 条积压):丢弃 + 记日志(不应在正常负载下发生)
-		// 注:这里不阻塞,保证请求 goroutine 不被审计拖慢
+		metrics.Inc("audit_dropped")
+		log.Printf("[audit] channel 满,丢弃审计记录 event=%s", entry.Event)
 	}
 }
 

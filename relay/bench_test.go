@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QiuShichang/go-rmm/internal/ca"
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
@@ -204,14 +205,14 @@ func BenchmarkPolicyCheck(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		p.Check(cmd)
+		p.CheckCommand(cmd)
 	}
 }
 
 // BenchmarkCASignAgentCSR CA 签发证书吞吐。
 func BenchmarkCASignAgentCSR(b *testing.B) {
 	dir := b.TempDir()
-	ca, _ := LoadOrCreateCA(dir)
+	authority, _ := ca.LoadOrCreateCA(dir)
 
 	// 预生成 CSR（不计时）
 	key := genBenchmarkKey()
@@ -220,7 +221,7 @@ func BenchmarkCASignAgentCSR(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		ca.SignAgentCSR(csrPEM, fmt.Sprintf("bench-%d", i), time.Hour)
+		authority.SignAgentCSR(csrPEM, fmt.Sprintf("bench-%d", i), time.Hour)
 	}
 }
 

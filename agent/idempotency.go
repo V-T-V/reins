@@ -22,7 +22,7 @@ import (
 // 完成，减少重启窗口期的重投。生产环境对非幂等任务（如"加用户"）应始终
 // 携带显式 IdempotencyKey 并设计为幂等操作。
 var idempotencyCache = &idemCache{
-	ttl: time.Hour,
+	ttl: 2 * time.Hour, // B2:覆盖更长断线窗口
 }
 
 type idemCache struct {

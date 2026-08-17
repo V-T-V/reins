@@ -60,9 +60,18 @@ func mtlsHTTPClient(certs *AgentCerts) *http.Client {
 // 阻塞直到 ctx 取消。断线自动指数退避重连（1s→2s→…→30s 封顶）。
 func (a *Agent) Run(ctx context.Context) error {
 	agentBizID = a.cfg.AgentID
+	// W7:mTLS 证书后台续签(进程级;原只在启动时检查→24h 必过期→永久离线)
+	if a.certs != nil {
+		go a.certRenewLoop(ctx)
+	}
+	// W1:候选 Relay 列表 = 主 URL 优先 + 备用(去重)
+	candidates := buildRelayCandidates(a.cfg.RelayURL, a.cfg.RelayURLs)
+	if len(candidates) == 0 {
+		return fmt.Errorf("无 relay_url 可用(主 URL + 备用列表均空)")
+	}
+	relayIdx := 0
 	backoff := initialBackoff
 	rng := rand.New(rand.NewSource(time.Now().UnixNano())) // S1: jitter 随机源
-	relayIdx := 0                                          // L2: 当前使用的 relay 索引(RelayURLs 轮询)
 	for {
 		// 自更新:pendingRestart 标记触发优雅退出,SCM 自动拉新版本
 		if pendingRestart {
@@ -72,31 +81,30 @@ func (a *Agent) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// L2: 选择 relay(主 URL 优先,失败后轮询 RelayURLs)
-		relayURL := a.cfg.RelayURL
-		if relayURL == "" && len(a.cfg.RelayURLs) > 0 {
-			relayURL = a.cfg.RelayURLs[relayIdx%len(a.cfg.RelayURLs)]
-		}
-		if relayURL == "" {
-			return fmt.Errorf("无 relay_url 可用(主 URL + 备用列表均空)")
-		}
-		a.cfg.RelayURL = relayURL // connectAndServe 用此字段
+		// W1:轮询候选 = candidates[relayIdx],失败后 relayIdx++ 切下一个(主→备用→…→回主)
+		chosen := candidates[relayIdx%len(candidates)]
+		a.cfg.RelayURL = chosen
+		connectStart := time.Now()
 		err := a.connectAndServe(ctx)
-		// 自更新可能在 connectAndServe 内完成,再次检查
 		if pendingRestart {
 			log.Printf("[agent] 自更新完成,退出以重启服务...")
 			return nil
 		}
 		if ctx.Err() != nil {
-			return ctx.Err() // 主动退出,不重连
+			return ctx.Err()
 		}
-		// L2: 连接失败时切换到下一个备用 relay
-		if len(a.cfg.RelayURLs) > 0 {
-			relayIdx++
-			nextRelay := a.cfg.RelayURLs[relayIdx%len(a.cfg.RelayURLs)]
-			log.Printf("[agent] 连接 %s 断开: %v,切换到备用 %s", relayURL, err, nextRelay)
+		// W5:曾健康保持较久(≥60s)的连接断开,重置退避(避免一次抖动后每次断线都等满 30s)
+		if time.Since(connectStart) >= 60*time.Second {
+			backoff = initialBackoff
 		}
-		// S1 修复:full jitter 退避,防 thundering herd
+		relayIdx++
+		nextChosen := candidates[relayIdx%len(candidates)]
+		if len(candidates) > 1 {
+			log.Printf("[agent] 连接 %s 断开: %v,下次将尝试 %s", chosen, err, nextChosen)
+		} else {
+			log.Printf("[agent] 连接 %s 断开: %v", chosen, err)
+		}
+		// S1:full jitter 退避,防 thundering herd
 		jittered := time.Duration(rng.Int63n(int64(backoff)))/10*9 + backoff/10
 		log.Printf("[agent] %v 后重连", jittered)
 		select {
@@ -104,10 +112,49 @@ func (a *Agent) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-time.After(jittered):
 		}
-		// 指数退避,封顶 30s
 		backoff *= 2
 		if backoff > maxBackoff {
 			backoff = maxBackoff
+		}
+	}
+}
+
+// buildRelayCandidates 构建去重的候选 Relay URL 列表:主 URL 优先,后接备用列表(W1)。
+func buildRelayCandidates(primary string, backups []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	add := func(u string) {
+		u = strings.TrimSpace(u)
+		if u != "" && !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	add(primary)
+	for _, u := range backups {
+		add(u)
+	}
+	return out
+}
+
+// certRenewLoop 后台定期检查证书是否需要续签,经 /api/renew 续签(W7)。
+func (a *Agent) certRenewLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if a.certs == nil || !a.certs.needRenew() {
+				continue
+			}
+			log.Printf("[agent] 证书即将过期,后台续签(经 /api/renew)")
+			renewCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if err := a.certs.renew(renewCtx, a.cfg.AgentID); err != nil {
+				log.Printf("[agent] 证书续签失败: %v(用旧证书继续,下次再试)", err)
+			}
+			cancel()
 		}
 	}
 }
@@ -145,6 +192,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	// 子 ctx：连接级取消（断线时让心跳 goroutine 退出）
 	connCtx, connCancel := context.WithCancel(ctx)
 	defer connCancel()
+	wc.startWriter(connCtx) // 弱网 A1:写优先级 writer(P0 心跳不被 P1 数据饿死)
 	// H3:连接断开时关闭所有 shell 会话(防资源泄漏)
 	defer sessions.CloseAll()
 	// J1:连接断开时关闭所有文件传输会话
@@ -255,7 +303,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context, wc *wsConn) {
 			// V1:心跳携带 Agent 传输计数器(供 Relay 聚合,打通 per-agent 可观测性)
 			hb.UploadBytes, hb.DownloadBytes, hb.UploadCount, hb.DownloadCount, hb.FailedCount = transfers.SnapshotStats()
 			wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
-			if err := wc.writeEnvelope(wctx, proto.TypeHeartbeat, "relay", hb); err != nil {
+			if err := wc.writeControlEnvelope(wctx, proto.TypeHeartbeat, "relay", hb); err != nil {
 				log.Printf("[agent] 心跳发送失败: %v", err)
 				wcancel()
 				// C2 修复：主动关闭连接，强制打断 recvLoop 的 Read，
@@ -278,7 +326,7 @@ func (a *Agent) deadConnWatchdog(ctx context.Context, wc *wsConn) {
 	if interval < 5*time.Second {
 		interval = 5 * time.Second
 	}
-	threshold := 2 * interval
+	threshold := 3 * interval // B1:弱网容忍突发丢包(2×→3×)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -354,24 +402,24 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 			// S7:Relay 对心跳的确认帧。仅用于证明链路双向可用
 			// (read 已刷新 lastRecv,watchdog 不会误判死连接),无业务动作。
 		case proto.TypeTaskRequest:
-			a.handleTaskWithPool(ctx, wc, env, a.pool)
+			safeCall("task", func() { a.handleTaskWithPool(ctx, wc, env, a.pool) })
 		case proto.TypeTaskCancel:
-			a.handleCancel(env)
+			safeCall("cancel", func() { a.handleCancel(env) })
 		case proto.TypeShellOpen:
-			a.handleShellOpen(ctx, wc, env)
+			safeCall("shell_open", func() { a.handleShellOpen(ctx, wc, env) })
 		case proto.TypeShellInput:
-			a.handleShellInput(env)
+			safeCall("shell_input", func() { a.handleShellInput(env) })
 		case proto.TypeShellClose:
-			a.handleShellClose(env)
+			safeCall("shell_close", func() { a.handleShellClose(env) })
 		case proto.TypeFileTransferInit:
-			a.handleTransferInit(ctx, wc, env)
+			safeCall("xfer_init", func() { a.handleTransferInit(ctx, wc, env) })
 		case proto.TypeFileTransferCancel:
 			var cancel proto.FileTransferCancel
 			if err := env.Decode(&cancel); err == nil {
 				transfers.Cancel(cancel.TransferID)
 			}
 		case proto.TypeTunnelOpen:
-			a.handleTunnelOpen(ctx, wc, env)
+			safeCall("tunnel_open", func() { a.handleTunnelOpen(ctx, wc, env) })
 		case proto.TypeTunnelClose:
 			var tc proto.TunnelClose
 			if err := env.Decode(&tc); err == nil {
@@ -434,22 +482,8 @@ func (a *Agent) runTask(parent context.Context, wc *wsConn, env proto.Envelope) 
 	// 5. 执行
 	// update 任务特殊处理:不走标准 Executor(强依赖 agent 包的 os.Executable/version)
 	//
-	// M1 主从架构:master 角色拒绝 update 任务。
-	// 主 Agent 的设计目标是"极简稳定永不更新",任何对主自身的更新尝试都被拒绝,
-	// 防止主被意外/恶意更新导致失去救援能力。
-	var result proto.TaskResult
-	if task.Type == proto.TaskUpdate {
-		if a.cfg.Role == "master" {
-			result = proto.TaskResult{
-				Success: false,
-				Error:   "master 角色拒绝更新:主 Agent 设计为永不更新(保证救援能力)。如需更新主,请手动替换二进制。",
-			}
-		} else {
-			result = updateExec.execUpdate(task.Payload)
-		}
-	} else {
-		result = a.disp.Dispatch(ctx, task, progress)
-	}
+	// 统一经 Dispatcher 分发(update 已作为标准 Executor 注册;master 不注册→fail-closed 拒绝)
+	result := a.disp.Dispatch(ctx, task, progress)
 	// 如果是被取消的,标注
 	if ctx.Err() == context.Canceled {
 		result.Error = "任务被取消"
@@ -556,9 +590,7 @@ func (a *Agent) handleTunnelOpen(ctx context.Context, wc *wsConn, env proto.Enve
 	writeBin := func(frame []byte) error {
 		wctx, wcancel := contextWithTimeout(10 * time.Second)
 		defer wcancel()
-		wc.writeMu.Lock()
-		defer wc.writeMu.Unlock()
-		return wc.conn.Write(wctx, websocket.MessageBinary, frame)
+		return wc.writeBinaryData(wctx, frame)
 	}
 	tunnelMgr.HandleOpen(open, writeBin)
 }
@@ -643,4 +675,14 @@ func idempotencySweepLoop(ctx context.Context) {
 			idempotencyCache.sweep()
 		}
 	}
+}
+
+// safeCall 包装 handler 调用,防止单个 handler/任务 panic 崩溃整个 Agent 进程(W3)。
+func safeCall(name string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[agent] %s 处理 panic(已恢复): %v\n%s", name, r, debug.Stack())
+		}
+	}()
+	fn()
 }

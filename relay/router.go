@@ -27,9 +27,10 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/tasks/cancel", r.handleCancelTask)            // C6 取消任务
 	mux.HandleFunc("GET /api/tasks", r.handleListTasks)                     // C4/F1 任务历史
 	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)                      // C4 单任务详情+结果
-	mux.HandleFunc("POST /api/enroll-token", r.handleGenEnrollToken)        // C7 生成注册令牌
-	mux.HandleFunc("POST /api/enroll", r.handleEnroll)                      // C7 Agent 换证书
-	mux.HandleFunc("POST /api/agents/revoke", r.handleRevokeAgent)          // G2 撤销 Agent 证书
+	mux.HandleFunc("POST /api/enroll-token", r.RequireRole("agent.enroll-token", r.handleGenEnrollToken)) // C7(短1守卫)
+	mux.HandleFunc("POST /api/enroll", r.handleEnroll)
+	mux.HandleFunc("POST /api/renew", r.handleRenew)                      // C7 Agent 换证书
+	mux.HandleFunc("POST /api/agents/revoke", r.RequireRole("agent.revoke", r.handleRevokeAgent)) // G2(短1守卫)
 	mux.HandleFunc("GET /api/crons", r.handleListCrons)                     // H2 cron 列表
 	mux.HandleFunc("POST /api/crons", r.handleAddCron)                      // H2 新建 cron
 	mux.HandleFunc("DELETE /api/crons/", r.handleDeleteCron)                // H2 删除 cron
@@ -51,7 +52,7 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/updates/upload", r.handleUpdateUpload)
 	mux.HandleFunc("POST /api/updates/apply", r.handleUpdateApply)
 	// 电源操作(标签白名单鉴权)
-	mux.HandleFunc("POST /api/power", r.handlePower)
+	mux.HandleFunc("POST /api/power", r.RequireRole("power.shutdown", r.handlePower))
 	// S6:Prometheus 文本格式(供 Prometheus scraper)
 	// P1:有 MetricsToken 时校验(独立于主 Token),都空才真无鉴权
 	mux.HandleFunc("GET /metrics", r.handlePromMetrics)
@@ -65,9 +66,9 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 		mux.Handle("/debug/pprof/trace", http.DefaultServeMux)
 	}
 	// XL1:Secret Management(凭据下发不落 audit)
-	mux.HandleFunc("POST /api/secrets", r.handleSecretPut)
+	mux.HandleFunc("POST /api/secrets", r.RequireRole("secret.put", r.handleSecretPut))
 	mux.HandleFunc("GET /api/secrets/", r.handleSecretGet)
-	mux.HandleFunc("DELETE /api/secrets/", r.handleSecretDelete)
+	mux.HandleFunc("DELETE /api/secrets/", r.RequireRole("secret.delete", r.handleSecretDelete))
 	// XL4:审计 SIEM 导出(CEF/JSON/Syslog)
 	mux.HandleFunc("GET /api/audit/export", r.handleAuditExport)
 	// XL6:智能调度(负载均衡选择最优 Agent)
@@ -182,7 +183,7 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// P1-1 修复（致命安全洞）：批量下发必须经过命令策略校验，否则可绕过 S4 下发 Format-Volume
-	if err := r.policy.CheckPayload(body.Type, body.Payload); err != nil {
+	if err := r.policy.CheckCommandPayload(body.Type, body.Payload); err != nil {
 		log.Printf("[policy] 批量任务被拦截 tag=%s type=%s: %v", body.Tag, body.Type, err)
 		metrics.Inc("blocked")
 		if r.audit != nil {
@@ -247,21 +248,9 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 // summarizePayload 提取载荷摘要用于审计（命令前 200 字符，避免完整记录敏感数据）。
 func summarizePayload(taskType string, payload []byte) string {
 	const maxLen = 200
-	var text string
-	switch taskType {
-	case "powershell":
-		var t struct {
-			Command string `json:"command"`
-		}
-		json.Unmarshal(payload, &t)
-		text = t.Command
-	case "script":
-		var t struct {
-			Content string `json:"content"`
-		}
-		json.Unmarshal(payload, &t)
-		text = t.Content
-	default:
+	// 复用 proto.ExtractCommand 注册表(命令类摘要=命令文本;非命令类回退字节数)
+	text := proto.ExtractCommand(taskType, payload)
+	if text == "" {
 		return fmt.Sprintf("%s(%d bytes)", taskType, len(payload))
 	}
 	if len(text) > maxLen {
@@ -421,9 +410,39 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("未知的任务类型: %s", task.Type)))
 		return
 	}
+	// 短1:高危任务类型 RBAC(power/update)
+	if task.Type == proto.TaskPower || task.Type == proto.TaskUpdate {
+		id := identityFromAuth(req)
+		action := "power.shutdown"
+		if task.Type == proto.TaskUpdate {
+			action = "update.push"
+		}
+		if !id.CanPerform(action) {
+			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("角色 %s 无权下发 %s 任务", id.Role, task.Type)))
+			return
+		}
+	}
+	// H-2:离线分支——曾注册且不支持→400;从未上线或支持→缓存 202
+	conn := r.agents.Conn(task.AgentID)
+	caps := r.agentCapabilities(task.AgentID)
+	if conn == nil {
+		if len(caps) > 0 && !r.agentSupports(task.AgentID, task.Type) {
+			writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent %s 不支持任务类型 %s (能力: %v)", task.AgentID, task.Type, caps)))
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"task_id": task.TaskID, "status": StatusPending, "agent_id": task.AgentID,
+			"message": "agent 离线,任务已缓存待投递",
+		})
+		return
+	}
+	if !r.agentSupports(task.AgentID, task.Type) {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent %s 不支持任务类型 %s (能力: %v)", task.AgentID, task.Type, caps)))
+		return
+	}
 
 	// C9 命令安全策略校验：拦截高危命令
-	if err := r.policy.CheckPayload(task.Type, task.Payload); err != nil {
+	if err := r.policy.CheckCommandPayload(task.Type, task.Payload); err != nil {
 		log.Printf("[policy] 拦截高危任务 task=%s type=%s: %v", task.TaskID, task.Type, err)
 		metrics.Inc("blocked")
 		if r.audit != nil {
@@ -475,20 +494,6 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// 尝试立即投递(Agent 在线)
-	conn := r.agents.Conn(task.AgentID)
-	if conn == nil {
-		// Agent 离线:保留 pending,等 Agent 上线后 dispatchPendingTasks 投递
-		log.Printf("[task] 缓存 task=%s type=%s (agent=%s 离线,待上线投递)",
-			task.TaskID, task.Type, task.AgentID)
-		writeJSON(w, http.StatusAccepted, map[string]any{
-			"task_id":  task.TaskID,
-			"status":   StatusPending,
-			"agent_id": task.AgentID,
-			"message":  "agent 离线,任务已缓存待投递",
-		})
-		return
-	}
 
 	if err := r.dispatchTask(conn, task); err != nil {
 		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("转发任务失败: %w", err)))
@@ -558,6 +563,7 @@ func (r *Relay) dispatchTask(conn *wsConn, task proto.TaskRequest) error {
 		st.UpdatedAt = time.Now().UnixMilli()
 		_ = r.store.SaveTask(st)
 		metrics.Inc("dispatched")
+		r.agents.IncInFlight(task.AgentID) // H2
 		log.Printf("[task] 下发 task=%s type=%s → agent=%s (attempt=%d)",
 			task.TaskID, task.Type, task.AgentID, st.Attempt)
 	} else {
@@ -908,7 +914,7 @@ func (r *Relay) handleAddCron(w http.ResponseWriter, req *http.Request) {
 	}
 	// P0-S2 修复:cron 规则必须经过命令策略校验(原来完全绕过)
 	// cron 是持久化执行,绕过策略 = 永久后门,危害比单次任务更大
-	if err := r.policy.CheckPayload(rule.TaskType, rule.Payload); err != nil {
+	if err := r.policy.CheckCommandPayload(rule.TaskType, rule.Payload); err != nil {
 		log.Printf("[policy] 拦截高危 cron 规则 agent=%s type=%s: %v", rule.AgentID, rule.TaskType, err)
 		metrics.Inc("blocked")
 		if r.audit != nil {
@@ -1196,13 +1202,10 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 		n, readErr := req.Body.Read(buf)
 		if n > 0 {
 			frame := proto.BuildBinaryFrame(transferID, false, buf[:n])
-			conn.writeMu.Lock()
-			if err := conn.conn.Write(ctx, websocket.MessageBinary, frame); err != nil {
-				conn.writeMu.Unlock()
+			if err := conn.writeBinaryData(ctx, frame); err != nil {
 				writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("WS写失败: %w", err)))
 				return
 			}
-			conn.writeMu.Unlock()
 			totalSent += int64(n)
 		}
 		if readErr != nil {
@@ -1220,9 +1223,11 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 	if !aborted {
 		// 正常结束:发 isLast 帧
 		frame := proto.BuildBinaryFrame(transferID, true, nil)
-		conn.writeMu.Lock()
-		conn.conn.Write(ctx, websocket.MessageBinary, frame)
-		conn.writeMu.Unlock()
+		// H-5:isLast 写错检查(原 ignoring 让 Agent 悬挂→Relay 卡 completeCh 至 30 分钟)
+		if wErr := conn.writeBinaryData(ctx, frame); wErr != nil {
+			writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("isLast 帧写失败: %w", wErr)))
+			return
+		}
 	} else {
 		// 中断:不等 complete,直接返回错误
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("上传中断: 已传 %d bytes", totalSent)))
@@ -1385,4 +1390,44 @@ done:
 	if r.audit != nil {
 		r.audit.Log(AuditEntry{Event: "file_download", AgentID: agentID, Detail: fmt.Sprintf("%s %d bytes", transferID, totalWritten)})
 	}
+}
+
+// POST /api/renew —— Agent 用现有 mTLS 客户端证书续签(W7:不依赖一次性 token)。
+func (r *Relay) handleRenew(w http.ResponseWriter, req *http.Request) {
+	if r.ca == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("CA 未启用")))
+		return
+	}
+	if req.TLS == nil || len(req.TLS.PeerCertificates) == 0 {
+		writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("renew 需要 mTLS 客户端证书")))
+		return
+	}
+	leaf := req.TLS.PeerCertificates[0]
+	agentID := leaf.Subject.CommonName
+	if agentID == "" {
+		writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("客户端证书无 CN")))
+		return
+	}
+	if r.ca.IsRevoked(leaf.SerialNumber) {
+		writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("证书已撤销")))
+		return
+	}
+	var body struct {
+		CSRPEM string `json:"csr_pem"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.CSRPEM == "" {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("csr_pem 不能为空")))
+		return
+	}
+	const certTTL = 24 * time.Hour
+	certPEM, err := r.ca.SignAgentCSRNoRevoke([]byte(body.CSRPEM), agentID, certTTL)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errMap(err))
+		return
+	}
+	log.Printf("[ca] 续签证书 agent=%s (renew,不撤销旧证)", agentID)
+	writeJSON(w, http.StatusOK, proto.EnrollResp{
+		AgentID: agentID, CertPEM: string(certPEM), CAPEM: string(r.ca.CAPEM()),
+		ExpiresAt: time.Now().Add(certTTL).Unix(), Success: true,
+	})
 }

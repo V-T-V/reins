@@ -54,24 +54,24 @@ func TestCommandPolicyCheckPayload(t *testing.T) {
 
 	// powershell payload
 	payload, _ := json.Marshal(proto.PowerShellTask{Command: "Format-Volume"})
-	if err := policy.CheckPayload("powershell", payload); err == nil {
+	if err := policy.CheckCommandPayload("powershell", payload); err == nil {
 		t.Error("应拦截 powershell Format-Volume")
 	}
 
 	// 安全 payload
 	payload2, _ := json.Marshal(proto.PowerShellTask{Command: "Get-Date"})
-	if err := policy.CheckPayload("powershell", payload2); err != nil {
+	if err := policy.CheckCommandPayload("powershell", payload2); err != nil {
 		t.Errorf("应放行 Get-Date: %v", err)
 	}
 
 	// script payload
 	payload3, _ := json.Marshal(proto.ScriptTask{Content: "Stop-Computer"})
-	if err := policy.CheckPayload("script", payload3); err == nil {
+	if err := policy.CheckCommandPayload("script", payload3); err == nil {
 		t.Error("应拦截 script Stop-Computer")
 	}
 
 	// 非 powershell/script 类型不校验
-	if err := policy.CheckPayload("screenshot", []byte("{}")); err != nil {
+	if err := policy.CheckCommandPayload("screenshot", []byte("{}")); err != nil {
 		t.Error("screenshot 类型不应校验")
 	}
 }

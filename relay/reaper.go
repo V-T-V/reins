@@ -61,6 +61,7 @@ func (r *Relay) reapStaleTasks() {
 			if err := r.store.ReapToPending(t.Request.TaskID); err != nil {
 				continue // 已是终态或并发改动,skip(不重复执行)
 			}
+			r.agents.DecInFlight(t.Request.AgentID) // H2
 			reapedDispatched++
 			metrics.Inc("reaped")
 			log.Printf("[reaper] 回退 dispatched→pending task=%s (超时 %ds)", t.Request.TaskID, staleSecs)
@@ -85,6 +86,7 @@ func (r *Relay) reapStaleTasks() {
 			if err := r.store.ReapToPending(t.Request.TaskID); err != nil {
 				continue // P0-C2:终态拒绝回退
 			}
+			r.agents.DecInFlight(t.Request.AgentID) // H2
 			reapedAck++
 			metrics.Inc("reaped")
 			log.Printf("[reaper] 回退 acknowledged→pending task=%s (超时 %ds,Agent 可能崩溃)", t.Request.TaskID, staleSecs)

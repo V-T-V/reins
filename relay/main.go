@@ -17,6 +17,8 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/QiuShichang/go-rmm/internal/ca"
+
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
@@ -53,11 +55,11 @@ func main() {
 
 	// C7：加载/创建内置 CA（启用 mTLS 时必需）
 	if cfg.MTLS {
-		ca, err := LoadOrCreateCA(dataDir())
+		authority, err := ca.LoadOrCreateCA(dataDir())
 		if err != nil {
 			log.Printf("[relay] CA 初始化失败(mTLS 不可用): %v", err)
 		} else {
-			relay.WithCA(ca)
+			relay.WithCA(authority)
 			log.Printf("[relay] 内置 CA 已启用: %s", filepath.Join(dataDir(), "ca-root.crt"))
 		}
 	}
@@ -114,9 +116,9 @@ func main() {
 
 	// C8/G2：mTLS 模式配置 TLSConfig（要求客户端证书 + CRL 校验）
 	if cfg.MTLS && relay.ca != nil {
-		ca := relay.ca
+		authority := relay.ca
 		srv.TLSConfig = &tls.Config{
-			ClientCAs:  caCertPool(ca),
+			ClientCAs:  caCertPool(authority),
 			ClientAuth: tls.RequireAndVerifyClientCert,
 			MinVersion: tls.VersionTLS12,
 			// G2 修复（A2）：标准库只验链与有效期，不查 CRL。
@@ -129,7 +131,7 @@ func main() {
 				if err != nil {
 					return fmt.Errorf("客户端证书解析失败: %w", err)
 				}
-				return ca.VerifyClientCert(cert) // 含链校验 + CRL 撤销检查
+				return authority.VerifyClientCert(cert) // 含链校验 + CRL 撤销检查
 			},
 		}
 		log.Printf("[relay] mTLS 已启用：要求 Agent 客户端证书 + CRL 撤销校验")
@@ -213,7 +215,15 @@ func gracefulShutdown(srv *http.Server, relay *Relay, cfg Config) {
 		relay.audit.Close() // Close 内部会排空 channel 后关闭文件
 	}
 
-	// Phase 3: 关闭存储
+	// Phase 3: 关闭 Agent 连接(H-1:提前到 store 前,消除关停窗口写已关 store)
+	if relay.agents != nil {
+		for _, agent := range relay.agents.Snapshot() {
+			if conn := relay.agents.Conn(agent.AgentID); conn != nil {
+				conn.close(websocket.StatusNormalClosure, "relay shutting down")
+			}
+		}
+	}
+	// Phase 5: 关闭存储
 	slog.Info("关闭持久化存储...")
 	if relay.store != nil {
 		relay.store.Close()
@@ -262,8 +272,8 @@ func sweepLoop(ctx context.Context, r *Relay) {
 }
 
 // caCertPool 用内置 CA 的根证书构造一个 CertPool，用于 mTLS 客户端证书校验。
-func caCertPool(ca *CA) *x509.CertPool {
+func caCertPool(authority *ca.CA) *x509.CertPool {
 	pool := x509.NewCertPool()
-	pool.AddCert(ca.rootCert)
+	pool.AddCert(authority.RootCert())
 	return pool
 }

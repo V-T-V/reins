@@ -81,7 +81,8 @@ func (tm *TunnelManager) HandleOpen(open proto.TunnelOpen, writeBin func([]byte)
 	// goroutine: 远端 → WS(读 conn,发隧道帧)
 	go func() {
 		defer tm.Close(open.TunnelID, "eof")
-		buf := make([]byte, 32*1024)
+		buf := Get32K() // H1:pool
+		defer Put32K(buf)
 		for {
 			n, err := conn.Read(buf)
 			if n > 0 {
@@ -109,6 +110,7 @@ func (tm *TunnelManager) HandleData(tunnelID string, data []byte) {
 	if !ok {
 		return // 隧道已关闭或不存在,丢弃
 	}
+	sess.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)) // W4:写远端 deadline
 	if _, err := sess.conn.Write(data); err != nil {
 		log.Printf("[tunnel] 远端写失败 %s: %v", tunnelID, err)
 		tm.Close(tunnelID, "write error")

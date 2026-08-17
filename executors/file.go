@@ -3,6 +3,7 @@ package executors
 import (
 	"context"
 	"encoding/base64"
+	"log"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,7 +79,9 @@ func (e *FileExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFunc)
 	}
 }
 
+// upload [Deprecated 架构中6] ContentB64 内联路径——主路径为流式 /api/transfer/*。
 func (e *FileExecutor) upload(task proto.FileTask) proto.TaskResult {
+	log.Printf("[file] deprecated ContentB64 上传(建议走流式), path=%s", task.Path)
 	data, err := base64.StdEncoding.DecodeString(task.ContentB64)
 	if err != nil {
 		return fail("", "base64 解码失败: "+err.Error())

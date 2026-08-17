@@ -50,6 +50,12 @@ func (p *program) run() {
 	if err := a.Run(p.ctx); err != nil && p.ctx.Err() == nil {
 		log.Printf("[service] Agent 异常退出: %v", err)
 	}
+	// U1:自更新成功后显式退出,触发 SCM OnFailure=restart 激活新版本
+	// (原实现只 return,run 是 goroutine,主进程不退出→新二进制永不生效)
+	if pendingRestart {
+		log.Printf("[service] 自更新完成,退出进程以激活新版本(SCM 将重启)...")
+		os.Exit(0)
+	}
 }
 
 // serviceConfig 构造 kardianos 服务描述。

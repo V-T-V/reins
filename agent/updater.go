@@ -182,20 +182,15 @@ func (e *UpdateExecutor) execUpdate(payload []byte) proto.TaskResult {
 		return proto.TaskResult{Success: false, Error: "写 update-pending 标记失败: " + err.Error()}
 	}
 
-	// 6. rename 当前 exe → .bak(Windows 允许重命名运行中的 exe)
-	//    先删旧 .bak(上次更新留下的)
+	// U2:copy 当前 exe → .bak(exe 保留原位,任何时刻 exe 路径有效,断电不砖)
 	os.Remove(bakPath)
-	if err := os.Rename(currentExe, bakPath); err != nil {
-		os.Remove(updatePendingMarkerPath()) // 回滚标记
-		return proto.TaskResult{Success: false, Error: "rename 当前 exe→.bak 失败: " + err.Error()}
-	}
-
-	// 7. rename .new → exe
-	if err := os.Rename(binaryPath, currentExe); err != nil {
-		// 失败:rename .bak 回去(恢复)
-		os.Rename(bakPath, currentExe)
+	if err := copyFile(currentExe, bakPath); err != nil {
 		os.Remove(updatePendingMarkerPath())
-		return proto.TaskResult{Success: false, Error: "rename .new→exe 失败(已回滚): " + err.Error()}
+		return proto.TaskResult{Success: false, Error: "备份当前 exe→.bak 失败: " + err.Error()}
+	}
+	if err := os.Rename(binaryPath, currentExe); err != nil {
+		os.Remove(updatePendingMarkerPath()) // 旧 exe 仍在原位,无需恢复
+		return proto.TaskResult{Success: false, Error: "rename .new→exe 失败(旧版本未受影响): " + err.Error()}
 	}
 
 	// 8. 标记重启(主循环检测后退出,SCM 自动拉新版本)
@@ -206,6 +201,15 @@ func (e *UpdateExecutor) execUpdate(payload []byte) proto.TaskResult {
 		Stdout:  fmt.Sprintf("更新成功: %s → %s (sha256=%s),等待服务重启", version, task.Version, actualSHA[:16]),
 		Data:    []byte(fmt.Sprintf(`{"old_version":%q,"new_version":%q,"sha256":%q}`, version, task.Version, actualSHA)),
 	}
+}
+
+// copyFile 复制文件(U2:更新备份用,保持源文件在原位)。
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0755)
 }
 
 // jsonUnmarshalUpdate 辅助:JSON 反序列化。

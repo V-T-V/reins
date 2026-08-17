@@ -73,6 +73,7 @@ func TestWSConnConcurrentWriteSerializes(t *testing.T) {
 	}
 	defer c.CloseNow()
 	wc := newWSConn(c)
+	wc.startWriter(context.Background())
 	agentBizID = "test-agent"
 
 	// 100 个 goroutine 并发写不同消息

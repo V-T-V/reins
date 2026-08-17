@@ -2,6 +2,7 @@ package main
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -16,7 +17,8 @@ type agentEntry struct {
 	lastBeat     time.Time       // 最近一次心跳时间
 	lastSeq      int64           // 最近心跳序号
 	registeredAt time.Time       // 注册时间
-	xferStats    proto.Heartbeat // V1:最近一次心跳携带的传输计数器(ub/db/uc/dc/fc)
+	xferStats    proto.Heartbeat // V1:最近一次心跳携带的传输计数器
+	inFlight     atomic.Int64    // H2:在途任务数(dispatch+1/终态·回退-1)
 }
 
 // Registry 维护在线 Agent 注册表。
@@ -193,4 +195,25 @@ func (r *Registry) Sweep(timeout time.Duration) []string {
 		c.close(websocket.StatusPolicyViolation, "heartbeat timeout")
 	}
 	return removed
+}
+
+// IncInFlight/DecInFlight/InFlight:在途任务计数(H2,供 SelectBestAgent O(1) 读)。
+func (r *Registry) IncInFlight(agentID string) {
+	r.mu.RLock(); e := r.agents[agentID]; r.mu.RUnlock()
+	if e != nil { e.inFlight.Add(1) }
+}
+func (r *Registry) DecInFlight(agentID string) {
+	r.mu.RLock(); e := r.agents[agentID]; r.mu.RUnlock()
+	if e == nil { return }
+	// H-3:CAS 下限钳 0(防 cancel后result/重连清零后旧任务 Dec 致负漂移)
+	for {
+		old := e.inFlight.Load()
+		if old <= 0 { return }
+		if e.inFlight.CompareAndSwap(old, old-1) { return }
+	}
+}
+func (r *Registry) InFlight(agentID string) int64 {
+	r.mu.RLock(); e := r.agents[agentID]; r.mu.RUnlock()
+	if e == nil { return 0 }
+	return e.inFlight.Load()
 }

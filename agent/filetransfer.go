@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/coder/websocket"
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
@@ -314,7 +313,8 @@ func feedExistingToHash(path string, n int64, h hash.Hash) error {
 		return err
 	}
 	defer f.Close()
-	buf := make([]byte, 64*1024)
+	buf := Get64K()
+	defer Put64K(buf)
 	var read int64
 	for read < n {
 		want := int64(len(buf))
@@ -454,7 +454,8 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 
 	// SHA256 增量
 	h := sha256.New()
-	buf := make([]byte, TransferBufferSize)
+	buf := Get256K() // H1:pool 复用
+	defer Put256K(buf)
 	// O3:分片模式 limit > 0 时,只读到 limit 字节就停(而非文件 EOF)
 	for sess.limit <= 0 || sess.bytesDone < sess.limit {
 		n, err := sess.file.Read(buf)
@@ -466,9 +467,9 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 			h.Write(buf[:n])
 			// 构造二进制帧：[transferID_len u8][transferID][isLast u8][data]
 			frame := proto.BuildBinaryFrame(transferID, false, buf[:n])
-			wc.writeMu.Lock()
-			wErr := wc.conn.Write(ctx, websocket.MessageBinary, frame)
-			wc.writeMu.Unlock()
+			writeCtx, writeCancel := context.WithTimeout(ctx, 15*time.Second) // 弱网:下载写 deadline
+			wErr := wc.writeBinaryData(writeCtx, frame)
+			writeCancel()
 			if wErr != nil {
 				completeCb(proto.FileTransferComplete{TransferID: transferID, Success: false, Error: "WS写失败: " + wErr.Error(), Bytes: sess.bytesDone})
 				return
@@ -494,11 +495,13 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 		}
 	}
 
-	// 发送 isLast 标记帧（空数据）
+	// H-5:isLast 写错检查(WS 半坏时原 ignoring 让对端悬挂至 30 分钟 ctx 超时)
 	frame := proto.BuildBinaryFrame(transferID, true, nil)
-	wc.writeMu.Lock()
-	wc.conn.Write(ctx, websocket.MessageBinary, frame)
-	wc.writeMu.Unlock()
+	writeErr := wc.writeBinaryData(ctx, frame)
+	if writeErr != nil {
+		completeCb(proto.FileTransferComplete{TransferID: transferID, Success: false, Error: "isLast 帧写失败: " + writeErr.Error(), Bytes: sess.bytesDone})
+		return
+	}
 
 	hash := hex.EncodeToString(h.Sum(nil))
 	te.mu.Lock()

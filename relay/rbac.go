@@ -18,6 +18,7 @@
 package main
 
 import (
+	"log"
 	"crypto/subtle"
 	"fmt"
 	"net/http"
@@ -99,6 +100,8 @@ var operatorBlocked = map[string]bool{
 	"power.restart":      true,
 	"update.push":        true,
 	"agent.enroll-token": true,
+	"secret.put":         true,
+	"secret.delete":      true,
 }
 
 // viewerAllowed viewer 允许的操作。
@@ -121,4 +124,32 @@ func (id Identity) CanAccessAgent(tags map[string]string) bool {
 		return true // admin 无租户限制
 	}
 	return tags["tenant"] == id.Tenant
+}
+
+
+// identityFromAuth 从已通过 authorize 的请求提取 Identity。
+func identityFromAuth(req *http.Request) Identity {
+	raw := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+	if raw == "" {
+		return Identity{Role: RoleAdmin} // 控制台会话/无 Bearer = 管理员
+	}
+	return ParseToken(raw)
+}
+
+// RequireRole RBAC 端点守卫(架构短1:让 CanPerform 生效)。
+// 自含鉴权(authorize + 角色检查),包装高危端点注册。
+func (r *Relay) RequireRole(action string, h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if err := r.authorize(req); err != nil {
+			writeJSON(w, http.StatusUnauthorized, errMap(err))
+			return
+		}
+		id := identityFromAuth(req)
+		if !id.CanPerform(action) {
+			log.Printf("[rbac] 拒绝 %s 执行 %s (role=%s tenant=%s)", req.RemoteAddr, action, id.Role, id.Tenant)
+			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("角色 %s 无权执行 %s", id.Role, action)))
+			return
+		}
+		h(w, req)
+	}
 }

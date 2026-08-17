@@ -90,7 +90,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, task proto.TaskRequest, progr
 	policy := d.commandPolicy
 	d.mu.RUnlock()
 	if policy != nil {
-		if err := policy.CheckPayload(task.Type, task.Payload); err != nil {
+		if err := policy.CheckCommandPayload(task.Type, task.Payload); err != nil {
 			return proto.TaskResult{
 				TaskID:  task.TaskID,
 				Success: false,

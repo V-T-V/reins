@@ -1,0 +1,48 @@
+# go-rmm 单机一键部署（Relay，可选 Agent）
+#
+# 快速试用（仅 Relay）：
+#   cp .env.example .env && 编辑 GO_RMM_TOKEN
+#   docker compose up -d
+#   docker compose logs -f relay
+
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile.relay
+    image: go-rmm-relay:local
+    container_name: go-rmm-relay
+    restart: unless-stopped
+    ports:
+      - "${RELAY_PORT:-7780}:7780"
+    command: ["-addr", ":7780", "-token", "${GO_RMM_TOKEN:?请在 .env 设置 GO_RMM_TOKEN}"]
+    volumes:
+      - relay-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7780/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+
+  # Agent 默认不启动（通常部署到外部主机）。
+  # 启用：docker compose --profile agent up -d
+  agent:
+    profiles: ["agent"]
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    image: go-rmm-agent:local
+    container_name: go-rmm-agent
+    restart: unless-stopped
+    depends_on:
+      relay:
+        condition: service_healthy
+    command: ["run", "-relay", "ws://relay:7780/agent", "-token", "${GO_RMM_TOKEN:?请在 .env 设置 GO_RMM_TOKEN}"]
+    volumes:
+      - agent-data:/data
+      - agent-workspace:/app/workspace
+
+volumes:
+  relay-data:
+  agent-data:
+  agent-workspace:

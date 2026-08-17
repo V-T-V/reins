@@ -32,9 +32,16 @@ type pendingResult struct {
 	attempt int
 }
 
+// maxQueueSize 结果队列硬上限(A4:弱网长断线防 OOM)。
+const maxQueueSize = 1000
+
 // enqueue 把结果入队。
 func (q *rQueue) enqueue(env proto.Envelope) {
 	q.mu.Lock()
+	if len(q.results) >= maxQueueSize {
+		q.results = q.results[1:]
+		log.Printf("[queue] 结果队列满(>%d),丢弃最旧(依赖 Relay 重投兜底)", maxQueueSize)
+	}
 	q.results = append(q.results, pendingResult{env: env, addedAt: time.Now()})
 	q.mu.Unlock()
 }

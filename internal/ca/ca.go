@@ -1,4 +1,4 @@
-package main
+package ca
 
 import (
 	"crypto/ecdsa"
@@ -218,7 +218,16 @@ func (c *CA) ValidateEnrollmentToken(token, agentID string) bool {
 // P1-S6 修复:重新 enroll 前撤销该 agentID 的所有旧证书(把旧 serial 加入 revoked)。
 // 这样攻击者窃取旧 token 完成 enroll 后,管理员重新 enroll 合法主机时,
 // 攻击者的旧证书会被立即作废。
+// SignAgentCSRNoRevoke 签发但不撤销旧证(W7 renew 用,续签不断连)。
+func (c *CA) SignAgentCSRNoRevoke(csrPEM []byte, agentID string, ttl time.Duration) ([]byte, error) {
+	return c.signAgentCSR(csrPEM, agentID, ttl, false)
+}
+
 func (c *CA) SignAgentCSR(csrPEM []byte, agentID string, ttl time.Duration) ([]byte, error) {
+	return c.signAgentCSR(csrPEM, agentID, ttl, true)
+}
+
+func (c *CA) signAgentCSR(csrPEM []byte, agentID string, ttl time.Duration, revokeOld bool) ([]byte, error) {
 	block, _ := pem.Decode(csrPEM)
 	if block == nil {
 		return nil, errors.New("CSR PEM 解码失败")
@@ -250,8 +259,10 @@ func (c *CA) SignAgentCSR(csrPEM []byte, agentID string, ttl time.Duration) ([]b
 
 	// P1-S6:重新 enroll 时撤销该 agentID 的所有旧证书
 	// (旧实现只存最新 serial,旧证书 24h 内仍可用且无法 revoke)
-	for _, oldSerial := range c.issued[agentID] {
-		c.revoked[oldSerial] = true
+	if revokeOld {
+		for _, oldSerial := range c.issued[agentID] {
+			c.revoked[oldSerial] = true
+		}
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, c.rootCert, csr.PublicKey, c.rootKey)
@@ -371,3 +382,6 @@ func (c *CA) saveState() {
 	}
 	_ = os.WriteFile(c.statePath, data, 0600)
 }
+
+// RootCert 返回根证书对象(拆包后供 relay 构造 TLS ClientCAs 池)。
+func (c *CA) RootCert() *x509.Certificate { return c.rootCert }

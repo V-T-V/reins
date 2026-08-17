@@ -105,20 +105,7 @@ func (r *Relay) getInflightCount(agentID string) int {
 	if r.store == nil {
 		return 0
 	}
-	dispatched, _ := r.store.ListTasksByStatus(StatusDispatched)
-	acknowledged, _ := r.store.ListTasksByStatus(StatusAcknowledged)
-	count := 0
-	for _, t := range dispatched {
-		if t.Request.AgentID == agentID {
-			count++
-		}
-	}
-	for _, t := range acknowledged {
-		if t.Request.AgentID == agentID {
-			count++
-		}
-	}
-	return count
+	return int(r.agents.InFlight(agentID))
 }
 
 // handleSelectBest GET /api/scheduler/best —— 智能选择最优 Agent。

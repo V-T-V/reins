@@ -48,7 +48,7 @@ func (r *Relay) handleStreamTask(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// 策略校验
-	if err := r.policy.CheckPayload(task.Type, task.Payload); err != nil {
+	if err := r.policy.CheckCommandPayload(task.Type, task.Payload); err != nil {
 		writeJSON(w, http.StatusForbidden, errMap(err))
 		return
 	}

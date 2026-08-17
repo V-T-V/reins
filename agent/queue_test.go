@@ -139,6 +139,7 @@ func TestQueueFlushToDrainsOnSuccess(t *testing.T) {
 	}
 	defer c.CloseNow()
 	wc := newWSConn(c)
+	wc.startWriter(context.Background())
 
 	q := newQueue()
 	for i := 0; i < 5; i++ {
@@ -175,6 +176,7 @@ func TestQueueFlushToRetainsOnWriteFailure(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	wc := newWSConn(c)
+	wc.startWriter(context.Background())
 	c.CloseNow() // 立即关闭,后续写必失败
 
 	q := newQueue()
