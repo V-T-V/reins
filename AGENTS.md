@@ -49,7 +49,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
-- **成功标准**:169 Go 文件 / 31.8K 行 / 376 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
+- **成功标准**:169 Go 文件 / 31.8K 行 / 379 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
 
 ## 架构假设(4 项显式假设)
 
@@ -138,7 +138,7 @@ go-rmm/
 | Go 文件 | 169 |
 | 代码行 | 31,800+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 376 |
+| 测试用例 | 379 |
 | 基准测试 | 22 |
 | CLI 命令 | 51 |
 | API 端点 | 42 |
@@ -182,7 +182,7 @@ go-rmm/
 
 ## 测试覆盖(v4.3.3)
 
-376 测试 + 22 基准。按包分布与重点验证场景:
+379 测试 + 22 基准。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
@@ -223,6 +223,7 @@ go-rmm/
 - ✅ **Windows Job Object 杀进程树**(3 会话实证,passport-service 僵尸 uvicorn 占 8090 事故根因):超时原只杀直接子进程 powershell.exe,孙进程存活为僵尸占端口、健康检查打旧进程假通过。现 powershell/script 执行器经 `runManaged` 纳入 Job Object(KILL_ON_JOB_CLOSE + ctx 取消主动 TerminateJobObject),Linux 侧对负 pgid 发 SIGKILL;实测(Windows)ping 孙进程随超时整树终止。
 - ✅ **`-t <数字>` 误用提示**:`-t 30` 原报"未知任务类型"无引导,现提示"-t 是任务类型,设置超时请用 -timeout <秒>"。
 - ✅ **script 执行器补 `-NonInteractive` + usage 发现性强化**(5 会话全部手工绕路"写 ps1→BOM 规范化→upload→-File"):`-s <本地文件>` 本就自动 BOM+UTF-8 头+远端临时文件执行,但无人知晓;usage/flag 描述现明确"复杂命令请写本地 .ps1 后用 -s 执行,规避内联转义与编码问题"。
+- ✅ **`-o json` 补齐 task run 终态与 task list**(2026-08-06 会话"-o json 无效"实证):jsonMode 自 v4.1.0 存在且覆盖 task result/agent list/net/ops/diagnose 等 7 处,但最高频的 `task run` 终态仍输出人类可读文本块、`task list` 仅表格。现 task run 终态/`--no-wait`/离线缓存三路径输出 `{task_id,status,result}` 纯 JSON(等待前缀与轮询点静默,stdout 无污染),task list 输出 `{tasks,count,enabled}`;httptest mock Relay 端到端断言 stdout 可直接 `json.Unmarshal`。
 
 ### P1 — 能力补全
 4. **Linux Agent**:补齐 Linux 执行器(systemd 服务/包管理/journalctl),打通跨平台。

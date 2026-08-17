@@ -390,22 +390,33 @@ func taskRun(cfg config, args []string) error {
 		return err
 	}
 
-	fmt.Printf("task_id:  %s\n", resp.TaskID)
-	fmt.Printf("agent_id: %s\n", resp.AgentID)
-	fmt.Printf("status:   %s\n", resp.Status)
-	fmt.Printf("idem_key: %s\n", *idemKey)
-	if resp.Message != "" {
-		fmt.Printf("message:  %s\n", resp.Message)
+	if jsonMode {
+		// JSON 模式:早退分支(不等待/离线缓存)输出单条 JSON;终态输出由 waitResult 负责
+		if *noWait || (resp.Status == proto.StatusPending && resp.Message != "") {
+			out := map[string]any{"task_id": resp.TaskID, "agent_id": resp.AgentID, "status": resp.Status, "idem_key": *idemKey}
+			if resp.Message != "" {
+				out["message"] = resp.Message
+			}
+			outputJSON(out)
+			return nil
+		}
+	} else {
+		fmt.Printf("task_id:  %s\n", resp.TaskID)
+		fmt.Printf("agent_id: %s\n", resp.AgentID)
+		fmt.Printf("status:   %s\n", resp.Status)
+		fmt.Printf("idem_key: %s\n", *idemKey)
+		if resp.Message != "" {
+			fmt.Printf("message:  %s\n", resp.Message)
+		}
+		if *noWait {
+			return nil
+		}
+		if resp.Status == proto.StatusPending && resp.Message != "" {
+			fmt.Println("\nAgent 离线,任务已缓存。上线后自动投递。")
+			return nil
+		}
+		fmt.Printf("\n等待结果...")
 	}
-
-	if *noWait {
-		return nil
-	}
-	if resp.Status == proto.StatusPending && resp.Message != "" {
-		fmt.Println("\nAgent 离线,任务已缓存。上线后自动投递。")
-		return nil
-	}
-	fmt.Printf("\n等待结果...")
 	// P2-#11:waitResult 现在监听 SIGINT,可 Ctrl+C 中断
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -510,11 +521,15 @@ func waitResult(ctx context.Context, cfg config, taskID string, timeout int) (bo
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("\n已中断")
+			if !jsonMode {
+				fmt.Println("\n已中断")
+			}
 			return false, nil
 		case <-ticker.C:
 			if time.Now().After(deadline) {
-				fmt.Println("\n等待超时")
+				if !jsonMode {
+					fmt.Println("\n等待超时")
+				}
 				return false, nil
 			}
 			var resp struct {
@@ -524,28 +539,47 @@ func waitResult(ctx context.Context, cfg config, taskID string, timeout int) (bo
 				Result *proto.TaskResult `json:"result"`
 			}
 			if err := apiGet(cfg, "/api/tasks/"+url.PathEscape(taskID), &resp); err != nil {
-				fmt.Print(".")
+				if !jsonMode {
+					fmt.Print(".")
+				}
 				continue
 			}
 			if resp.Task == nil {
-				fmt.Print(".")
+				if !jsonMode {
+					fmt.Print(".")
+				}
 				continue
 			}
 			switch resp.Task.Status {
 			case proto.StatusCompleted:
+				if jsonMode {
+					outputJSON(map[string]any{"task_id": taskID, "status": resp.Task.Status, "result": resp.Result})
+					return true, nil
+				}
 				fmt.Println()
 				printResult(resp.Result)
 				return true, nil
 			case proto.StatusFailed:
+				if jsonMode {
+					outputJSON(map[string]any{"task_id": taskID, "status": resp.Task.Status, "result": resp.Result})
+					taskFailed = true
+					return true, nil
+				}
 				fmt.Println()
 				printResult(resp.Result)
 				taskFailed = true // B6:标记任务失败,taskRun 据此返回 exitTaskFail
 				return true, nil
 			case proto.StatusCancelled:
+				if jsonMode {
+					outputJSON(map[string]any{"task_id": taskID, "status": resp.Task.Status, "result": nil})
+					return true, nil
+				}
 				fmt.Println("\n任务已取消")
 				return true, nil
 			default:
-				fmt.Print(".")
+				if !jsonMode {
+					fmt.Print(".")
+				}
 			}
 		}
 	}
@@ -603,7 +637,7 @@ func taskList(cfg config, args []string) error {
 	if err := apiGet(cfg, "/api/tasks?limit="+strconv.Itoa(queryLimit), &resp); err != nil {
 		return err
 	}
-	if !resp.Enabled {
+	if !resp.Enabled && !jsonMode {
 		fmt.Println("任务持久化未启用(Relay 未配置 store)")
 		return nil
 	}
@@ -625,6 +659,12 @@ func taskList(cfg config, args []string) error {
 	// 截断到用户请求的 limit
 	if len(filtered) > *limit {
 		filtered = filtered[:*limit]
+	}
+
+	// JSON 输出模式(脚本可解析;与 agent list/task result 的 jsonMode 行为一致)
+	if jsonMode {
+		outputJSON(map[string]any{"tasks": filtered, "count": len(filtered), "enabled": resp.Enabled})
+		return nil
 	}
 
 	filterDesc := ""
