@@ -526,3 +526,71 @@ type CronRule struct {
 
 // bucketCrons 存 cron 规则的 bbolt bucket。
 const bucketCrons = "crons"
+
+// --- 多租户组织持久化(P0-1) ---
+
+// StoredOrg 持久化的组织记录(存储 DTO;relay 的 Organization 经字段映射引用)。
+type StoredOrg struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Quota   int    `json:"quota"`
+	Enabled bool   `json:"enabled"`
+}
+
+// SaveOrg 保存组织(含配额与启停状态)。
+func (s *Store) SaveOrg(org StoredOrg) error {
+	if s.db == nil {
+		return ErrStoreClosed
+	}
+	data, err := json.Marshal(org)
+	if err != nil {
+		return err
+	}
+	return s.db.Batch(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte(bucketTenants))
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(org.ID), data)
+	})
+}
+
+// DeleteOrg 删除组织。
+func (s *Store) DeleteOrg(orgID string) error {
+	if s.db == nil {
+		return ErrStoreClosed
+	}
+	return s.db.Batch(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketTenants))
+		if bucket == nil {
+			return nil
+		}
+		return bucket.Delete([]byte(orgID))
+	})
+}
+
+// LoadOrgs 加载所有组织。
+func (s *Store) LoadOrgs() []StoredOrg {
+	if s.db == nil {
+		return nil
+	}
+	var out []StoredOrg
+	s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketTenants))
+		if bucket == nil {
+			return nil
+		}
+		c := bucket.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var org StoredOrg
+			if json.Unmarshal(v, &org) == nil {
+				out = append(out, org)
+			}
+		}
+		return nil
+	})
+	return out
+}
+
+// bucketTenants 存多租户组织的 bbolt bucket。
+const bucketTenants = "tenants"

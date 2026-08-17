@@ -49,7 +49,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
-- **成功标准**:169 Go 文件 / 31.8K 行 / 379 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
+- **成功标准**:169 Go 文件 / 31.8K 行 / 382 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
 
 ## 架构假设(4 项显式假设)
 
@@ -138,7 +138,7 @@ go-rmm/
 | Go 文件 | 169 |
 | 代码行 | 31,800+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 379 |
+| 测试用例 | 382 |
 | 基准测试 | 22 |
 | CLI 命令 | 51 |
 | API 端点 | 42 |
@@ -158,7 +158,7 @@ go-rmm/
 | **relay** 可观测性 | 90% | /api/metrics(JSON)+ /metrics(Prom)+ xfer 传输指标(M1)+ pprof | ✅ |
 | **relay** 任务投递 | 95% | WS 转发 + CAS 存储 + Reaper 超时回收 + 智能调度 | ✅ |
 | **relay** 批量分发 | 90% | 一对多 + 聚合 + 指数退避重试 + 实时进度跟踪 [round 8] | ✅ |
-| **relay** 多租户 | 80% | 组织/角色策略/配额/隔离过滤(内存 store) [round 7] | 🟡 持久化待接 |
+| **relay** 多租户 | 90% | 组织/角色策略/配额/隔离过滤 + bbolt 持久化(tenants bucket,重启恢复) + authorize 接入 OrgEnabled fail-closed [2026-08-18] | ✅ |
 | **relay** 安全层 | 90% | mTLS + 内置 CA + CRL + 命令策略黑名单 + Secret 管理 | ✅ |
 | **relay** 审计 | 95% | hash chain 防篡改 + 异步落盘 + SIEM 导出 [round 6] | ✅ |
 | **relay** 水平扩展 | 70% | TaskStore interface + Redis + Pub/Sub 联邦;多 Relay 故障切换 | 🟡 生产验证待补 |
@@ -182,7 +182,7 @@ go-rmm/
 
 ## 测试覆盖(v4.3.3)
 
-379 测试 + 22 基准。按包分布与重点验证场景:
+382 测试 + 22 基准。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
@@ -207,9 +207,8 @@ go-rmm/
 按优先级排序的演进方向:
 
 ### P0 — 生产硬化
-1. **多租户持久化**:`TenantManager`/`RolePolicy` 从内存 store 迁移到 bbolt/Redis,重启不丢组织与策略。
-2. **批量分发端点化**:把 `BatchDispatcher` 接入新 REST 端点 `POST /api/batch`(返回 batchID)+ `GET /api/batch/:id/progress`(SSE 实时进度),供 CLI/Web 调用。
-3. **水平扩展验证**:Redis 多 Relay 实测(Store/Registry/EventBus 三层联邦),补 Agent 故障切换 E2E。
+1. **批量分发端点化**:把 `BatchDispatcher` 接入新 REST 端点 `POST /api/batch`(返回 batchID)+ `GET /api/batch/:id/progress`(SSE 实时进度),供 CLI/Web 调用。
+2. **水平扩展验证**:Redis 多 Relay 实测(Store/Registry/EventBus 三层联邦),补 Agent 故障切换 E2E。
 
 **已完成(rounds 9-10,工作区深度推进)**:
 - ✅ **脚本库路径穿越修复**:`GET/DELETE/POST /api/scripts/{name}` 原 `filepath.Join` 清理 `..` 后逃逸脚本目录,可读删目录外任意文件。现已 handler + 库方法(Save/Read/Delete)双层 `validateScriptName` 校验(字符黑名单 + 解析后路径必须位于脚本目录内)。
@@ -225,6 +224,7 @@ go-rmm/
 - ✅ **script 执行器补 `-NonInteractive` + usage 发现性强化**(5 会话全部手工绕路"写 ps1→BOM 规范化→upload→-File"):`-s <本地文件>` 本就自动 BOM+UTF-8 头+远端临时文件执行,但无人知晓;usage/flag 描述现明确"复杂命令请写本地 .ps1 后用 -s 执行,规避内联转义与编码问题"。
 - ✅ **`-o json` 补齐 task run 终态与 task list**(2026-08-06 会话"-o json 无效"实证):jsonMode 自 v4.1.0 存在且覆盖 task result/agent list/net/ops/diagnose 等 7 处,但最高频的 `task run` 终态仍输出人类可读文本块、`task list` 仅表格。现 task run 终态/`--no-wait`/离线缓存三路径输出 `{task_id,status,result}` 纯 JSON(等待前缀与轮询点静默,stdout 无污染),task list 输出 `{tasks,count,enabled}`;httptest mock Relay 端到端断言 stdout 可直接 `json.Unmarshal`。
 - ✅ **输出流纪律 + 版本一致性**(2026-08-18):`file download` 写文件路径的 `✅ 下载完成` 从 stderr 挪到 stdout(管道模式保留 stderr——stdout 是下载数据流),修复成功提示被 PS 5.1 `$ErrorActionPreference='Stop'` 误判为错误(passport-service 发布会话实证);printUsage 标头硬编码 `v3.9` 改为动态 `version` 变量(ldflags 注入,与 `version` 子命令一致);`checkRoots` 空白名单拒绝错误补配置指引(指向 agent `allowed_roots`/`allow_all_roots`,2026-08-17 会话"未配置允许根目录"无从下手实证)。
+- ✅ **多租户持久化 + 鉴权接入**(2026-08-18,原 P0-1):`TenantManager` 注入 `*taskstore.Store`(与任务/cron 共用 tasks.db 的 `tenants` bucket),组织创建/启停/删除写盘、启动恢复,重启不丢组织与配额;`authorize` 链挂 `OrgEnabled` 校验——组织禁用/删除后该租户 token 立即失效(fail-closed)。**行为变更**:`tenant:role:secret` 语法的 token 现在要求组织已创建且启用(不存在=拒绝);纯 secret 部署(空 tenant)不受影响,现网向后兼容。`RolePolicy` 仍为内存态(角色策略为启动期配置,无运行时变更路径,暂无持久化需求)。
 
 ### P1 — 能力补全
 4. **Linux Agent**:补齐 Linux 执行器(systemd 服务/包管理/journalctl),打通跨平台。

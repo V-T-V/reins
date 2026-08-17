@@ -50,6 +50,8 @@ func main() {
 		defer store.Close()
 		// 恢复在途任务（dispatched 但未完成的）
 		relay.recoverInFlightTasks()
+		// P0-1:多租户组织持久化(与任务/cron 共用 tasks.db 的 tenants bucket)
+		relay.WithTenants(NewTenantManagerWithStore(store))
 		log.Printf("[relay] 持久化已启用: %s", filepath.Join(dataDir(), "tasks.db"))
 	}
 

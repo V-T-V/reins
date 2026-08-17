@@ -13,7 +13,10 @@
 package main
 
 import (
+	"log/slog"
 	"sync"
+
+	"github.com/QiuShichang/go-rmm/internal/taskstore"
 )
 
 // Organization 一个租户(组织)。
@@ -31,15 +34,57 @@ type RolePolicy struct {
 	roles map[string]map[string]bool // role → {action: true}
 }
 
-// TenantManager 多租户管理器(内存版骨架)。
+// TenantManager 多租户管理器。
+// 默认纯内存(测试/轻量部署);注入 taskstore 后组织变更写盘、重启恢复(P0-1)。
 type TenantManager struct {
-	mu   sync.RWMutex
-	orgs map[string]*Organization // orgID → org
+	mu    sync.RWMutex
+	orgs  map[string]*Organization // orgID → org
+	store *taskstore.Store         // 可为 nil(纯内存模式)
 }
 
-// NewTenantManager 构造空的多租户管理器。
+// NewTenantManager 构造空的多租户管理器(纯内存,向后兼容)。
 func NewTenantManager() *TenantManager {
 	return &TenantManager{orgs: make(map[string]*Organization)}
+}
+
+// NewTenantManagerWithStore 构造带持久化的管理器:启动时从 bbolt 恢复组织。
+// store 为 nil 时退化为纯内存。
+func NewTenantManagerWithStore(store *taskstore.Store) *TenantManager {
+	m := &TenantManager{orgs: make(map[string]*Organization), store: store}
+	if store == nil {
+		return m
+	}
+	for _, org := range store.LoadOrgs() {
+		m.orgs[org.ID] = &Organization{
+			ID:      org.ID,
+			Name:    org.Name,
+			Quota:   org.Quota,
+			Enabled: org.Enabled,
+		}
+	}
+	if n := len(m.orgs); n > 0 {
+		slog.Info("多租户组织已从持久化恢复", "count", n)
+	}
+	return m
+}
+
+// persist 把组织变更写盘。纯内存模式为 no-op;写失败记日志不回滚内存
+// (内存为准保证本次进程语义一致,重启丢失该次变更,日志留痕排查)。
+func (m *TenantManager) persist(org *Organization, delete bool) {
+	if m.store == nil || org == nil {
+		return
+	}
+	var err error
+	if delete {
+		err = m.store.DeleteOrg(org.ID)
+	} else {
+		err = m.store.SaveOrg(taskstore.StoredOrg{
+			ID: org.ID, Name: org.Name, Quota: org.Quota, Enabled: org.Enabled,
+		})
+	}
+	if err != nil {
+		slog.Warn("组织持久化写盘失败(重启将丢失该变更)", "org", org.ID, "delete", delete, "error", err)
+	}
 }
 
 // NewDefaultRolePolicy 返回内置默认角色策略(与 rbac.go 的硬编码 map 一致)。
@@ -92,14 +137,18 @@ func (p *RolePolicy) GrantRole(role string, actions ...string) {
 // CreateOrg 创建组织。已存在则返回 false。
 func (m *TenantManager) CreateOrg(org Organization) bool {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if _, exists := m.orgs[org.ID]; exists {
+		m.mu.Unlock()
 		return false
 	}
 	if org.ID == "" {
+		m.mu.Unlock()
 		return false
 	}
+	saved := org // 拷贝,persist 解锁后使用
 	m.orgs[org.ID] = &org
+	m.mu.Unlock()
+	m.persist(&saved, false)
 	return true
 }
 
@@ -117,12 +166,31 @@ func (m *TenantManager) GetOrg(orgID string) *Organization {
 // SetOrgEnabled 启用/禁用组织。禁用后该租户所有操作被拒。
 func (m *TenantManager) SetOrgEnabled(orgID string, enabled bool) bool {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if o, ok := m.orgs[orgID]; ok {
-		o.Enabled = enabled
-		return true
+	o, ok := m.orgs[orgID]
+	if !ok {
+		m.mu.Unlock()
+		return false
 	}
-	return false
+	o.Enabled = enabled
+	cp := *o
+	m.mu.Unlock()
+	m.persist(&cp, false)
+	return true
+}
+
+// DeleteOrg 删除组织。不存在返回 false。删除后该租户身份立即失效(fail-closed)。
+func (m *TenantManager) DeleteOrg(orgID string) bool {
+	m.mu.Lock()
+	o, ok := m.orgs[orgID]
+	if !ok {
+		m.mu.Unlock()
+		return false
+	}
+	delete(m.orgs, orgID)
+	cp := *o
+	m.mu.Unlock()
+	m.persist(&cp, true)
+	return true
 }
 
 // OrgEnabled 检查组织是否启用(不存在视为禁用,fail-closed)。

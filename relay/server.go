@@ -312,6 +312,7 @@ type Relay struct {
 	audit      *AuditLog      // 审计日志(F1)
 	scheduler  *Scheduler     // H2 定时任务调度器,可为 nil
 	updateRepo *UpdateRepo    // Agent 版本仓库(自更新分发),可为 nil
+	tenants    *TenantManager // 多租户组织管理(P0-1),可为 nil(禁用租户校验)
 }
 
 func NewRelay(cfg Config) *Relay {
@@ -320,6 +321,7 @@ func NewRelay(cfg Config) *Relay {
 		agents:  NewRegistry(),
 		console: NewEventBus(),
 		policy:  DefaultCommandPolicy(),
+		tenants: NewTenantManager(), // 默认内存版;有 store 时由 WithTenants 替换为持久化版
 	}
 }
 
@@ -332,6 +334,12 @@ func (r *Relay) WithStore(s TaskStore) *Relay {
 // WithUpdateRepo 注入 Agent 版本仓库(自更新分发)。
 func (r *Relay) WithUpdateRepo(u *UpdateRepo) *Relay {
 	r.updateRepo = u
+	return r
+}
+
+// WithTenants 注入多租户管理器(P0-1:带持久化的版本,组织重启不丢)。
+func (r *Relay) WithTenants(m *TenantManager) *Relay {
+	r.tenants = m
 	return r
 }
 
@@ -363,10 +371,15 @@ func (r *Relay) authorize(req *http.Request) error {
 	// H4:仅 Authorization 头(query token 会进日志/Referer 泄漏);
 	// 短1:比较 Secret 部分(支持 tenant:role:secret 格式,纯 secret 行为不变)
 	token := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
-	got := ParseToken(token).Secret
+	ident := ParseToken(token)
 	want := ParseToken(r.cfg.Token).Secret
-	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(ident.Secret), []byte(want)) != 1 {
 		return errors.New("无效的鉴权 token")
+	}
+	// P0-1:租户组织校验——组织被禁用/删除后,该租户 token 立即失效(fail-closed)。
+	// tenant 为空(admin/纯 secret 部署)不受影响,向后兼容。
+	if r.tenants != nil && !r.tenants.OrgEnabled(ident.Tenant) {
+		return errors.New("所属组织已被禁用或删除")
 	}
 	return nil
 }
