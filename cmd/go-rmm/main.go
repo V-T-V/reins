@@ -38,6 +38,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -327,15 +328,16 @@ func taskRun(cfg config, args []string) error {
 	fs := flag.NewFlagSet("task run", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "用法: go-rmm task run -a <agent> [-t type] [-c command | -s script | -f payload] [--idem key] [--no-wait]")
+		fmt.Fprintln(os.Stderr, "用法: go-rmm task run -a <agent> [-t type] [--timeout 秒] [-c command | -s script | -f payload] [--idem key] [--no-wait]")
+		fmt.Fprintln(os.Stderr, "  复杂命令(含 $/引号/反引号)请写本地 .ps1 后用 -s <文件路径> 执行:自动加 BOM/UTF-8 头并写远端临时文件,规避内联转义与编码问题")
 		fs.PrintDefaults()
 	}
 	agentID := fs.String("a", "", "目标 Agent ID(必填)")
 	taskType := fs.String("t", "powershell", "任务类型: powershell/script/file/screenshot/browse/guiclick")
 	payloadFile := fs.String("f", "", "从文件读取 JSON payload(与 -c/-s 互斥)")
-	command := fs.String("c", "", "PowerShell 命令(快捷方式)")
-	script := fs.String("s", "", "脚本内容或路径(快捷方式)")
-	timeout := fs.Int("timeout", 60, "任务超时秒数")
+	command := fs.String("c", "", "PowerShell 命令(快捷方式;复杂命令建议改用 -s 脚本文件)")
+	script := fs.String("s", "", "脚本内容或本地脚本文件路径(推荐:ps1 自动 BOM+UTF-8 头+远端临时文件执行)")
+	timeout := fs.Int("timeout", 60, "任务超时秒数(超时后 Agent 杀整棵进程树)")
 	idemKey := fs.String("idem", "", "幂等键(防重复执行,默认按内容自动生成)")
 	noWait := fs.Bool("no-wait", false, "不等待结果,只返回 task_id")
 	if err := fs.Parse(args); err != nil {
@@ -346,6 +348,10 @@ func taskRun(cfg config, args []string) error {
 		return errors.New("-a <agent_id> 必填")
 	}
 	if !proto.IsValidTaskType(*taskType) {
+		// 使用会话实证:`-t 30` 被误当任务类型报"未知任务类型",用户实际想设超时。
+		if _, convErr := strconv.Atoi(*taskType); convErr == nil {
+			return fmt.Errorf("未知任务类型: %s —— -t 是任务类型,设置超时请用 -timeout <秒> (可用类型: powershell script file screenshot browse guiclick)", *taskType)
+		}
 		return fmt.Errorf("未知任务类型: %s (可用: powershell script file screenshot browse guiclick)", *taskType)
 	}
 
@@ -354,10 +360,13 @@ func taskRun(cfg config, args []string) error {
 		return err
 	}
 
-	// P2-#10:幂等键默认按 (agent,type,payload-hash) 生成,保证重试不重复执行
+	// P2-#10:幂等键默认按 (agent,type,payload-hash) 生成,保证重试不重复执行。
+	// 使用会话实证(2026-08):纯内容 hash 使"重跑同一条命令"命中 Agent 端幂等
+	// 缓存(2h TTL)回放旧结果,运维被迫手工给 --idem 加时间戳后缀绕过。
+	// 掺入纳秒时间戳:每次 CLI 调用都是新的执行意图;同一进程内网络重试
+	// (apiPostRetry) 复用已生成的同一 key,重试安全语义不变。
 	if *idemKey == "" {
-		h := sha256.Sum256(append([]byte(*agentID+"|"+*taskType+"|"), payload...))
-		*idemKey = fmt.Sprintf("cli-%x", h[:8])
+		*idemKey = defaultIdemKey(*agentID, *taskType, payload)
 	}
 
 	taskID := "cli-" + *taskType + "-" + fmt.Sprint(time.Now().UnixMilli())
@@ -417,6 +426,32 @@ func taskRun(cfg config, args []string) error {
 
 // taskFailed 由 waitResult 设置,供 taskRun 判断是否返回任务失败退出码。
 var taskFailed bool
+
+// lastIdemNano 记录 defaultIdemKey 已用的最大纳秒戳,保证同进程内严格递增。
+var lastIdemNano atomic.Int64
+
+// defaultIdemKey 生成 CLI 默认幂等键:内容 hash(可读指纹) + 单调纳秒戳(唯一性)。
+// 时间戳保证每次 CLI 调用都是新执行意图,不命中 Agent 端幂等缓存;
+// hash 前缀保留内容指纹,便于在任务列表中人工识别。
+func defaultIdemKey(agentID, taskType string, payload []byte) string {
+	h := sha256.Sum256(append([]byte(agentID+"|"+taskType+"|"), payload...))
+	return fmt.Sprintf("cli-%x-%d", h[:8], uniqueNano())
+}
+
+// uniqueNano 返回严格递增的纳秒戳。Windows time.Now 连续调用可能返回相同时刻
+// (实测同值),CAS 循环保证同进程内每次调用必大于上一次;时钟回拨时退化为 last+1。
+func uniqueNano() int64 {
+	for {
+		now := time.Now().UnixNano()
+		last := lastIdemNano.Load()
+		if now > last && lastIdemNano.CompareAndSwap(last, now) {
+			return now
+		}
+		if lastIdemNano.CompareAndSwap(last, last+1) {
+			return last + 1
+		}
+	}
+}
 
 func buildPayload(taskType, command, script, payloadFile string) (json.RawMessage, error) {
 	// -f 文件优先

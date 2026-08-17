@@ -69,7 +69,9 @@ func (e *ScriptExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFun
 	var cmd *exec.Cmd
 	switch lang {
 	case "ps1":
-		cmd = exec.CommandContext(ctx, "powershell", "-NoProfile",
+		// -NonInteractive:无 console 环境下 PS5.x 首次模块加载会等待交互输入,
+		// 导致任务假死(与 powershell 执行器保持一致)。
+		cmd = exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive",
 			"-ExecutionPolicy", "Bypass", "-File", tmpPath)
 	case "bat":
 		cmd = exec.CommandContext(ctx, "cmd", "/c", tmpPath)
@@ -84,7 +86,7 @@ func (e *ScriptExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFun
 	cmd.Stderr = &stderr
 	cmd.Env = append(os.Environ(), "PYTHONUTF8=1")
 
-	err = cmd.Run()
+	err = runManaged(ctx, cmd)
 	result := proto.TaskResult{
 		Stdout: stdout.String(),
 		Stderr: stderr.String(),

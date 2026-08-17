@@ -53,7 +53,7 @@ func (e *PowerShellExecutor) Exec(ctx context.Context, payload []byte, _ Progres
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err := runManaged(ctx, cmd)
 	result := proto.TaskResult{
 		Stdout: stdout.String(),
 		Stderr: stderr.String(),
