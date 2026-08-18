@@ -60,6 +60,9 @@ func versionGE(version, minVersion string) bool {
 }
 
 // parseSemver 解析 "v1.2.3" → [1,2,3]。失败返回空。
+// 遇预发布分隔符 '-' 即停止:后续数字不属主版本(v4.5.5-c9c48bc 的主版本是
+// 4.5.5)——原实现把后缀数字累进末段,v4.5.5-c9c48bc 被解析成 4.5.5948、
+// v4.5.4-b63201d 成 4.5.460201,导致正常升级被防降级误拒(2026-08-18 实证)。
 func parseSemver(s string) []int {
 	out := make([]int, 0, 3)
 	current := 0
@@ -74,6 +77,8 @@ func parseSemver(s string) []int {
 				current = 0
 				started = false
 			}
+		} else if c == '-' {
+			break // 预发布段开始,主版本解析结束
 		}
 	}
 	if started {

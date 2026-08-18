@@ -97,6 +97,13 @@ func TestVersionGE(t *testing.T) {
 		{"v1.2.3", "v1.2.3", true},  // 相等
 		{"v1.2.0", "", true},        // 无约束
 		{"v1.10.0", "v1.9.0", true}, // 两位数
+		// 预发布后缀:主版本为准(2026-08-18 生产实证——v4.5.5-c9c48bc 曾被
+		// 解析成 4.5.5948、v4.5.4-b63201d 成 4.5.460201,正常升级被防降级误拒)
+		{"v4.5.5-c9c48bc", "v4.5.4-b63201d", true},
+		{"v4.5.4-b63201d", "v4.5.5-c9c48bc", false},
+		{"v4.5.5-c9c48bc", "v4.5.5-b63201d", true}, // 同主版本,预发布迭代放行
+		{"v4.3.6-hotfix.20260811.5", "v4.3.6", true},
+		{"v1.2.3", "v1.2.3-rc1", true}, // 正式版 ≥ 同号预发布
 	}
 	for _, tt := range tests {
 		got := versionGE(tt.version, tt.minVersion)
@@ -116,6 +123,8 @@ func TestParseSemver(t *testing.T) {
 		{"v1.2.3", 1, 2, 3},
 		{"2.0.10", 2, 0, 10},
 		{"v0.1.0", 0, 1, 0},
+		{"v4.5.5-c9c48bc", 4, 5, 5},              // 预发布后缀的数字不累进主版本
+		{"v4.3.6-hotfix.20260811.5", 4, 3, 6},    // 复合 hotfix 后缀同理
 	}
 	for _, tt := range tests {
 		got := parseSemver(tt.input)
