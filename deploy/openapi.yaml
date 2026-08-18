@@ -56,7 +56,7 @@ paths:
       summary: 列出在线 Agent
       responses:
         "200":
-          description: Agent 列表
+          description: Agent 列表(含 online_since 上线时刻毫秒戳与 xfer_stats 传输画像)
           content:
             application/json:
               schema:
@@ -235,10 +235,88 @@ paths:
           application/json:
             schema:
               type: object
+              required: [agent_id, version]
               properties:
                 agent_id: { type: string }
                 version: { type: string }
                 force: { type: boolean }
+                binary_path:
+                  type: string
+                  description: |
+                    Agent 侧已预上传的新二进制绝对路径(经 /api/transfer/upload 分片传输)。
+                    引用模式零内联——公网链路内联 7MB+ base64 单帧 WS 写必超时。
+                    缺省时回退 base64 内联(仅适合小体积/低延迟链路)。
+      responses:
+        "202":
+          description: 更新任务已下发,Agent 将自更新并重启(SCM 拉起)
+
+  /api/batch:
+    post:
+      summary: 异步批量分发(重试+进度跟踪)
+      description: |
+        按 tag 匹配目标,经 BatchDispatcher 引擎并发投递(指数退避重试)。
+        立即返回 batch_id,进度经 /api/batch/{id} 轮询或 /api/batch/{id}/progress SSE 订阅。
+        命令策略校验与单任务同款(批量是策略绕过的高危面)。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tag, type]
+              properties:
+                tag: { type: string, description: "目标标签,如 env=prod" }
+                type: { type: string }
+                payload: { type: object }
+                timeout: { type: integer, default: 60 }
+                max_retries: { type: integer, default: 0 }
+      responses:
+        "202":
+          description: 批次已提交(异步执行)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batch_id: { type: string }
+                  total: { type: integer }
+                  progress: { type: string, description: SSE 进度端点路径 }
+                  max_retries: { type: integer }
+        "403": { description: 命令策略拦截 }
+        "404": { description: 无匹配标签的在线 Agent }
+
+  /api/batch/{id}:
+    get:
+      summary: 批次进度快照(轮询用)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: |
+            进度快照:status(running|finished)/total/dispatched/succeeded/failed/
+            pending/percent/elapsed_ms/eta_ms/states[](各目标状态机)+
+            终态附 success_rate(0-1)。
+        "404": { description: 批次不存在或已过期(TTL 1h) }
+
+  /api/batch/{id}/progress:
+    get:
+      summary: 批次进度 SSE 实时流
+      description: 每秒推送 event:progress(snapshot);终态推送 event:done(含 success_rate)后关流。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "404": { description: 批次不存在或已过期 }
 
   /api/crons:
     get:
@@ -288,6 +366,18 @@ components:
         tags:
           type: object
           additionalProperties: { type: string }
+        online_since:
+          type: integer
+          description: 本次注册(上线)的 Unix 毫秒时间戳;0 表示未知
+        xfer_stats:
+          type: object
+          description: 文件传输画像(心跳上报)
+          properties:
+            upload_bytes: { type: integer }
+            download_bytes: { type: integer }
+            upload_count: { type: integer }
+            download_count: { type: integer }
+            failed_count: { type: integer }
 
     TaskRequest:
       type: object
