@@ -37,7 +37,8 @@ func cmdLogs(cfg config, args []string) error {
 	}
 }
 
-// logsRead 读取日志文件(一次性)。
+// logsRead 读取日志文件(一次性)。平台感知:Linux 直接 tail,Windows 走
+// Get-Content;未知平台保留旧的双发回退。
 func logsRead(cfg config, args []string) error {
 	agentID := extractArg(args, "-a")
 	filePath := posArg(args, 1)
@@ -48,16 +49,26 @@ func logsRead(cfg config, args []string) error {
 	if l := extractArg(args, "--limit"); l != "" {
 		fmt.Sscanf(l, "%d", &limit)
 	}
-	// 用 Get-Content -Tail 读最后 N 行
-	cmd := fmt.Sprintf("Get-Content '%s' -Tail %d -ErrorAction SilentlyContinue", filePath, limit)
-	stdout, err := runOpsTask(cfg, agentID, cmd, 15)
-	if err != nil {
-		// Linux fallback
-		cmd = fmt.Sprintf("tail -n %d '%s' 2>/dev/null", limit, filePath)
+	var stdout string
+	var err error
+	switch agentOS(cfg, agentID) {
+	case "":
+		// 未知平台:旧的先 PS 后 sh 盲发(向后兼容)
+		cmd := fmt.Sprintf("Get-Content '%s' -Tail %d -ErrorAction SilentlyContinue", filePath, limit)
 		stdout, err = runOpsTask(cfg, agentID, cmd, 15)
 		if err != nil {
-			return err
+			cmd = fmt.Sprintf("tail -n %d '%s' 2>/dev/null", limit, filePath)
+			stdout, err = runOpsTask(cfg, agentID, cmd, 15)
 		}
+	default:
+		if isLinuxAgent(cfg, agentID) {
+			stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("tail -n %d '%s' 2>/dev/null", limit, filePath), 15)
+		} else {
+			stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("Get-Content '%s' -Tail %d -ErrorAction SilentlyContinue", filePath, limit), 15)
+		}
+	}
+	if err != nil {
+		return err
 	}
 	fmt.Println(stdout)
 	return nil
@@ -76,19 +87,6 @@ func logsTail(cfg config, args []string) error {
 	}
 	filter := extractArg(args, "--filter")
 
-	// 启动一个 shell 会话,执行 Get-Content -Wait(或 tail -f)
-	var cmd string
-	if filter != "" {
-		cmd = fmt.Sprintf("Get-Content '%s' -Tail %d -Wait | Where-Object { $_ -match '%s' }", filePath, lines, filter)
-	} else {
-		cmd = fmt.Sprintf("Get-Content '%s' -Tail %d -Wait", filePath, lines)
-	}
-	// Linux fallback
-	linuxCmd := fmt.Sprintf("tail -n %d -f '%s'", lines, filePath)
-	if filter != "" {
-		linuxCmd = fmt.Sprintf("tail -n %d -f '%s' | grep --line-buffered '%s'", lines, filePath, filter)
-	}
-
 	// 用 shell open 会话执行(持久输出)
 	fmt.Printf("📡 实时 tail: %s (agent=%s, lines=%d", filePath, agentID, lines)
 	if filter != "" {
@@ -97,13 +95,33 @@ func logsTail(cfg config, args []string) error {
 	fmt.Println(")")
 	fmt.Println("   Ctrl+C 停止")
 
-	// 简化:用 task run 下发命令(超时控制而非真正持久)
-	// 真正持久需要 shell 会话,这里用长超时 task 模拟
-	timeout := 300 // 5 分钟
-	cmdFull := fmt.Sprintf("%s 2>$null; if ($LASTEXITCODE -ne 0) { %s }", cmd, linuxCmd)
-	payload, _ := json.Marshal(struct {
-		Command string `json:"command"`
-	}{Command: cmdFull})
+	// 平台感知选方言(P1-4):Linux 走 script lang=sh 的 tail -f,Windows 走
+	// powershell 的 Get-Content -Wait。原实现把 PS 与 sh 语法混拼进同一命令
+	// ("if ($LASTEXITCODE -ne 0) { tail -f ... }"),两个平台都不成立——
+	// 该命令从未正确工作过。
+	timeout := 300 // 5 分钟(长超时 task 模拟持久 tail)
+	var taskType string
+	var payload json.RawMessage
+	if isLinuxAgent(cfg, agentID) {
+		taskType = "script"
+		c := fmt.Sprintf("tail -n %d -f '%s'", lines, filePath)
+		if filter != "" {
+			c += fmt.Sprintf(" | grep --line-buffered '%s'", filter)
+		}
+		payload, _ = json.Marshal(struct {
+			Content string `json:"content"`
+			Lang    string `json:"lang"`
+		}{Content: c, Lang: "sh"})
+	} else {
+		taskType = "powershell"
+		c := fmt.Sprintf("Get-Content '%s' -Tail %d -Wait", filePath, lines)
+		if filter != "" {
+			c += fmt.Sprintf(" | Where-Object { $_ -match '%s' }", filter)
+		}
+		payload, _ = json.Marshal(struct {
+			Command string `json:"command"`
+		}{Command: c})
+	}
 	taskID := "logs-" + fmt.Sprint(time.Now().UnixNano())
 	body := struct {
 		TaskID  string          `json:"task_id"`
@@ -112,7 +130,7 @@ func logsTail(cfg config, args []string) error {
 		Payload json.RawMessage `json:"payload"`
 		Timeout int             `json:"timeout"`
 	}{
-		TaskID: taskID, Type: "powershell", AgentID: agentID,
+		TaskID: taskID, Type: taskType, AgentID: agentID,
 		Payload: payload, Timeout: timeout,
 	}
 	var resp struct {
@@ -160,14 +178,18 @@ func logsList(cfg config, args []string) error {
 	if dir == "" {
 		dir = "."
 	}
-	cmd := fmt.Sprintf("Get-ChildItem '%s' -Filter *.log | Select Name,Length,LastWriteTime | Format-Table -AutoSize | Out-String", dir)
-	stdout, err := runOpsTask(cfg, agentID, cmd, 15)
-	if err != nil {
-		cmd = fmt.Sprintf("ls -lh %s/*.log 2>/dev/null", dir)
-		stdout, err = runOpsTask(cfg, agentID, cmd, 15)
-		if err != nil {
-			return err
+	var stdout string
+	var err error
+	if isLinuxAgent(cfg, agentID) {
+		stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("ls -lh %s/*.log 2>/dev/null", dir), 15)
+	} else {
+		stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("Get-ChildItem '%s' -Filter *.log | Select Name,Length,LastWriteTime | Format-Table -AutoSize | Out-String", dir), 15)
+		if err != nil { // 未知平台(查询失败返回 false)回退 sh
+			stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("ls -lh %s/*.log 2>/dev/null", dir), 15)
 		}
+	}
+	if err != nil {
+		return err
 	}
 	fmt.Println(stdout)
 	return nil
@@ -185,14 +207,18 @@ func logsSearch(cfg config, args []string) error {
 	if m := extractArg(args, "--max"); m != "" {
 		fmt.Sscanf(m, "%d", &max)
 	}
-	cmd := fmt.Sprintf("Select-String -Path '%s' -Pattern '%s' | Select -First %d | ForEach-Object { $_.Line }", filePath, pattern, max)
-	stdout, err := runOpsTask(cfg, agentID, cmd, 30)
-	if err != nil {
-		cmd = fmt.Sprintf("grep -m %d '%s' '%s' 2>/dev/null", max, pattern, filePath)
-		stdout, err = runOpsTask(cfg, agentID, cmd, 30)
-		if err != nil {
-			return err
+	var stdout string
+	var err error
+	if isLinuxAgent(cfg, agentID) {
+		stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("grep -m %d '%s' '%s' 2>/dev/null", max, pattern, filePath), 30)
+	} else {
+		stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("Select-String -Path '%s' -Pattern '%s' | Select -First %d | ForEach-Object { $_.Line }", filePath, pattern, max), 30)
+		if err != nil { // 未知平台回退
+			stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("grep -m %d '%s' '%s' 2>/dev/null", max, pattern, filePath), 30)
 		}
+	}
+	if err != nil {
+		return err
 	}
 	fmt.Println(stdout)
 	return nil
