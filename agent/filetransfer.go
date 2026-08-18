@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
@@ -33,12 +32,22 @@ type TransferEngine struct {
 	policy    *fileTransferPolicy // B3 修复：路径校验
 	workspace string              // FT:相对路径解析基准(避免落到 SYSTEM CWD)
 	pathInUse map[string]struct{} // R1 修复:upload path 互斥,防并发同 path 双写 .part
+	// P2-12:发送限速(下载方向 Agent→Relay)。nil/速率 0 = 不限。
+	// 并发下载吃满上行会挤死心跳 WS(无包超时被判死重连)。
+	sendLimiter *byteRateLimiter
 	// Q4:文件传输累计计数器(原子操作,无锁)。供未来 metrics 端点/健康检查读取。
 	uploadBytes   atomic.Int64
 	downloadBytes atomic.Int64
 	uploadCount   atomic.Int64
 	downloadCount atomic.Int64
 	failedCount   atomic.Int64
+}
+
+// SetSendRateLimit 设置发送(下载方向)限速,bytesPerSec<=0 关闭。
+func (te *TransferEngine) SetSendRateLimit(bytesPerSec float64) {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+	te.sendLimiter = newByteRateLimiter(bytesPerSec)
 }
 
 // fileTransferPolicy 复用 executors.FilePolicy 的路径校验逻辑。
@@ -474,6 +483,10 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 			h.Write(buf[:n])
 			// 构造二进制帧：[transferID_len u8][transferID][isLast u8][data]
 			frame := proto.BuildBinaryFrame(transferID, false, buf[:n])
+			te.mu.Lock()
+			limiter := te.sendLimiter
+			te.mu.Unlock()
+			limiter.Wait(ctx, n)                                              // P2-12:发送前节流,保护心跳 WS 的上行带宽
 			writeCtx, writeCancel := context.WithTimeout(ctx, 15*time.Second) // 弱网:下载写 deadline
 			wErr := wc.writeBinaryData(writeCtx, frame)
 			writeCancel()

@@ -49,6 +49,10 @@ type Config struct {
 	// MetricsAddr 本地 Prometheus 指标端点监听地址(P2-10)。
 	// 空默认 127.0.0.1:7781(仅本机回环,不暴露公网);"off" 禁用。
 	MetricsAddr string `json:"metrics_addr,omitempty"`
+	// TransferRateLimitMB 发送(下载方向)限速,MB/s(P2-12,可选)。
+	// 并发下载吃满上行会挤死心跳 WS;0 或缺省 = 不限速。
+	// 例:10 = 10 MB/s(留出心跳与任务通道的带宽余量)。
+	TransferRateLimitMB float64 `json:"transfer_rate_limit_mb,omitempty"`
 	// MinVersion 允许的最低版本(防降级)。
 	// 自更新时若新版本 < MinVersion 则拒绝。留空则不强制。
 	MinVersion string `json:"min_version,omitempty"`

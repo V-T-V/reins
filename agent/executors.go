@@ -84,6 +84,11 @@ func registerExecutors(cfg Config) *executors.Dispatcher {
 	// FT 修复:注入 workspace 作为相对路径的写入基准。
 	// 避免 SYSTEM 服务模式下相对路径落到 C:\Windows\System32。
 	transfers.SetWorkspace(cfg.Workspace)
+	// P2-12:发送限速(下载方向)——并发下载吃满上行会挤死心跳 WS。
+	if cfg.TransferRateLimitMB > 0 {
+		transfers.SetSendRateLimit(cfg.TransferRateLimitMB * 1024 * 1024)
+		log.Printf("[agent] 下载发送限速已启用: %.1f MB/s", cfg.TransferRateLimitMB)
+	}
 
 	return d
 }
