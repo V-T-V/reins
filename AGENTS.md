@@ -40,7 +40,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - 单 Relay 为默认(水平扩展需 Redis 共享状态,已预留 TaskStore interface)
 - Agent 默认 Windows(Linux 预留,部分执行器跨平台)
 - 命令策略默认黑名单 best-effort(可绕过);可选 allow-only 白名单(Relay -policy-allow / Agent policy_allow,交集语义黑名单兜底)
-- 文件传输/终端 best-effort(非 at-least-once,靠 SHA256/录屏兜底)
+- 传输 Complete 终态帧 at-least-once(resultQueue 补发);progress/终端输出 best-effort(录屏兜底)
 
 ## 目标(Goal)
 
@@ -176,7 +176,7 @@ go-rmm/
 - 单 Relay 为默认(水平扩展需 Redis 共享状态,接口已就绪)。
 - Agent 默认 Windows(Linux 预留,部分执行器跨平台)。
 - 命令策略默认黑名单 best-effort(可绕过);可选 allow-only 白名单(Relay -policy-allow / Agent policy_allow,交集语义黑名单兜底)。
-- 文件传输/终端 best-effort(非 at-least-once,靠 SHA256/录屏兜底)。
+- 传输 Complete 终态帧 at-least-once(resultQueue 补发);progress/终端输出 best-effort(录屏兜底)。
 
 ---
 
@@ -230,7 +230,7 @@ go-rmm/
 
 ### P1 — 能力补全
 4. **Linux Agent**:补齐 Linux 执行器(systemd 服务/包管理/journalctl),打通跨平台。
-5. **任务 at-least-once**:文件传输/终端结果可靠投递(当前 best-effort),减少 SHA256/录屏兜底依赖。
+5. ~~任务 at-least-once~~:✅ 大部分达成——任务结果(rQueue peek+commit 逐条/重连补发)+ 传输 Complete 终态帧(sendCompleteReliably 先入队再 flush,断线丢失会让 Console 挂 30 分钟超时的场景消除);progress/ready 中间帧与终端输出维持 best-effort(丢失无碍/录屏兜底)。
 
 ### P2 — 可观测/体验
 7. ~~OpenAPI 同步~~:✅ 已完成——39 路径全量覆盖(46 method 级端点,含 shell/tunnel/secrets/scripts/audit/enroll/events/scheduler/bootstrap/tools);typed client 生成可选做。

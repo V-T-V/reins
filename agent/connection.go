@@ -623,9 +623,7 @@ func (a *Agent) handleTransferInit(ctx context.Context, wc *wsConn, env proto.En
 			TransferID: init.TransferID, Success: true,
 			SHA256Actual: actualSHA, Bytes: ready.Size,
 		}
-		cctx, ccancel := contextWithTimeout(5 * time.Second)
-		defer ccancel()
-		_ = wc.writeEnvelope(cctx, proto.TypeFileTransferComplete, "relay", comp)
+		sendCompleteReliably(wc, comp)
 		return
 	}
 
@@ -638,12 +636,28 @@ func (a *Agent) handleTransferInit(ctx context.Context, wc *wsConn, env proto.En
 				_ = wc.writeEnvelope(pctx, proto.TypeFileTransferProgress, "relay", p)
 			}
 			completeCb := func(c proto.FileTransferComplete) {
-				cctx, ccancel := contextWithTimeout(5 * time.Second)
-				defer ccancel()
-				_ = wc.writeEnvelope(cctx, proto.TypeFileTransferComplete, "relay", c)
+				sendCompleteReliably(wc, c)
 			}
 			transfers.SendDownloadData(ctx, wc, init.TransferID, progressCb, completeCb)
 		}()
+	}
+}
+
+// sendCompleteReliably 发送传输 Complete 终态帧(P1-5:at-least-once)。
+// 原实现丢弃写错误(best-effort),断线瞬间的 complete 丢失会让 Console 侧
+// 会话挂到 30 分钟 ctx 超时。现与任务结果同款:先入 resultQueue 再 flush,
+// 发送成功出队、失败留队,重连后 flushTo 补发。
+// progress/ready 中间帧保持 best-effort(丢失无碍,下一帧自然刷新)。
+func sendCompleteReliably(wc *wsConn, c proto.FileTransferComplete) {
+	env, err := proto.NewEnvelope(proto.TypeFileTransferComplete, agentBizID, "relay", c)
+	if err != nil {
+		log.Printf("[xfer] complete 帧序列化失败: %v", err)
+		return
+	}
+	resultQueue.enqueue(env)
+	resultQueue.flushTo(wc)
+	if left := resultQueue.len(); left > 0 {
+		log.Printf("[xfer] transfer=%s complete 入队待发(队列剩 %d),重连补发", c.TransferID, left)
 	}
 }
 
@@ -660,9 +674,7 @@ func (a *Agent) handleUploadData(ctx context.Context, wc *wsConn, data []byte) {
 		_ = wc.writeEnvelope(pctx, proto.TypeFileTransferProgress, "relay", p)
 	}
 	completeCb := func(c proto.FileTransferComplete) {
-		cctx, ccancel := contextWithTimeout(5 * time.Second)
-		defer ccancel()
-		_ = wc.writeEnvelope(cctx, proto.TypeFileTransferComplete, "relay", c)
+		sendCompleteReliably(wc, c)
 	}
 	transfers.ReceiveUploadData(transferID, payload, isLast, progressCb, completeCb)
 }
