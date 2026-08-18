@@ -98,7 +98,8 @@ func (e *MonitorExecutor) collect(metrics []string, topN int) proto.MonitorSampl
 	if runtime.GOOS == "windows" {
 		return e.collectWindows(metrics, topN)
 	}
-	return e.collectLinux(metrics, topN)
+	// Linux: /proc 实现(monitor_procfs.go);其他非 Windows 平台: 桩(monitor_stub.go)
+	return e.collectProcFS(metrics, topN)
 }
 
 // collectWindows 用 PowerShell 采集全维度指标(P1 扩展)。
@@ -368,11 +369,6 @@ func parsePorts(v interface{}) []proto.PortInfo {
 		}
 	}
 	return out
-}
-
-// collectLinux 用 /proc 采集(简化版)。
-func (e *MonitorExecutor) collectLinux(metrics []string, topN int) proto.MonitorSample {
-	return proto.MonitorSample{Timestamp: time.Now().Unix()}
 }
 
 // runPowerShellShort 执行 PowerShell 脚本,返回输出。

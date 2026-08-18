@@ -35,8 +35,7 @@ func RegisterAll(d *Dispatcher, opts Options) []string {
 		if !isMaster {
 			// slave 专属:业务能力(主不需要,减少攻击面)
 			d.Register(NewScreenshot())
-			d.Register(NewPower())   // 电源操作
-			d.Register(NewMonitor()) // 流式监测
+			d.Register(NewPower()) // 电源操作
 			if opts.VisionClient != nil && opts.VisionClient.APIKey != "" {
 				d.Register(NewGUIClick(opts.VisionClient))
 			}
@@ -44,6 +43,10 @@ func RegisterAll(d *Dispatcher, opts Options) []string {
 	}
 	// script 跨平台:Windows 走 ps1/bat,Linux/macOS 走 sh
 	d.Register(NewScript())
+	// monitor 跨平台:Windows 走 PowerShell,Linux 走 /proc(P1-4),其他平台桩
+	if !isMaster {
+		d.Register(NewMonitor())
+	}
 	// D4:把 Workspace 注入 FileExecutor 的策略,使相对路径可预期解析。
 	// file 跨平台,master/slave 都需要(主用它推救援文件/读日志)。
 	fileExec := NewFile()
