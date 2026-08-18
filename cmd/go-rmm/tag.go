@@ -53,9 +53,15 @@ func tagAdd(cfg config, args []string) error {
 		}
 		parts = append(parts, kv)
 	}
-	// 下发命令(简化:打印当前标签 + 提示需重启)
-	cmd := fmt.Sprintf("Write-Output '标签已更新: %s'; Write-Output '注:需重启 Agent 服务生效'", strings.Join(parts, ", "))
-	stdout, err := runOpsTask(cfg, agentID, cmd, 10)
+	// 下发命令(简化:打印当前标签 + 提示需重启;双方言仅 echo)
+	msg := fmt.Sprintf("标签已更新: %s", strings.Join(parts, ", "))
+	var stdout string
+	var err error
+	if isLinuxAgent(cfg, agentID) {
+		stdout, err = runOpsScript(cfg, agentID, fmt.Sprintf("echo '%s'; echo '注:需重启 Agent 服务生效'", msg), 10)
+	} else {
+		stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("Write-Output '%s'; Write-Output '注:需重启 Agent 服务生效'", msg), 10)
+	}
 	if err != nil {
 		return err
 	}
@@ -75,8 +81,14 @@ func tagRemove(cfg config, args []string) error {
 	if len(keys) == 0 {
 		return fmt.Errorf("需要至少一个 key")
 	}
-	cmd := fmt.Sprintf("Write-Output '标签已删除: %s'", strings.Join(keys, ", "))
-	stdout, err := runOpsTask(cfg, agentID, cmd, 10)
+	msg := fmt.Sprintf("标签已删除: %s", strings.Join(keys, ", "))
+	var stdout string
+	var err error
+	if isLinuxAgent(cfg, agentID) {
+		stdout, err = runOpsScript(cfg, agentID, fmt.Sprintf("echo '%s'", msg), 10)
+	} else {
+		stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("Write-Output '%s'", msg), 10)
+	}
 	if err != nil {
 		return err
 	}

@@ -44,20 +44,32 @@ func snapshotTake(cfg config, args []string) error {
 		name = "snap-" + time.Now().Format("20060102-150405")
 	}
 
-	// 一条 PowerShell 采集关键状态(每条语句用分号分隔)
-	nl := "`n"
-	cmd := "$ErrorActionPreference='SilentlyContinue';" +
-		"$r=@{};" +
-		"$r.services=(Get-Service | Where StartType -eq Automatic | Select -ExpandProperty Name | Sort) -join \"" + nl + "\";" +
-		"$r.ports=(Get-NetTCPConnection -State Listen | Select -ExpandProperty LocalPort | Sort -Unique) -join ',';" +
-		"$r.processes=(Get-Process | Select -ExpandProperty Name | Sort -Unique) -join \"" + nl + "\";" +
-		"$r.users=(Get-LocalUser | Select -ExpandProperty Name) -join ',';" +
-		"$r.hostname=$env:COMPUTERNAME;" +
-		"$r.os=(Get-CimInstance Win32_OperatingSystem).Caption;" +
-		"$r.ts=Get-Date -Format 'o';" +
-		"$r|ConvertTo-Json -Compress"
-
-	stdout, err := runOpsTask(cfg, agentID, cmd, 30)
+	// 采集关键状态(双方言,输出同构 JSON:services/ports/processes/users/…)
+	var stdout string
+	var err error
+	if isLinuxAgent(cfg, agentID) {
+		sh := `SVCS=$(systemctl list-unit-files --type=service --state=enabled 2>/dev/null | awk '{print $1}' | sort | paste -sd' ' -)
+PORTS=$(ss -tln 2>/dev/null | tail -n +2 | awk '{print $4}' | awk -F: '{print $NF}' | sort -nu | paste -sd, -)
+PROCS=$(ps -eo comm= | sort -u | paste -sd' ' -)
+USERS=$(awk -F: '$3>=1000 || $3==0 {print $1}' /etc/passwd | paste -sd, -)
+TS=$(date -Iseconds)
+printf '{"services":"%s","ports":"%s","processes":"%s","users":"%s","hostname":"%s","os":"%s","ts":"%s"}' \
+  "$SVCS" "$PORTS" "$PROCS" "$USERS" "$(hostname)" "$(uname -s) $(uname -r)" "$TS"`
+		stdout, err = runOpsScript(cfg, agentID, sh, 30)
+	} else {
+		nl := "`n"
+		cmd := "$ErrorActionPreference='SilentlyContinue';" +
+			"$r=@{};" +
+			"$r.services=(Get-Service | Where StartType -eq Automatic | Select -ExpandProperty Name | Sort) -join \"" + nl + "\";" +
+			"$r.ports=(Get-NetTCPConnection -State Listen | Select -ExpandProperty LocalPort | Sort -Unique) -join ',';" +
+			"$r.processes=(Get-Process | Select -ExpandProperty Name | Sort -Unique) -join \"" + nl + "\";" +
+			"$r.users=(Get-LocalUser | Select -ExpandProperty Name) -join ',';" +
+			"$r.hostname=$env:COMPUTERNAME;" +
+			"$r.os=(Get-CimInstance Win32_OperatingSystem).Caption;" +
+			"$r.ts=Get-Date -Format 'o';" +
+			"$r|ConvertTo-Json -Compress"
+		stdout, err = runOpsTask(cfg, agentID, cmd, 30)
+	}
 	if err != nil {
 		return err
 	}

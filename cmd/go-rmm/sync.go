@@ -53,11 +53,17 @@ func syncPush(cfg config, args []string) error {
 
 	fmt.Printf("🔄 同步 %s → %s:%s (%d 个文件)\n", srcDir, agentID, dstDir, len(files))
 
-	// 在远端创建目标目录
-	mkdirCmd := fmt.Sprintf("New-Item -ItemType Directory -Force -Path '%s' 2>$null; mkdir -p '%s' 2>/dev/null; Write-Output 'dir_ready'", dstDir, dstDir)
-	if _, err := runOpsTask(cfg, agentID, mkdirCmd, 10); err != nil {
-		return fmt.Errorf("创建远端目录失败: %w", err)
+	// 在远端创建目标目录(双方言;原实现把 PS 与 mkdir -p 拼一条,Windows 上
+	// mkdir -p 部分报错靠吞、Linux 上整条是 PS 语法不可用)
+	linuxTarget := isLinuxAgent(cfg, agentID)
+	mkdir := func(dir string) {
+		if linuxTarget {
+			runOpsScript(cfg, agentID, fmt.Sprintf("mkdir -p '%s' 2>/dev/null; true", dir), 10)
+		} else {
+			runOpsTask(cfg, agentID, fmt.Sprintf("New-Item -ItemType Directory -Force -Path '%s' 2>$null", dir), 10)
+		}
 	}
+	mkdir(dstDir)
 
 	// 逐文件上传
 	success := 0
@@ -70,8 +76,7 @@ func syncPush(cfg config, args []string) error {
 		// 确保远端子目录存在
 		remoteDir := filepath.ToSlash(filepath.Dir(remotePath))
 		if remoteDir != filepath.ToSlash(dstDir) {
-			mkSubDir := fmt.Sprintf("New-Item -ItemType Directory -Force -Path '%s' 2>$null", remoteDir)
-			runOpsTask(cfg, agentID, mkSubDir, 5)
+			mkdir(remoteDir)
 		}
 
 		// 上传单个文件
@@ -96,16 +101,16 @@ func syncPull(cfg config, args []string) error {
 		return fmt.Errorf("用法: go-rmm sync pull -a <agent> <remote-dir> <local-dir>")
 	}
 
-	// 列出远端目录文件
-	listCmd := fmt.Sprintf("Get-ChildItem -Path '%s' -Recurse -File | Select-Object -ExpandProperty FullName", srcDir)
-	stdout, err := runOpsTask(cfg, agentID, listCmd, 30)
+	// 列出远端目录文件(双方言;原 fallback 经 powershell 类型下发,Linux 不可达)
+	var stdout string
+	var err error
+	if isLinuxAgent(cfg, agentID) {
+		stdout, err = runOpsScript(cfg, agentID, fmt.Sprintf("find '%s' -type f 2>/dev/null", srcDir), 30)
+	} else {
+		stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("Get-ChildItem -Path '%s' -Recurse -File | Select-Object -ExpandProperty FullName", srcDir), 30)
+	}
 	if err != nil {
-		// Linux fallback
-		listCmd = fmt.Sprintf("find '%s' -type f 2>/dev/null", srcDir)
-		stdout, err = runOpsTask(cfg, agentID, listCmd, 30)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 
 	remoteFiles := strings.Split(strings.TrimSpace(stdout), "\n")

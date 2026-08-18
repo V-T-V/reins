@@ -162,8 +162,20 @@ type diagResult struct {
 
 func diagnoseAgent(cfg config, agentID string) *diagResult {
 	r := &diagResult{AgentID: agentID, Healthy: true}
-	// 下发 sysinfo 命令
-	stdout, err := runOpsTask(cfg, agentID, `$r=@{hostname=$env:COMPUTERNAME;cpu=[math]::Round((Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples.CookedValue,1);memTotal=[int]((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize/1024);memFree=[int]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1024);diskC=[math]::Round((Get-PSDrive C).Used/((Get-PSDrive C).Used+(Get-PSDrive C).Free)*100,1)};$r|ConvertTo-Json -Compress`, 15)
+	// 下发体检命令(双方言,输出同构 JSON:hostname/cpu/memTotal/memFree/diskC)
+	var stdout string
+	var err error
+	if isLinuxAgent(cfg, agentID) {
+		sh := `HOST=$(hostname)
+CPU=$(top -bn1 | awk '/^%?Cpu\(s\)/{printf "%.1f", 100-$8; exit}')
+MEM_T=$(awk '/^MemTotal/{print int($2/1024)}' /proc/meminfo)
+MEM_F=$(awk '/^MemAvailable/{print int($2/1024)}' /proc/meminfo)
+DISK=$(df / | tail -1 | awk '{if($5+0>0)printf "%.1f", substr($5,1,length($5)-1); else print 0}')
+printf '{"hostname":"%s","cpu":%s,"memTotal":%s,"memFree":%s,"diskC":%s}' "$HOST" "${CPU:-0}" "$MEM_T" "$MEM_F" "$DISK"`
+		stdout, err = runOpsScript(cfg, agentID, sh, 15)
+	} else {
+		stdout, err = runOpsTask(cfg, agentID, `$r=@{hostname=$env:COMPUTERNAME;cpu=[math]::Round((Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples.CookedValue,1);memTotal=[int]((Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize/1024);memFree=[int]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1024);diskC=[math]::Round((Get-PSDrive C).Used/((Get-PSDrive C).Used+(Get-PSDrive C).Free)*100,1)};$r|ConvertTo-Json -Compress`, 15)
+	}
 	if err != nil {
 		r.Online = false
 		r.Healthy = false
@@ -290,12 +302,12 @@ func cmdCompare(cfg config, args []string) error {
 	}
 	fmt.Printf("🔍 对比 %s vs %s\n\n", a1, a2)
 
-	// 并行采集两个 Agent 的信息
+	// 并行采集两个 Agent 的信息(各自按平台选方言)
 	var wg sync.WaitGroup
 	var s1, s2 string
 	wg.Add(2)
-	go func() { defer wg.Done(); s1, _ = runOpsTask(cfg, a1, compareCmd(), 20) }()
-	go func() { defer wg.Done(); s2, _ = runOpsTask(cfg, a2, compareCmd(), 20) }()
+	go func() { defer wg.Done(); s1, _ = compareCollect(cfg, a1) }()
+	go func() { defer wg.Done(); s2, _ = compareCollect(cfg, a2) }()
 	wg.Wait()
 
 	// 解析
@@ -328,6 +340,19 @@ func cmdCompare(cfg config, args []string) error {
 		fmt.Printf("  %s 独有: %s\n", a2, strings.Join(only2[:min(5, len(only2))], ", "))
 	}
 	return nil
+}
+
+// compareCollect 按目标 Agent 平台采集对比信息(输出同构 JSON)。
+func compareCollect(cfg config, agentID string) (string, error) {
+	if isLinuxAgent(cfg, agentID) {
+		sh := `HOST=$(hostname)
+OS="$(uname -s) $(uname -r)"
+MEM_T=$(awk '/^MemTotal/{print int($2/1024)}' /proc/meminfo)
+SVCS=$(systemctl list-unit-files --type=service --state=enabled 2>/dev/null | awk '{print $1}' | sort | paste -sd, -)
+printf '{"hostname":"%s","os":"%s","memTotal":%s,"services":"%s"}' "$HOST" "$OS" "$MEM_T" "$SVCS"`
+		return runOpsScript(cfg, agentID, sh, 20)
+	}
+	return runOpsTask(cfg, agentID, compareCmd(), 20)
 }
 
 func compareCmd() string {

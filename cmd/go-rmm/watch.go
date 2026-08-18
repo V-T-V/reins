@@ -153,17 +153,27 @@ func watchCheck(cfg config, args []string) error {
 	}
 
 	if svcName != "" {
-		// 检查服务状态
-		cmd := fmt.Sprintf("Get-Service -Name '%s' | Select Name,Status,StartType | Format-Table -AutoSize | Out-String", svcName)
-		stdout, err := runOpsTask(cfg, agentID, cmd, 10)
+		// 检查服务状态(双方言)
+		var stdout string
+		var err error
+		if isLinuxAgent(cfg, agentID) {
+			stdout, err = runOpsScript(cfg, agentID, fmt.Sprintf("systemctl status '%s' --no-pager 2>/dev/null | head -5; echo enabled:$(systemctl is-enabled '%s' 2>/dev/null)", svcName, svcName), 10)
+		} else {
+			stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("Get-Service -Name '%s' | Select Name,Status,StartType | Format-Table -AutoSize | Out-String", svcName), 10)
+		}
 		if err != nil {
 			return err
 		}
 		fmt.Println(stdout)
 	} else if procName != "" {
-		// 检查进程状态
-		cmd := fmt.Sprintf("Get-Process -Name '%s' -ErrorAction SilentlyContinue | Select Name,Id,CPU,WS | Format-Table -AutoSize | Out-String", procName)
-		stdout, err := runOpsTask(cfg, agentID, cmd, 10)
+		// 检查进程状态(双方言)
+		var stdout string
+		var err error
+		if isLinuxAgent(cfg, agentID) {
+			stdout, err = runOpsScript(cfg, agentID, fmt.Sprintf("pgrep -a -x '%s'; true", procName), 10)
+		} else {
+			stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("Get-Process -Name '%s' -ErrorAction SilentlyContinue | Select Name,Id,CPU,WS | Format-Table -AutoSize | Out-String", procName), 10)
+		}
 		if err != nil {
 			return err
 		}

@@ -165,7 +165,7 @@ go-rmm/
 | **agent** 执行器 | 90% | 9 类任务(PS/script/file/screenshot/browse/guiclick/update/power/monitor) | ✅ |
 | **agent** 连接管理 | 95% | 反向 WS + 断线重连 + 心跳 + 主从双 Agent + 死连接 watchdog(S1)+ 孤儿分片 sweep(S3) | ✅ |
 | **agent** 文件传输 | 90% | 并发分片 + 断点续传 + path 互斥(R1)+ 已满快路径(R2)+ 流式低内存(R3)+ 能力协商(S4) | ✅ |
-| **agent** Linux | 78% | script lang=sh + monitor /proc + CLI 运维命令族平台方言化全覆盖(logs/sysinfo/service/proc/net/find/config,双方言一次直达)+ 三平台编译门禁(P1-4 六步);diagnose/sync/watch 组合命令方言化与 Linux 实机部署验证待补 | 🟡 |
+| **agent** Linux | 85% | script lang=sh + monitor /proc + CLI 命令族平台方言化全覆盖(logs/sysinfo/service/proc/net/find/config/diagnose/compare/sync/watch/snapshot/tag,双方言一次直达;workflow/playbook/exec 为用户内容型)+ 三平台编译门禁(P1-4 七步);Linux 实机部署验证待补 | 🟡 |
 | **cmd** CLI | 90% | 51 命令 + 流式 + TUI + 退出码体系 | ✅ |
 | **client** SDK | 85% | 45+ 方法 + 流式 + 工具发现 | ✅ |
 | **proto** 协议 | 95% | Envelope + 30 消息 + 二进制帧 + tunnel | ✅ |
