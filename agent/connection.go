@@ -300,7 +300,13 @@ func (a *Agent) sendRegister(ctx context.Context, wc *wsConn) error {
 
 // heartbeatLoop 周期发送心跳。所有 Write 经 wc.writeJSON 串行化。
 func (a *Agent) heartbeatLoop(ctx context.Context, wc *wsConn) {
-	ticker := time.NewTicker(a.cfg.Heartbeat)
+	interval := a.cfg.Heartbeat
+	if interval <= 0 {
+		// 直接构造 Config(不经 loadConfig 填默认)时的兜底——零值会让
+		// NewTicker(0) panic(故障切换 E2E 测试实证)。
+		interval = 15 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var seq int64
 	for {

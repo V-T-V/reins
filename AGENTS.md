@@ -49,7 +49,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
-- **成功标准**:169 Go 文件 / 31.8K 行 / 402 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
+- **成功标准**:169 Go 文件 / 31.8K 行 / 404 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
 
 ## 架构假设(4 项显式假设)
 
@@ -138,7 +138,7 @@ go-rmm/
 | Go 文件 | 169 |
 | 代码行 | 31,800+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 402 |
+| 测试用例 | 404 |
 | 基准测试 | 22 |
 | CLI 命令 | 51 |
 | API 端点 | 45 |
@@ -182,7 +182,7 @@ go-rmm/
 
 ## 测试覆盖(v4.3.3)
 
-402 测试 + 22 基准。按包分布与重点验证场景:
+404 测试 + 22 基准。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
@@ -207,7 +207,7 @@ go-rmm/
 按优先级排序的演进方向:
 
 ### P0 — 生产硬化
-1. **水平扩展验证**:Redis 多 Relay 实测(Store/Registry/EventBus 三层联邦),补 Agent 故障切换 E2E。
+1. **水平扩展验证**:Agent 故障切换 E2E ✅(2026-08-19)——TestAgentFailoverBetweenRelays(双 fakeRelay:主注册→宕机→1s 退避切备用→稳定无抖动)+ TestBuildRelayCandidates(W1 候选去重/主优先);顺带修 Heartbeat 零值 NewTicker panic 兜底。Redis 三层联邦(Store/EventBus)实测仍待环境(本机无 Docker/Redis)。
 
 **已完成(rounds 9-10,工作区深度推进)**:
 - ✅ **脚本库路径穿越修复**:`GET/DELETE/POST /api/scripts/{name}` 原 `filepath.Join` 清理 `..` 后逃逸脚本目录,可读删目录外任意文件。现已 handler + 库方法(Save/Read/Delete)双层 `validateScriptName` 校验(字符黑名单 + 解析后路径必须位于脚本目录内)。
