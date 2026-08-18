@@ -135,10 +135,14 @@ func updateList(cfg config, args []string) error {
 }
 
 // updatePush 推送更新到 Agent。
+// --path <远端路径>: BinaryPath 引用模式——新二进制已经 file upload 分片
+// 预上传到 Agent,apply 只发路径引用(公网链路 7MB+ 内联单帧 WS 写必超时,
+// 2026-08-18 实测)。标准大文件流程: file upload → update push --path。
 func updatePush(cfg config, args []string) error {
 	agentID := extractArg(args, "-a")
 	version := extractArg(args, "--version")
 	filePath := extractArg(args, "-f")
+	remotePath := extractArg(args, "--path")
 	force := false
 	for _, a := range args {
 		if a == "--force" {
@@ -174,11 +178,14 @@ func updatePush(cfg config, args []string) error {
 		return fmt.Errorf("需要 --version 或 -f 指定版本/文件")
 	}
 
-	// 调 apply 端点触发更新
+	// 调 apply 端点触发更新(--path 时带 binary_path 引用,零内联)
 	body := map[string]any{
 		"agent_id": agentID,
 		"version":  version,
 		"force":    force,
+	}
+	if remotePath != "" {
+		body["binary_path"] = remotePath
 	}
 	var resp struct {
 		AgentID    string `json:"agent_id"`

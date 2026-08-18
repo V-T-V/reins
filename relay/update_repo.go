@@ -165,10 +165,12 @@ func (r *Relay) handleUpdateUpload(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-// protoUpdateTaskInline 内联二进制的 update 任务(简化:不经 filetransfer)。
-// 适合中等大小二进制(<20MB,WS 32MB 限制内)。
+// protoUpdateTaskInline update 任务载荷(与 proto.UpdateTask 字段对齐)。
+// BinaryPath 引用模式适合任意大小(经 filetransfer 分片预上传);
+// BinaryB64 内联仅适合中等大小(<20MB,WS 32MB 限制内)且链路低延迟。
 type protoUpdateTaskInline struct {
-	BinaryB64  string `json:"binary_b64"` // base64 编码的二进制
+	BinaryB64  string `json:"binary_b64,omitempty"` // base64 编码的二进制
+	BinaryPath string `json:"binary_path,omitempty"` // Agent 侧已上传的新二进制路径
 	SHA256     string `json:"sha256"`
 	Version    string `json:"version"`
 	MinVersion string `json:"min_version"`
@@ -176,9 +178,12 @@ type protoUpdateTaskInline struct {
 }
 
 // handleUpdateApply POST /api/updates/apply —— 触发 Agent 更新。
-// 请求体: {"agent_id":"...", "version":"v1.2.0", "force":false}
-// 流程:从仓库读二进制 → 内联到 update 任务 payload(base64)→ 下发 update 任务。
-// Agent 侧解码 base64 写到 exeDir/.new → rename+copy+重启。
+// 请求体: {"agent_id":"...", "version":"v1.2.0", "force":false, "binary_path":"可选"}
+// 二进制来源两种模式:
+//   - binary_path(推荐): Agent 侧已预上传的新二进制路径(经 file upload 分片传输),
+//     任务 payload 只带路径引用——内联 7MB+ 二进制单帧 WS 写在公网链路必然超时
+//     (2026-08-18 实测:v4.5.1 推送连续 context deadline exceeded)。
+//   - 默认: 从仓库读二进制 base64 内联(仅适合小体积/低延迟链路)。
 func (r *Relay) handleUpdateApply(w http.ResponseWriter, req *http.Request) {
 	if err := r.authorize(req); err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
@@ -192,6 +197,8 @@ func (r *Relay) handleUpdateApply(w http.ResponseWriter, req *http.Request) {
 		AgentID string `json:"agent_id"`
 		Version string `json:"version"`
 		Force   bool   `json:"force"`
+		// BinaryPath Agent 侧已预上传的新二进制绝对路径,与版本仓库 SHA 校验配套。
+		BinaryPath string `json:"binary_path,omitempty"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errMap(err))
@@ -216,25 +223,35 @@ func (r *Relay) handleUpdateApply(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// 读仓库二进制 + base64 内联
-	binData, err := os.ReadFile(binPath)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, errMap(fmt.Errorf("读仓库二进制失败: %w", err)))
-		return
-	}
-	binB64 := base64.StdEncoding.EncodeToString(binData)
-
 	agentVersion := r.getAgentVersion(body.AgentID)
 
-	// 下发 update 任务(内联 base64 二进制)
+	// 下发 update 任务:优先 BinaryPath 引用模式(零内联),否则回退 base64 内联。
 	taskID := "update-" + body.AgentID + "-" + fmt.Sprint(time.Now().UnixNano())
-	updatePayload, _ := json.Marshal(protoUpdateTaskInline{
-		BinaryB64:  binB64,
-		SHA256:     sha,
-		Version:    body.Version,
-		MinVersion: agentVersion, // 防降级
-		Force:      body.Force,
-	})
+	var updatePayload []byte
+	binarySize := 0
+	if body.BinaryPath != "" {
+		updatePayload, _ = json.Marshal(protoUpdateTaskInline{
+			BinaryPath: body.BinaryPath,
+			SHA256:     sha,
+			Version:    body.Version,
+			MinVersion: agentVersion, // 防降级
+			Force:      body.Force,
+		})
+	} else {
+		binData, err := os.ReadFile(binPath)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, errMap(fmt.Errorf("读仓库二进制失败: %w", err)))
+			return
+		}
+		binarySize = len(binData)
+		updatePayload, _ = json.Marshal(protoUpdateTaskInline{
+			BinaryB64:  base64.StdEncoding.EncodeToString(binData),
+			SHA256:     sha,
+			Version:    body.Version,
+			MinVersion: agentVersion, // 防降级
+			Force:      body.Force,
+		})
+	}
 	task := proto.TaskRequest{
 		TaskID:  taskID,
 		Type:    proto.TaskUpdate,
@@ -259,7 +276,7 @@ func (r *Relay) handleUpdateApply(w http.ResponseWriter, req *http.Request) {
 		"version":     body.Version,
 		"sha256":      sha,
 		"old_version": agentVersion,
-		"binary_size": len(binData),
+		"binary_size": binarySize,
 		"message":     "更新任务已下发,Agent 将自更新并重启",
 	})
 }
