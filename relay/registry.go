@@ -133,6 +133,17 @@ func (r *Registry) Snapshot() []proto.Register {
 	return out
 }
 
+// OnlineSince 返回 Agent 本次注册(上线)的 Unix 毫秒时间戳;不在线返回 0。
+// proto.Register 不携带注册时刻(那是 Relay 侧状态),列表端点用此补齐。
+func (r *Registry) OnlineSince(agentID string) int64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if e, ok := r.agents[agentID]; ok {
+		return e.registeredAt.UnixMilli()
+	}
+	return 0
+}
+
 // FindByTag 返回带指定标签的在线 Agent ID 列表(C10 批量下发用)。
 // tag 格式 "key=value",匹配 Agent 的 Tags。
 func (r *Registry) FindByTag(tag string) []string {

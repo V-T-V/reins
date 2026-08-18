@@ -49,7 +49,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
-- **成功标准**:169 Go 文件 / 31.8K 行 / 389 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
+- **成功标准**:169 Go 文件 / 31.8K 行 / 392 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
 
 ## 架构假设(4 项显式假设)
 
@@ -138,7 +138,7 @@ go-rmm/
 | Go 文件 | 169 |
 | 代码行 | 31,800+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 389 |
+| 测试用例 | 392 |
 | 基准测试 | 22 |
 | CLI 命令 | 51 |
 | API 端点 | 45 |
@@ -182,7 +182,7 @@ go-rmm/
 
 ## 测试覆盖(v4.3.3)
 
-389 测试 + 22 基准。按包分布与重点验证场景:
+392 测试 + 22 基准。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
@@ -226,6 +226,7 @@ go-rmm/
 - ✅ **多租户持久化 + 鉴权接入**(2026-08-18,原 P0-1):`TenantManager` 注入 `*taskstore.Store`(与任务/cron 共用 tasks.db 的 `tenants` bucket),组织创建/启停/删除写盘、启动恢复,重启不丢组织与配额;`authorize` 链挂 `OrgEnabled` 校验——组织禁用/删除后该租户 token 立即失效(fail-closed)。**行为变更**:`tenant:role:secret` 语法的 token 现在要求组织已创建且启用(不存在=拒绝);纯 secret 部署(空 tenant)不受影响,现网向后兼容。`RolePolicy` 仍为内存态(角色策略为启动期配置,无运行时变更路径,暂无持久化需求)。
 - ✅ **命令策略白名单**(2026-08-18,原 P1-6):`cmdpolicy.Policy` 增 `SetAllowlist`(正则,自动 `(?i)`)——非空时 allow-only **交集语义**(须命中白名单且不碰黑名单;白名单写宽如 `^Get-` 也有 NTUSER.DAT/凭据导出等黑名单兜底)。配置入口:Relay `-policy-allow` flag / `GO_RMM_POLICY_ALLOW` env(逗号分隔),Agent config `policy_allow` 数组(Dispatcher.SetAllowlist,Agent 强制底线即使 Relay 被绕过也生效);非法正则启动 fail-fast。EncodedCommand 拦截错误附 script 任务(`-s` 本地脚本文件)指引——使用会话实证用户手动 `-EncodedCommand` 规避转义被拦后无从知晓正解。默认不配置 = 纯黑名单,行为不变。
 - ✅ **批量分发端点化**(2026-08-18,原 P0-1):round 8 的 BatchDispatcher 引擎(一对多/聚合/指数退避重试/实时进度)此前仅测试在用,现暴露为异步 REST:`POST /api/batch`(202 返回 batch_id,鉴权+命令策略校验+tag 匹配与 tasks/batch 同款)/`GET /api/batch/{id}`(进度快照:总/成/败/待/百分比/ETA/各目标状态)/`GET /api/batch/{id}/progress`(SSE 每秒推送,终态发 done 事件含成功率)。引擎拆出可注入 progress 的 `dispatchWithRetryTracked` 主体——goroutine 启动前查询端点即持有跟踪器;批次注册表 `sync.Map` + 完成后 1h TTL 懒清理。CLI 新增 `batch start/status/watch`(-o json 兼容)。同步版 `POST /api/tasks/batch` 保留(轻量场景)。
+- ✅ **update 能力注册 + online_since 补齐**(2026-08-18 部署实战暴露):①`updateExecutor` 类型存在但注册代码在灾难重建时丢失——Agent caps 恒不含 update,Relay 能力校验拒收 `task run -t update`,自更新通道被自己的校验锁死(鸡生蛋)。现 slave(含未配置 role)注册,master 不注册(主永不更新);②`/api/agents` 漏填 `online_since`(Registry 私有 `registeredAt` 未输出,CLI "在线自"恒显"—"),补 `Registry.OnlineSince`。
 
 ### P1 — 能力补全
 4. **Linux Agent**:补齐 Linux 执行器(systemd 服务/包管理/journalctl),打通跨平台。

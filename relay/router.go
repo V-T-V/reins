@@ -365,6 +365,7 @@ func (r *Relay) handleListAgents(w http.ResponseWriter, req *http.Request) {
 			"version":      a.Version,
 			"capabilities": a.Capabilities,
 			"tags":         a.Tags,
+			"online_since": r.agents.OnlineSince(a.AgentID), // CLI "在线自"列,原漏填恒显"—"
 		}
 		if stats, ok := r.agents.XferStatsOf(a.AgentID); ok {
 			entry["xfer_stats"] = map[string]any{

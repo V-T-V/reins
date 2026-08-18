@@ -38,6 +38,14 @@ func registerExecutors(cfg Config) *executors.Dispatcher {
 		Role:         cfg.Role,      // M1:master 注册最小能力集
 	})
 
+	// update 自更新执行器纳入 Dispatcher(仅 slave;master 不上报 update 能力——
+	// Relay agentSupports 据此不会把 update 路由给 master,主永不更新)。
+	// 2026-08-18 生产实证:该注册缺失(灾难重建时丢失)导致 Agent caps 不含
+	// update,Relay 能力校验拒绝 task run -t update,自更新只能靠专用端点绕行。
+	if cfg.Role == "" || cfg.Role == "slave" {
+		d.Register(&updateExecutor{})
+	}
+
 	// P1-6:命令白名单(可选)。非空时 Agent 侧切换 allow-only(交集语义,黑名单兜底)。
 	// Agent 是强制底线——即使 Relay 被绕过(交互式 shell/cron)也生效;
 	// 正则编译失败 fail-fast,启动即报错。
