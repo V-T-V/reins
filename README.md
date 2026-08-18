@@ -118,12 +118,14 @@
 ### 企业级能力
 | 能力 | 说明 |
 |------|------|
-| **多租户 RBAC** | `tenant:role:secret` token,组织/角色/权限/配额 |
+| **多租户 RBAC** | `tenant:role:secret` token,组织/角色/权限/配额;组织 bbolt 持久化(重启不丢),禁用/删除即失效 |
 | **审计防篡改** | hash chain + SIEM 导出(CEF/Syslog/JSON) |
-| **批量分发** | 一对多分发 + 结果聚合 + 指数退避重试 + 实时进度 |
+| **批量分发** | 一对多分发 + 结果聚合 + 指数退避重试 + 实时进度;异步 REST 端点 + SSE 进度流 + CLI `batch start/status/watch` |
+| **命令策略白名单** | 默认 32 条黑名单;可选 allow-only 白名单(Relay `-policy-allow` / Agent `policy_allow`,交集语义黑名单兜底) |
+| **Linux Agent** | script `lang=sh` + monitor `/proc` 全维采集;CLI 15 组运维命令平台方言化(logs/sysinfo/service/proc/net/find/config/diagnose/sync/watch/snapshot/tag 等) |
 | **Secret 管理** | 凭据 TTL+一次性,不落 audit |
 | **Session 录屏** | asciinema v2,可回放 |
-| **可观测性** | slog + Prometheus + pprof |
+| **可观测性** | slog + Prometheus + pprof;Agent 本地 `127.0.0.1:7781/metrics`(xfer 计数/会话/重连/uptime) |
 | **Webhook 告警** | Slack/钉钉/企业微信 |
 | **水平扩展** | TaskStore interface + Redis + Pub/Sub |
 | **AI Agent SDK** | `client.New()` → 45+ 方法 + 流式执行 |
@@ -163,6 +165,39 @@ go-rmm --relay http://server:7780 --token <token> monitor top -a <agent>
 
 详细操作见 [DEPLOYMENT.md](./DEPLOYMENT.md)。生产建议:Nginx/Traefik 做 TLS 终端,Relay 后端;Agent 通过 `wss://` 连接;多 Relay 共享 Redis。
 
+### Agent 自更新(公网链路用 --path 引用模式)
+
+```bash
+# 标准流程:分片上传新二进制 → 引用模式推送(零内联,公网必用——内联 7MB+
+# base64 单帧 WS 写在公网链路必超时)
+go-rmm file upload -a <agent> go-rmm-agent.exe "C:\go-rmm\slave-workspace\go-rmm-agent-new.exe"
+go-rmm update push -a <agent> --version v1.2.3 --path "C:\go-rmm\slave-workspace\go-rmm-agent-new.exe"
+
+# Agent 侧:SHA256 校验 → .bak 备份 → 两步 rename(运行中 exe 先移走再顶名,
+# Windows 顶名到被映射路径必 Access denied)→ SCM 重启;健康自检失败自动回滚
+```
+
+### Linux Agent(85%)
+
+```bash
+# Linux 被控端:同一二进制,systemd 服务或前台运行
+./go-rmm-agent run -relay ws://relay:7780/agent -token <token>
+
+# 下发 shell 脚本(lang=sh,临时文件执行+进程树管理)
+go-rmm task run -a <agent> -t script -s deploy.sh          # 本地脚本文件直传
+go-rmm -o json task run -a <agent> -t script -f payload.json
+
+# 运维命令自动平台方言化(CLI 查询 agent os 字段选 PowerShell 或 sh):
+go-rmm sysinfo -a <agent>          # /proc+df 手拼同构 JSON
+go-rmm service list -a <agent>     # systemctl list-units
+go-rmm proc list -a <agent>        # ps --sort=-pcpu
+go-rmm logs tail -a <agent> /var/log/syslog   # tail -f
+go-rmm net ports -a <agent>        # ss -tlnp
+go-rmm monitor top -a <agent>      # /proc 全维(CPU 差分/Top 进程/NetIO 速率)
+```
+
+CI 三平台(windows/linux/darwin)编译门禁;workflow/playbook 的命令内容由作者写,方言自定义。
+
 ---
 
 ## 配置
@@ -177,7 +212,8 @@ Relay 配置优先级:**命令行 flag > 环境变量 > 默认值**。
 | `-mtls` | `GO_RMM_RELAY_MTLS` | off | 启用 mTLS(需内置 CA + Agent 客户端证书) |
 | `-tls-cert` | `GO_RMM_RELAY_TLS_CERT` | — | Relay TLS 证书文件 |
 | `-tls-key` | `GO_RMM_RELAY_TLS_KEY` | — | Relay TLS 私钥文件 |
-| `-external-url` | `GO_RMM_EXTERNAL_URL` | — | 外部访问地址(经反代/TLS 终端时用),如 `https://host/rmm` |
+- `-external-url` | `GO_RMM_EXTERNAL_URL` | — | 外部访问地址(经反代/TLS 终端时用),如 `https://host/rmm`
+| `-policy-allow` | `GO_RMM_POLICY_ALLOW` | (黑名单模式) | 命令白名单(逗号分隔正则);非空则 allow-only |
 
 配置校验(`Config.Validate()`):`addr` 不能为空;mTLS 模式必须配证书;token 长度建议 ≥8。
 
@@ -192,12 +228,14 @@ CLI 全局 flag:`--relay`(默认 `http://127.0.0.1:7780`)、`--token`、`--outpu
 | **传输** | 反向 WS(wss://)+ mTLS 双向认证 + 内置 CA + CRL 吊销 |
 | **鉴权** | `tenant:role:secret` token;空 token 配置 = 不校验(仅 dev) |
 | **授权** | RBAC 三角色(admin/operator/viewer)+ 细粒度 action |
-| **命令策略** | 黑名单拦截高危命令(Format-Volume 等),批量下发也校验 |
+| **命令策略** | 黑名单拦截高危命令(Format-Volume 等),批量下发也校验;可选 allow-only 白名单(交集语义) |
 | **审计** | hash chain 防篡改 + 异步落盘 + SIEM 导出(CEF/Syslog) |
 | **Secret** | 引用式凭据(TTL + 一次性),不落 audit |
 | **隔离** | 租户只能看自己的 Agent(tags["tenant"] 过滤) |
 
-> 深度防御:命令策略为 best-effort(黑名单可绕过),Agent 侧二次校验兜底。生产务必配 mTLS + 强 token + 审计导出。
+> 深度防御:黑名单为 best-effort(可绕过),Agent 侧二次校验兜底;需要收紧时启用白名单——
+> Relay `-policy-allow '^Get-Service,^node '`(或 `GO_RMM_POLICY_ALLOW` env,逗号分隔正则)、
+> Agent config `policy_allow: ["^systemctl status"]`。白名单非空时命令必须命中其一且不碰黑名单。
 
 ---
 
@@ -227,7 +265,24 @@ token 格式(向后兼容):
 
 一对多任务下发 + 结果聚合 + 失败重试 + 实时进度(`relay/batchdispatch.go`)。
 
-**请求**:`POST /api/tasks/batch`
+**异步端点(推荐,公网/大规模)**:
+
+```bash
+# 提交异步批次(202 返回 batch_id,带指数退避重试)
+curl -X POST $RELAY/api/batch -H "Authorization: Bearer $TOKEN"   -d '{"tag":"env=prod","type":"powershell","payload":{"command":"Get-Date"},"max_retries":2}'
+
+# 进度快照(轮询):total/succeeded/failed/percent/eta/各目标状态机
+curl $RELAY/api/batch/<batch_id> -H "Authorization: Bearer $TOKEN"
+
+# SSE 实时进度(每秒一帧,终态发 done 事件)
+curl -N $RELAY/api/batch/<batch_id>/progress -H "Authorization: Bearer $TOKEN"
+
+# CLI 等价
+go-rmm batch start --tag env=prod -c "Get-Date" --retries 2
+go-rmm batch watch <batch_id>          # 实时跟踪到终态
+```
+
+**同步端点(轻量场景)**:`POST /api/tasks/batch`
 ```json
 {"tag": "env=prod", "type": "powershell", "payload": {...}, "timeout": 30}
 ```
