@@ -234,7 +234,7 @@ go-rmm/
 
 ### P2 — 可观测/体验
 7. ~~OpenAPI 同步~~:✅ 已完成——39 路径全量覆盖(46 method 级端点,含 shell/tunnel/secrets/scripts/audit/enroll/events/scheduler/bootstrap/tools);typed client 生成可选做。
-8. **Web 控制台深化**:批量分发进度可视化、租户/组织管理 UI、审计回放。
+8. **Web 控制台深化**:批量分发进度可视化 ✅(2026-08-19)——控制台新增批量面板(按 tag 提交异步批次,进度条+成功/失败/待投计数+ETA+各目标状态网格+终态成功率,轮询 1s,复用 /api/batch×3 端点);租户/组织管理 UI、审计回放仍待做。
 9. ~~race 检测 CI~~:✅ 已完成——`ci.yml` 的 Test step 即 `go test -cover -race`(3563a3c 落地,本机与 CI 双验证零警告)。
 10. ~~Agent Prometheus 指标端点~~:✅ 已完成——`127.0.0.1:7781/metrics`(仅本机回环,metrics_addr 可改/off 禁用),xfer 五计数器+sessions_active gauge+reconnects_total+uptime+build_info,gormmm_ 三 m 命名空间统一。
 11. **文件传输 per-chunk SHA256 强制**:当前单片 `.ftpartNN` 无 hash 校验(合并后整文件校验兜底),加 per-chunk 强制可提前发现损坏,但需协议改动(滚动升级兼容性风险)。

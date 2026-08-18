@@ -597,4 +597,67 @@
       state.shellSession = null;
     });
   }
+
+  // === P2-8 批量分发(POST /api/batch 异步批次 + 轮询进度可视化) ===
+  let batchTimer = null;
+
+  window.__submitBatch = async function () {
+    const tag = (document.getElementById("batch-tag") || {}).value || "";
+    const cmd = (document.getElementById("batch-cmd") || {}).value || "";
+    const timeout = parseInt((document.getElementById("batch-timeout") || {}).value, 10) || 60;
+    const retries = parseInt((document.getElementById("batch-retries") || {}).value, 10) || 0;
+    if (!tag || !cmd) { alert("目标标签与命令必填"); return; }
+    try {
+      const r = await fetch(api("/api/batch"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tag, type: "powershell", payload: { command: cmd }, timeout, max_retries: retries }),
+      });
+      const data = await r.json();
+      if (!r.ok) { alert("批量下发失败: " + (data.error || r.status)); return; }
+      document.getElementById("batch-progress").style.display = "block";
+      document.getElementById("batch-summary").textContent = "批次 " + data.batch_id.slice(0, 16) + "… 已提交,目标 " + data.total + " 个";
+      document.getElementById("batch-bar").style.width = "0%";
+      document.getElementById("batch-targets").innerHTML = "";
+      if (batchTimer) clearInterval(batchTimer);
+      const poll = async function () {
+        try {
+          const pr = await fetch(api("/api/batch/" + encodeURIComponent(data.batch_id)));
+          if (!pr.ok) { clearInterval(batchTimer); return; }
+          const snap = await pr.json();
+          renderBatchProgress(snap);
+          if (snap.status === "finished") clearInterval(batchTimer);
+        } catch (e) { /* 网络抖动,下轮重试 */ }
+      };
+      poll();
+      batchTimer = setInterval(poll, 1000);
+    } catch (e) { alert("批量下发异常: " + e.message); }
+  };
+
+  function renderBatchProgress(snap) {
+    const summary = document.getElementById("batch-summary");
+    const bar = document.getElementById("batch-bar");
+    const eta = document.getElementById("batch-eta");
+    if (!summary || !bar) return;
+    const done = (snap.done || 0), total = (snap.total || 0);
+    summary.textContent = "✓ " + snap.succeeded + " 成功 · ✗ " + snap.failed + " 失败 · ⋯ " + snap.pending + " 待投 · " + done + "/" + total;
+    bar.style.width = (snap.percent || 0).toFixed(1) + "%";
+    bar.style.background = snap.status === "finished"
+      ? ((snap.failed || 0) > 0 ? "#d29922" : "#3fb950")
+      : "#2f81f7";
+    eta.textContent = snap.status === "finished"
+      ? ("完成 · 成功率 " + Math.round((snap.success_rate || 0) * 100) + "% · 耗时 " + ((snap.elapsed_ms || 0) / 1000).toFixed(1) + "s")
+      : (snap.eta_ms ? "ETA " + (snap.eta_ms / 1000).toFixed(0) + "s" : "");
+    const box = document.getElementById("batch-targets");
+    if (box && Array.isArray(snap.states)) {
+      const color = { succeeded: "#3fb950", failed: "#f85149", running: "#2f81f7", pending: "#8b949e" };
+      box.innerHTML = snap.states.map(function (st) {
+        return '<div style="border:1px solid #30363d;border-radius:6px;padding:6px 8px;overflow:hidden">' +
+          '<span style="color:' + (color[st.Status] || "#8b949e") + '">●</span> <b>' + st.AgentID.slice(0, 28) + "</b>" +
+          '<span style="float:right;opacity:.75">' + st.Status + (st.Attempt > 1 ? " (第" + st.Attempt + "次)" : "") + "</span>" +
+          (st.Error ? '<div style="opacity:.7;white-space:nowrap;text-overflow:ellipsis;overflow:hidden" title="' + st.Error.replace(/"/g, "&quot;") + '">' + st.Error + "</div>" : "") +
+          "</div>";
+      }).join("");
+    }
+  }
 })();

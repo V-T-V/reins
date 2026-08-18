@@ -132,6 +132,30 @@
         <div class="panel-header">运行指标</div>
         <div class="panel-body" id="metrics-panel" style="display:flex;flex-wrap:wrap;gap:16px"></div>
       </div>
+      <!-- P2-8 批量分发(按 tag 一对多,异步批次+实时进度) -->
+      <div class="panel">
+        <div class="panel-header">批量分发 <span style="font-weight:400;font-size:12px;opacity:.7">(按标签一对多 · 指数退避重试)</span></div>
+        <div class="panel-body">
+          <div class="row">
+            <div><label>目标标签</label><input id="batch-tag" placeholder="env=prod"></div>
+            <div><label>命令</label><input id="batch-cmd" placeholder="Get-Date" style="flex:1;min-width:240px"></div>
+          </div>
+          <div class="row">
+            <div><label>超时(秒)</label><input id="batch-timeout" type="number" value="60" style="width:90px"></div>
+            <div><label>重试次数</label><input id="batch-retries" type="number" value="2" style="width:90px"></div>
+            <div style="align-self:end"><button onclick="window.__submitBatch()">批量下发</button></div>
+          </div>
+          <div id="batch-progress" style="display:none;margin-top:12px">
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+              <span id="batch-summary">—</span><span id="batch-eta"></span>
+            </div>
+            <div style="background:#21262d;border-radius:6px;height:10px;overflow:hidden">
+              <div id="batch-bar" style="background:#2f81f7;height:100%;width:0%;transition:width .5s"></div>
+            </div>
+            <div id="batch-targets" style="margin-top:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:6px;font-size:12px"></div>
+          </div>
+        </div>
+      </div>
       <!-- 实时结果 -->
       <div class="panel">
         <div class="panel-header">实时结果流</div>
