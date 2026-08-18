@@ -13,7 +13,9 @@ import (
 
 // ScriptExecutor 执行下发的脚本文件。
 //
-// 支持 lang=ps1（PowerShell，需 UTF-8 BOM 防中文乱码）和 lang=bat（cmd）。
+// 支持 lang=ps1（PowerShell，Windows，需 UTF-8 BOM 防中文乱码）、
+// lang=bat（cmd，Windows）、lang=sh（POSIX shell，Linux/macOS——P1-4 Linux
+// Agent 第一步）。
 // 脚本写到临时文件执行，结束后删除。
 type ScriptExecutor struct{}
 
@@ -22,9 +24,6 @@ func NewScript() *ScriptExecutor { return &ScriptExecutor{} }
 func (e *ScriptExecutor) Type() string { return proto.TaskScript }
 
 func (e *ScriptExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFunc) proto.TaskResult {
-	if runtime.GOOS != "windows" {
-		return fail("", "script 仅在 Windows 上可用")
-	}
 	var task proto.ScriptTask
 	if err := decode(payload, &task); err != nil {
 		return fail("", err.Error())
@@ -35,6 +34,21 @@ func (e *ScriptExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFun
 	lang := task.Lang
 	if lang == "" {
 		lang = "ps1"
+	}
+
+	// 平台分派:ps1/bat 仅 Windows,sh 仅 POSIX(Linux/macOS)
+	isWindows := runtime.GOOS == "windows"
+	switch lang {
+	case "ps1", "bat":
+		if !isWindows {
+			return fail("", "lang="+lang+" 仅在 Windows 上可用(Linux/macOS 请用 lang=sh)")
+		}
+	case "sh":
+		if isWindows {
+			return fail("", "lang=sh 仅在 Linux/macOS 上可用(Windows 请用 lang=ps1/bat)")
+		}
+	default:
+		return fail("", "不支持的 lang: "+lang)
 	}
 
 	// 写临时脚本文件
@@ -65,6 +79,13 @@ func (e *ScriptExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFun
 		return fail("", "写脚本失败: "+err.Error())
 	}
 	tmpFile.Close()
+	// sh: POSIX 临时文件默认 0600,加执行位(部分发行版 sh 解释器要求可读即可,
+	// chmod 兼容直接执行与 source 两种调用)
+	if lang == "sh" {
+		if err := os.Chmod(tmpPath, 0755); err != nil {
+			return fail("", "chmod 失败: "+err.Error())
+		}
+	}
 
 	var cmd *exec.Cmd
 	switch lang {
@@ -75,8 +96,8 @@ func (e *ScriptExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFun
 			"-ExecutionPolicy", "Bypass", "-File", tmpPath)
 	case "bat":
 		cmd = exec.CommandContext(ctx, "cmd", "/c", tmpPath)
-	default:
-		return fail("", "不支持的 lang: "+lang)
+	case "sh":
+		cmd = exec.CommandContext(ctx, "sh", tmpPath)
 	}
 	setProcAttr(cmd) // P1-A1:进程组,防孙进程孤儿
 

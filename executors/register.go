@@ -21,18 +21,17 @@ type Options struct {
 // RegisterAll 注册所有可用的执行器到 d，返回实际注册的类型。
 //
 // 能力探测逻辑：
-//   - powershell/script/screenshot：仅 Windows
+//   - powershell/screenshot：仅 Windows
+//   - script：跨平台（Windows 执行 ps1/bat，Linux/macOS 执行 sh——P1-4 第一步）
 //   - guiclick：Windows + vision.APIKey
-//   - file：跨平台
-//   - browse：始终注册（编译 tag 决定真实实现还是 stub）
+//   - file/browse：跨平台
 //
 // M1 主从架构:Role=master 时只注册基础运维子集,保证主极简稳定。
 func RegisterAll(d *Dispatcher, opts Options) []string {
 	isMaster := opts.Role == "master"
 	if runtime.GOOS == "windows" {
-		// 基础运维(master + slave 都有):命令执行 + 脚本
+		// 基础运维(master + slave 都有):命令执行
 		d.Register(NewPowerShell())
-		d.Register(NewScript())
 		if !isMaster {
 			// slave 专属:业务能力(主不需要,减少攻击面)
 			d.Register(NewScreenshot())
@@ -43,6 +42,8 @@ func RegisterAll(d *Dispatcher, opts Options) []string {
 			}
 		}
 	}
+	// script 跨平台:Windows 走 ps1/bat,Linux/macOS 走 sh
+	d.Register(NewScript())
 	// D4:把 Workspace 注入 FileExecutor 的策略,使相对路径可预期解析。
 	// file 跨平台,master/slave 都需要(主用它推救援文件/读日志)。
 	fileExec := NewFile()
