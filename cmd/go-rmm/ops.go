@@ -27,24 +27,14 @@ func cmdSysinfo(cfg config, args []string) error {
 	if agentID == "" {
 		return fmt.Errorf("用法: go-rmm sysinfo -a <agent>")
 	}
-	// 组合 PowerShell 采集命令
-	script := `$ErrorActionPreference='SilentlyContinue';
-$cpu=(Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples.CookedValue;
-$os=Get-CimInstance Win32_OperatingSystem;
-$disks=Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3';
-$ub=(Get-Date)-$os.LastBootUpTime;
-$r=@{
-  hostname=$env:COMPUTERNAME;
-  os=$os.Caption+' '+$os.Version;
-  cpu_pct=[math]::Round($cpu,1);
-  mem_total_gb=[math]::Round($os.TotalVisibleMemorySize/1MB,1);
-  mem_free_gb=[math]::Round($os.FreePhysicalMemory/1MB,1);
-  mem_used_pct=[math]::Round(($os.TotalVisibleMemorySize-$os.FreePhysicalMemory)/$os.TotalVisibleMemorySize*100,1);
-  uptime_days=[math]::Round($ub.TotalDays,1);
-  disks=@($disks|ForEach-Object{@{dev=$_.DeviceID;total_gb=[math]::Round($_.Size/1GB,1);free_gb=[math]::Round($_.FreeSpace/1GB,1);used_pct=[math]::Round(($_.Size-$_.FreeSpace)/$_.Size*100,1)}});
-};
-$r|ConvertTo-Json -Compress`
-	stdout, err := runOpsTask(cfg, agentID, script, 15)
+	// 平台分派:Linux 走 sh(/proc+df 手拼同构 JSON),Windows 走 PowerShell(P1-4)
+	var stdout string
+	var err error
+	if isLinuxAgent(cfg, agentID) {
+		stdout, err = runOpsScript(cfg, agentID, buildSysinfoScript(true), 15)
+	} else {
+		stdout, err = runOpsTask(cfg, agentID, buildSysinfoScript(false), 15)
+	}
 	if err != nil {
 		return err
 	}
@@ -79,6 +69,39 @@ $r|ConvertTo-Json -Compress`
 	return nil
 }
 
+// buildSysinfoScript 构造系统体检脚本(双方言,输出同构 JSON 供统一解析)。
+// linux=true: /proc + df 手拼 JSON(无 jq 依赖);false: PowerShell CIM 采集。
+func buildSysinfoScript(linux bool) string {
+	if linux {
+		return `HOST=$(hostname)
+OS="$(uname -s) $(uname -r)"
+CPU=$(top -bn1 | awk '/^%?Cpu\(s\)/{printf "%.1f", 100-$8; exit}')
+MEM_T=$(awk '/^MemTotal/{printf "%.1f", $2/1048576}' /proc/meminfo)
+MEM_F=$(awk '/^MemAvailable/{printf "%.1f", $2/1048576}' /proc/meminfo)
+MEM_P=$(awk '/^MemTotal/{t=$2}/^MemAvailable/{f=$2}END{if(t>0)printf "%.1f",(t-f)/t*100}' /proc/meminfo)
+UP=$(awk '{printf "%.1f", $1/86400}' /proc/uptime)
+DISKS=$(df -B1G -x tmpfs -x devtmpfs -x overlay 2>/dev/null | tail -n +2 | awk '{pct=substr($5,1,length($5)-1); printf "{\"dev\":\"%s\",\"total_gb\":%s,\"free_gb\":%s,\"used_pct\":%s},", $1, $2, $4, pct}' | sed 's/,$//')
+printf '{"hostname":"%s","os":"%s","cpu_pct":%s,"mem_total_gb":%s,"mem_free_gb":%s,"mem_used_pct":%s,"uptime_days":%s,"disks":[%s]}' \
+  "$HOST" "$OS" "${CPU:-0}" "$MEM_T" "$MEM_F" "$MEM_P" "$UP" "$DISKS"`
+	}
+	return `$ErrorActionPreference='SilentlyContinue';
+$cpu=(Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples.CookedValue;
+$os=Get-CimInstance Win32_OperatingSystem;
+$disks=Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3';
+$ub=(Get-Date)-$os.LastBootUpTime;
+$r=@{
+  hostname=$env:COMPUTERNAME;
+  os=$os.Caption+' '+$os.Version;
+  cpu_pct=[math]::Round($cpu,1);
+  mem_total_gb=[math]::Round($os.TotalVisibleMemorySize/1MB,1);
+  mem_free_gb=[math]::Round($os.FreePhysicalMemory/1MB,1);
+  mem_used_pct=[math]::Round(($os.TotalVisibleMemorySize-$os.FreePhysicalMemory)/$os.TotalVisibleMemorySize*100,1);
+  uptime_days=[math]::Round($ub.TotalDays,1);
+  disks=@($disks|ForEach-Object{@{dev=$_.DeviceID;total_gb=[math]::Round($_.Size/1GB,1);free_gb=[math]::Round($_.FreeSpace/1GB,1);used_pct=[math]::Round(($_.Size-$_.FreeSpace)/$_.Size*100,1)}});
+};
+$r|ConvertTo-Json -Compress`
+}
+
 func getFloat(m map[string]interface{}, k string) float64 {
 	if v, ok := m[k].(float64); ok {
 		return v
@@ -99,11 +122,22 @@ func cmdService(cfg config, args []string) error {
 	switch args[0] {
 	case "list", "ls":
 		statusFilter := extractArg(args, "--status")
-		cmd := "Get-Service | Select Name,DisplayName,Status,StartType | ConvertTo-Csv -NoTypeInformation"
-		if statusFilter != "" {
-			cmd = fmt.Sprintf("Get-Service | Where Status -eq '%s' | Select Name,DisplayName,Status,StartType | ConvertTo-Csv -NoTypeInformation", statusFilter)
+		var stdout string
+		var err error
+		if isLinuxAgent(cfg, agentID) {
+			// systemd:unit/load/active/sub 描述
+			cmd := "systemctl list-units --type=service --all --no-pager --no-legend | awk '{print $1, $3, $4, $5}'"
+			if statusFilter != "" {
+				cmd = fmt.Sprintf("systemctl list-units --type=service --state=%s --no-pager --no-legend | awk '{print $1, $3, $4, $5}'", statusFilter)
+			}
+			stdout, err = runOpsScript(cfg, agentID, cmd, 30)
+		} else {
+			cmd := "Get-Service | Select Name,DisplayName,Status,StartType | ConvertTo-Csv -NoTypeInformation"
+			if statusFilter != "" {
+				cmd = fmt.Sprintf("Get-Service | Where Status -eq '%s' | Select Name,DisplayName,Status,StartType | ConvertTo-Csv -NoTypeInformation", statusFilter)
+			}
+			stdout, err = runOpsTask(cfg, agentID, cmd, 30)
 		}
-		stdout, err := runOpsTask(cfg, agentID, cmd, 30)
 		if err != nil {
 			return err
 		}
@@ -114,37 +148,53 @@ func cmdService(cfg config, args []string) error {
 		if name == "" {
 			return fmt.Errorf("用法: go-rmm service start -a <agent> <name>")
 		}
-		return runSvcAction(cfg, agentID, "Start-Service", name)
+		return runSvcAction(cfg, agentID, "Start-Service", "start", name)
 	case "stop":
 		name := posArg(args, 1)
 		if name == "" {
 			return fmt.Errorf("用法: go-rmm service stop -a <agent> <name>")
 		}
-		return runSvcAction(cfg, agentID, "Stop-Service", name)
+		return runSvcAction(cfg, agentID, "Stop-Service", "stop", name)
 	case "restart":
 		name := posArg(args, 1)
 		if name == "" {
 			return fmt.Errorf("用法: go-rmm service restart -a <agent> <name>")
 		}
-		return runSvcAction(cfg, agentID, "Restart-Service", name)
+		return runSvcAction(cfg, agentID, "Restart-Service", "restart", name)
 	default:
 		return fmt.Errorf("未知 service 子命令: %s", args[0])
 	}
 }
 
-func runSvcAction(cfg config, agentID, action, svcName string) error {
+// runSvcAction 服务操作(双方言):psAction 为 Windows cmdlet(如 Start-Service),
+// linuxAction 为 systemctl 子命令(如 start)。
+func runSvcAction(cfg config, agentID, psAction, linuxAction, svcName string) error {
+	linux := isLinuxAgent(cfg, agentID)
 	// 先查当前状态
-	statusCmd := fmt.Sprintf("(Get-Service -Name '%s').Status", svcName)
-	curStatus, _ := runOpsTask(cfg, agentID, statusCmd, 10)
+	var curStatus string
+	if linux {
+		curStatus, _ = runOpsScript(cfg, agentID, fmt.Sprintf("systemctl is-active '%s'; true", svcName), 10)
+	} else {
+		curStatus, _ = runOpsTask(cfg, agentID, fmt.Sprintf("(Get-Service -Name '%s').Status", svcName), 10)
+	}
 	fmt.Printf("服务 %s 当前状态: %s\n", svcName, strings.TrimSpace(curStatus))
 	// 执行操作
-	cmd := fmt.Sprintf("%s -Name '%s'; Write-Output 'done'", action, svcName)
-	_, err := runOpsTask(cfg, agentID, cmd, 20)
+	var err error
+	if linux {
+		_, err = runOpsScript(cfg, agentID, fmt.Sprintf("systemctl %s '%s' 2>&1; true", linuxAction, svcName), 20)
+	} else {
+		_, err = runOpsTask(cfg, agentID, fmt.Sprintf("%s -Name '%s'; Write-Output 'done'", psAction, svcName), 20)
+	}
 	if err != nil {
 		return err
 	}
 	// 查新状态
-	newStatus, _ := runOpsTask(cfg, agentID, statusCmd, 10)
+	var newStatus string
+	if linux {
+		newStatus, _ = runOpsScript(cfg, agentID, fmt.Sprintf("systemctl is-active '%s'; true", svcName), 10)
+	} else {
+		newStatus, _ = runOpsTask(cfg, agentID, fmt.Sprintf("(Get-Service -Name '%s').Status", svcName), 10)
+	}
 	fmt.Printf("✅ 操作完成,新状态: %s\n", strings.TrimSpace(newStatus))
 	return nil
 }
@@ -170,12 +220,23 @@ func cmdProc(cfg config, args []string) error {
 		if nStr != "" {
 			fmt.Sscanf(nStr, "%d", &n)
 		}
-		sortField := "CPU"
-		if sortBy == "mem" {
-			sortField = "WS"
+		var stdout string
+		var err error
+		if isLinuxAgent(cfg, agentID) {
+			// ps:PID/名称/CPU%/MEM%/RSS(KB),按 cpu 或 rss(mem) 降序
+			sortKey := "-pcpu"
+			if sortBy == "mem" {
+				sortKey = "-rss"
+			}
+			stdout, err = runOpsScript(cfg, agentID,
+				fmt.Sprintf("ps -eo pid,comm,pcpu,pmem,rss --sort=%s | head -n %d", sortKey, n+1), 15)
+		} else {
+			sortField := "CPU"
+			if sortBy == "mem" {
+				sortField = "WS"
+			}
+			stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("Get-Process | Sort %s -Desc | Select -First %d Name,Id,CPU,@{n='Mem(MB)';e={[int]($_.WS/1MB)}} | Format-Table -AutoSize | Out-String", sortField, n), 15)
 		}
-		cmd := fmt.Sprintf("Get-Process | Sort %s -Desc | Select -First %d Name,Id,CPU,@{n='Mem(MB)';e={[int]($_.WS/1MB)}} | Format-Table -AutoSize | Out-String", sortField, n)
-		stdout, err := runOpsTask(cfg, agentID, cmd, 15)
 		if err != nil {
 			return err
 		}
@@ -186,14 +247,23 @@ func cmdProc(cfg config, args []string) error {
 		if target == "" {
 			return fmt.Errorf("用法: go-rmm proc kill -a <agent> <pid|name>")
 		}
-		var cmd string
-		// 数字当 PID,否则当进程名
-		if isAllDigit(target) {
-			cmd = fmt.Sprintf("Stop-Process -Id %s -Force; Write-Output 'killed pid %s'", target, target)
+		var stdout string
+		var err error
+		if isLinuxAgent(cfg, agentID) {
+			// 数字当 PID,否则当进程名(pkill)
+			cmd := fmt.Sprintf("pkill -9 -x '%s'; echo \"killed %s\"", target, target)
+			if isAllDigit(target) {
+				cmd = fmt.Sprintf("kill -9 %s; echo \"killed pid %s\"", target, target)
+			}
+			stdout, err = runOpsScript(cfg, agentID, cmd, 10)
 		} else {
-			cmd = fmt.Sprintf("Stop-Process -Name '%s' -Force; Write-Output 'killed %s'", target, target)
+			// 数字当 PID,否则当进程名
+			cmd := fmt.Sprintf("Stop-Process -Name '%s' -Force; Write-Output 'killed %s'", target, target)
+			if isAllDigit(target) {
+				cmd = fmt.Sprintf("Stop-Process -Id %s -Force; Write-Output 'killed pid %s'", target, target)
+			}
+			stdout, err = runOpsTask(cfg, agentID, cmd, 10)
 		}
-		stdout, err := runOpsTask(cfg, agentID, cmd, 10)
 		if err != nil {
 			return err
 		}
