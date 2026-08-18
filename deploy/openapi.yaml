@@ -334,6 +334,15 @@ paths:
                 cron_expr: { type: string }
                 agent_id: { type: string }
                 task_type: { type: string }
+    delete:
+      summary: 删除定时任务规则
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 已删除 }
 
   /api/agents/revoke:
     post:
@@ -345,6 +354,179 @@ paths:
               type: object
               properties:
                 agent_id: { type: string }
+
+  /api/tasks/stream:
+    post:
+      summary: 流式任务(SSE 实时 stdout,非轮询)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskRequest" }
+      responses:
+        "200":
+          description: text/event-stream(task_submitted/task_dispatched/task_progress/task_result 事件)
+
+  /api/enroll-token:
+    post:
+      summary: 生成一次性 Agent 注册令牌(mTLS 首次注册用,RequireRole 守卫)
+      responses:
+        "200": { description: 一次性 token }
+        "403": { description: 角色无权 }
+
+  /api/enroll:
+    post:
+      summary: Agent 证书注册(enrollment token 换客户端证书)
+      responses:
+        "200": { description: 签发的客户端证书 }
+
+  /api/renew:
+    post:
+      summary: Agent 证书续签
+      responses:
+        "200": { description: 续签后的证书 }
+
+  /api/shell/open:
+    post:
+      summary: 打开交互式终端会话(PTY,asciinema v2 录屏归档)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent_id: { type: string }
+      responses:
+        "200": { description: 会话 ID }
+
+  /api/shell/input:
+    post:
+      summary: 向终端会话写入输入
+      responses:
+        "200": { description: 已写入 }
+
+  /api/shell/close:
+    post:
+      summary: 关闭终端会话
+      responses:
+        "200": { description: 已关闭 }
+
+  /api/tunnel/data:
+    post:
+      summary: 隧道数据帧(Console→Agent 方向)
+      responses:
+        "200": { description: 已转发 }
+
+  /api/tunnel/poll:
+    get:
+      summary: 隧道数据轮询流(Agent→Console 方向,SSE 式流式拉取)
+      responses:
+        "200": { description: 隧道数据帧流 }
+
+  /api/tunnel/close:
+    post:
+      summary: 关闭隧道
+      responses:
+        "200": { description: 已关闭 }
+
+  /api/secrets:
+    post:
+      summary: 写入 Secret(引用式凭据,TTL+一次性,不落 audit)
+      responses:
+        "200": { description: secret key }
+
+  /api/secrets/{key}:
+    get:
+      summary: 读取 Secret(一次性消费)
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: secret 值 }
+        "404": { description: 不存在或已消费 }
+    delete:
+      summary: 删除 Secret
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 已删除 }
+
+  /api/scripts:
+    get:
+      summary: 列出脚本库
+      responses:
+        "200": { description: 脚本列表 }
+    post:
+      summary: 保存脚本到库(远端存储+复用;名称校验防路径穿越)
+      responses:
+        "200": { description: 已保存 }
+
+  /api/scripts/{name}:
+    get:
+      summary: 读取脚本内容
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 脚本内容 }
+        "404": { description: 不存在 }
+    delete:
+      summary: 删除脚本
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 已删除 }
+
+  /api/audit/export:
+    get:
+      summary: 审计导出(SIEM 格式:CEF/Syslog/JSON)
+      parameters:
+        - name: format
+          in: query
+          schema: { type: string, enum: [cef, syslog, json] }
+      responses:
+        "200": { description: 审计流 }
+
+  /api/events:
+    get:
+      summary: 实时事件流 SSE(agent 上线/任务结果/策略拦截)
+      responses:
+        "200":
+          description: text/event-stream
+
+  /api/metrics:
+    get:
+      summary: JSON 指标(任务统计/Agent 在线数等)
+      responses:
+        "200": { description: 指标 JSON }
+
+  /api/scheduler/best:
+    get:
+      summary: 智能调度:按负载选择最优 Agent(候选列表)
+      responses:
+        "200": { description: 最优 Agent }
+
+  /api/bootstrap:
+    get:
+      summary: 生成一行远程部署命令(复制到目标机执行)
+      responses:
+        "200": { description: bootstrap 命令 }
+
+  /api/tools:
+    get:
+      summary: 工具发现(AI Agent 用:可用操作清单)
+      responses:
+        "200": { description: 工具注册表 }
 
 components:
   securitySchemes:

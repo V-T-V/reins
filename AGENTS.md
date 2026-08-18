@@ -233,7 +233,7 @@ go-rmm/
 5. **任务 at-least-once**:文件传输/终端结果可靠投递(当前 best-effort),减少 SHA256/录屏兜底依赖。
 
 ### P2 — 可观测/体验
-7. **OpenAPI 同步**:`deploy/openapi.yaml` 已增量同步 2026-08-18 新端点(batch ×3 / updates apply binary_path / agents online_since+xfer_stats),存量端点补全至 45+ 与 typed client 生成仍待做。
+7. ~~OpenAPI 同步~~:✅ 已完成——39 路径全量覆盖(46 method 级端点,含 shell/tunnel/secrets/scripts/audit/enroll/events/scheduler/bootstrap/tools);typed client 生成可选做。
 8. **Web 控制台深化**:批量分发进度可视化、租户/组织管理 UI、审计回放。
 9. ~~race 检测 CI~~:✅ 已完成——`ci.yml` 的 Test step 即 `go test -cover -race`(3563a3c 落地,本机与 CI 双验证零警告)。
 10. ~~Agent Prometheus 指标端点~~:✅ 已完成——`127.0.0.1:7781/metrics`(仅本机回环,metrics_addr 可改/off 禁用),xfer 五计数器+sessions_active gauge+reconnects_total+uptime+build_info,gormmm_ 三 m 命名空间统一。
