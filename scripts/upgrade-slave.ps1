@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Continue'
 $src = 'C:\go-rmm\slave-workspace\go-rmm-agent-new.exe'
 $dst = 'C:\Program Files\go-rmm-slave\go-rmm-slave.exe'
 $bak = "$dst.bak-manual"
-$want = '715c424584f318ebd82d9e795ab5733437ecd2087a26912e1892280093a15799'
+$want = '6d34e0c924b7f9237235730beab6c4cc29573b9f81763b4153543655f7ffb850'
 
 Stop-Service go-rmm-slave -Force
 Start-Sleep -Seconds 3
