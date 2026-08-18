@@ -76,6 +76,13 @@ func (te *TransferEngine) SnapshotStats() (ub, db, uc, dc, fc int64) {
 		te.uploadCount.Load(), te.downloadCount.Load(), te.failedCount.Load()
 }
 
+// ActiveSessions 当前活跃传输会话数(gauge)。
+func (te *TransferEngine) ActiveSessions() int {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+	return len(te.sessions)
+}
+
 // releasePath 释放 path 占用标记(R1 互斥的配套释放)。
 // 所有 upload session 退出路径(成功/失败/取消)都应调用。
 func (te *TransferEngine) releasePath(path string) {

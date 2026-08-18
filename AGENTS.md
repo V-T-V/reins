@@ -49,7 +49,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
-- **成功标准**:169 Go 文件 / 31.8K 行 / 392 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
+- **成功标准**:169 Go 文件 / 31.8K 行 / 396 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
 
 ## 架构假设(4 项显式假设)
 
@@ -138,7 +138,7 @@ go-rmm/
 | Go 文件 | 169 |
 | 代码行 | 31,800+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 392 |
+| 测试用例 | 396 |
 | 基准测试 | 22 |
 | CLI 命令 | 51 |
 | API 端点 | 45 |
@@ -182,7 +182,7 @@ go-rmm/
 
 ## 测试覆盖(v4.3.3)
 
-392 测试 + 22 基准。按包分布与重点验证场景:
+396 测试 + 22 基准。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
@@ -236,7 +236,7 @@ go-rmm/
 7. **OpenAPI 同步**:`deploy/openapi.yaml` 已增量同步 2026-08-18 新端点(batch ×3 / updates apply binary_path / agents online_since+xfer_stats),存量端点补全至 45+ 与 typed client 生成仍待做。
 8. **Web 控制台深化**:批量分发进度可视化、租户/组织管理 UI、审计回放。
 9. ~~race 检测 CI~~:✅ 已完成——`ci.yml` 的 Test step 即 `go test -cover -race`(3563a3c 落地,本机与 CI 双验证零警告)。
-10. **Agent Prometheus 指标端点**:暴露 `xfer_sessions_active`/`xfer_bytes_total`/`xfer_failures_total`/`reconnect_count`(Q4 计数器已就绪,Relay 侧 M1 已暴露 xfer 指标,Agent 侧 HTTP 端点待补)。
+10. ~~Agent Prometheus 指标端点~~:✅ 已完成——`127.0.0.1:7781/metrics`(仅本机回环,metrics_addr 可改/off 禁用),xfer 五计数器+sessions_active gauge+reconnects_total+uptime+build_info,gormmm_ 三 m 命名空间统一。
 11. **文件传输 per-chunk SHA256 强制**:当前单片 `.ftpartNN` 无 hash 校验(合并后整文件校验兜底),加 per-chunk 强制可提前发现损坏,但需协议改动(滚动升级兼容性风险)。
 12. **Relay 速率限制**:按 agentID 维度令牌桶(`golang.org/x/time/rate`),防并发上传吃满 Agent 上行带宽影响心跳。
 

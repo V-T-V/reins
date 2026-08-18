@@ -60,6 +60,14 @@ func mtlsHTTPClient(certs *AgentCerts) *http.Client {
 // 阻塞直到 ctx 取消。断线自动指数退避重连（1s→2s→…→30s 封顶）。
 func (a *Agent) Run(ctx context.Context) error {
 	agentBizID = a.cfg.AgentID
+	// P2-10:本地 Prometheus 指标端点(127.0.0.1:7781,metrics_addr 可改/off 禁用)
+	SetActiveSessionsSource(transfers.ActiveSessions)
+	if addr := a.cfg.MetricsAddr; addr != "off" {
+		if addr == "" {
+			addr = defaultMetricsAddr
+		}
+		go startMetricsServer(ctx, addr)
+	}
 	// W7:mTLS 证书后台续签(进程级;原只在启动时检查→24h 必过期→永久离线)
 	if a.certs != nil {
 		go a.certRenewLoop(ctx)
@@ -105,6 +113,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			log.Printf("[agent] 连接 %s 断开: %v", chosen, err)
 		}
 		// S1:full jitter 退避,防 thundering herd
+		reconnectsTotal.Add(1) // P2-10:重连计数(含首次连接失败的重试)
 		jittered := time.Duration(rng.Int63n(int64(backoff)))/10*9 + backoff/10
 		log.Printf("[agent] %v 后重连", jittered)
 		select {

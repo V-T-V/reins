@@ -46,6 +46,9 @@ type Config struct {
 	// 命令必须命中至少一条规则,且仍受黑名单兜底(交集语义)。
 	// Agent 是强制底线——即使 Relay 被绕过(交互式 shell/cron)也生效。
 	PolicyAllow []string `json:"policy_allow,omitempty"`
+	// MetricsAddr 本地 Prometheus 指标端点监听地址(P2-10)。
+	// 空默认 127.0.0.1:7781(仅本机回环,不暴露公网);"off" 禁用。
+	MetricsAddr string `json:"metrics_addr,omitempty"`
 	// MinVersion 允许的最低版本(防降级)。
 	// 自更新时若新版本 < MinVersion 则拒绝。留空则不强制。
 	MinVersion string `json:"min_version,omitempty"`
