@@ -41,22 +41,29 @@ func findName(cfg config, args []string) error {
 		return fmt.Errorf("用法: go-rmm find name -a <agent> <pattern> [--dir C:\\] [--max 50]")
 	}
 	dir := extractArg(args, "--dir")
-	if dir == "" {
-		dir = "C:\\"
-	}
 	max := 50
 	if m := extractArg(args, "--max"); m != "" {
 		fmt.Sscanf(m, "%d", &max)
 	}
-	// Windows: Get-ChildItem -Recurse -Filter; Linux: find
-	cmd := fmt.Sprintf("Get-ChildItem -Path '%s' -Recurse -Filter '*%s*' -File -ErrorAction SilentlyContinue | Select -First %d FullName,Length,LastWriteTime | Format-Table -AutoSize | Out-String", dir, pattern, max)
-	stdout, err := runOpsTask(cfg, agentID, cmd, 30)
-	if err != nil {
-		cmd = fmt.Sprintf("find '%s' -name '*%s*' -type f 2>/dev/null | head -%d", dir, pattern, max)
-		stdout, err = runOpsTask(cfg, agentID, cmd, 30)
-		if err != nil {
-			return err
+	// 平台感知:Linux 走 find -iname(默认目录 /),Windows 走 Get-ChildItem
+	// (默认 C:\)。原双发 fallback 的 sh 命令也经 powershell 任务类型下发,
+	// Linux Agent 上永远走不到(死代码)。
+	var stdout string
+	var err error
+	if isLinuxAgent(cfg, agentID) {
+		if dir == "" {
+			dir = "/"
 		}
+		stdout, err = runOpsScript(cfg, agentID,
+			fmt.Sprintf("find '%s' -iname '*%s*' -type f 2>/dev/null | head -%d | xargs -r ls -lh 2>/dev/null || find '%s' -iname '*%s*' -type f 2>/dev/null | head -%d", dir, pattern, max, dir, pattern, max), 30)
+	} else {
+		if dir == "" {
+			dir = "C:\\"
+		}
+		stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("Get-ChildItem -Path '%s' -Recurse -Filter '*%s*' -File -ErrorAction SilentlyContinue | Select -First %d FullName,Length,LastWriteTime | Format-Table -AutoSize | Out-String", dir, pattern, max), 30)
+	}
+	if err != nil {
+		return err
 	}
 	fmt.Println(stdout)
 	return nil
@@ -74,20 +81,25 @@ func findGrep(cfg config, args []string) error {
 		dir = "."
 	}
 	ext := extractArg(args, "--ext")
-	if ext == "" {
-		ext = "*.log"
-	} else {
-		ext = "*" + ext
-	}
-	// Windows: Select-String; Linux: grep -r
-	cmd := fmt.Sprintf("Get-ChildItem -Path '%s' -Filter '%s' -Recurse -File | Select-String -Pattern '%s' | Select Filename,LineNumber,Line | Format-Table -AutoSize -Wrap | Out-String", dir, ext, pattern)
-	stdout, err := runOpsTask(cfg, agentID, cmd, 60)
-	if err != nil {
-		cmd = fmt.Sprintf("grep -rn '%s' %s/%s 2>/dev/null | head -50", pattern, dir, ext)
-		stdout, err = runOpsTask(cfg, agentID, cmd, 60)
-		if err != nil {
-			return err
+	// 平台感知:Linux 走 grep -rn --include,Windows 走 Select-String
+	var stdout string
+	var err error
+	if isLinuxAgent(cfg, agentID) {
+		include := "*.log"
+		if ext != "" {
+			include = "*" + ext
 		}
+		stdout, err = runOpsScript(cfg, agentID,
+			fmt.Sprintf("grep -rn --include='%s' '%s' '%s' 2>/dev/null | head -50", include, pattern, dir), 60)
+	} else {
+		filter := "*.log"
+		if ext != "" {
+			filter = "*" + ext
+		}
+		stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("Get-ChildItem -Path '%s' -Filter '%s' -Recurse -File | Select-String -Pattern '%s' | Select Filename,LineNumber,Line | Format-Table -AutoSize -Wrap | Out-String", dir, filter, pattern), 60)
+	}
+	if err != nil {
+		return err
 	}
 	fmt.Println(stdout)
 	return nil
@@ -100,14 +112,16 @@ func findStat(cfg config, args []string) error {
 	if agentID == "" || filePath == "" {
 		return fmt.Errorf("用法: go-rmm find stat -a <agent> <file>")
 	}
-	cmd := fmt.Sprintf("Get-Item '%s' | Select Name,FullName,Length,CreationTime,LastWriteTime,Attributes | Format-List | Out-String", filePath)
-	stdout, err := runOpsTask(cfg, agentID, cmd, 10)
+	// 平台感知:Linux 走 stat -c,Windows 走 Get-Item
+	var stdout string
+	var err error
+	if isLinuxAgent(cfg, agentID) {
+		stdout, err = runOpsScript(cfg, agentID, fmt.Sprintf("stat '%s' 2>/dev/null || ls -la '%s'", filePath, filePath), 10)
+	} else {
+		stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("Get-Item '%s' | Select Name,FullName,Length,CreationTime,LastWriteTime,Attributes | Format-List | Out-String", filePath), 10)
+	}
 	if err != nil {
-		cmd = fmt.Sprintf("stat '%s' 2>/dev/null || ls -la '%s'", filePath, filePath)
-		stdout, err = runOpsTask(cfg, agentID, cmd, 10)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 	fmt.Println(stdout)
 	return nil
@@ -120,14 +134,16 @@ func findDu(cfg config, args []string) error {
 	if agentID == "" || dir == "" {
 		return fmt.Errorf("用法: go-rmm find du -a <agent> <dir>")
 	}
-	cmd := fmt.Sprintf("@{Name='%s'; SizeMB=[math]::Round((Get-ChildItem '%s' -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum/1MB,1)} | Format-Table -AutoSize | Out-String", dir, dir)
-	stdout, err := runOpsTask(cfg, agentID, cmd, 30)
+	// 平台感知:Linux 走 du -sh,Windows 走 Measure-Object
+	var stdout string
+	var err error
+	if isLinuxAgent(cfg, agentID) {
+		stdout, err = runOpsScript(cfg, agentID, fmt.Sprintf("du -sh '%s' 2>/dev/null", dir), 30)
+	} else {
+		stdout, err = runOpsTask(cfg, agentID, fmt.Sprintf("@{Name='%s'; SizeMB=[math]::Round((Get-ChildItem '%s' -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum/1MB,1)} | Format-Table -AutoSize | Out-String", dir, dir), 30)
+	}
 	if err != nil {
-		cmd = fmt.Sprintf("du -sh '%s' 2>/dev/null", dir)
-		stdout, err = runOpsTask(cfg, agentID, cmd, 30)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 	fmt.Println(stdout)
 	return nil
