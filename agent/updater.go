@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -193,9 +194,20 @@ func (e *UpdateExecutor) execUpdate(payload []byte) proto.TaskResult {
 		os.Remove(updatePendingMarkerPath())
 		return proto.TaskResult{Success: false, Error: "备份当前 exe→.bak 失败: " + err.Error()}
 	}
+	// Windows:运行中的 exe 可被移走(rename),但不可被顶名替换——目标路径
+	// 被进程映射时 MoveFile 返回 Access denied(2026-08-18 生产实证)。
+	// 两步走:先把运行中 exe 移到 .old-running,再把新二进制 rename 进空位;
+	// 残留的 .old-running 由下次启动清理(旧进程死后才可删)。
+	oldRunning := currentExe + ".old-running"
+	os.Remove(oldRunning)
+	if err := os.Rename(currentExe, oldRunning); err != nil {
+		os.Remove(updatePendingMarkerPath())
+		return proto.TaskResult{Success: false, Error: "移走运行中 exe 失败(新旧版本均未受影响): " + err.Error()}
+	}
 	if err := os.Rename(binaryPath, currentExe); err != nil {
-		os.Remove(updatePendingMarkerPath()) // 旧 exe 仍在原位,无需恢复
-		return proto.TaskResult{Success: false, Error: "rename .new→exe 失败(旧版本未受影响): " + err.Error()}
+		os.Rename(oldRunning, currentExe) // 回滚:旧 exe 归位
+		os.Remove(updatePendingMarkerPath())
+		return proto.TaskResult{Success: false, Error: "rename .new→exe 失败(已回滚旧版本原位): " + err.Error()}
 	}
 
 	// 8. 标记重启(主循环检测后退出,SCM 自动拉新版本)
@@ -220,4 +232,14 @@ func copyFile(src, dst string) error {
 // jsonUnmarshalUpdate 辅助:JSON 反序列化。
 func jsonUnmarshalUpdate(payload []byte, v any) error {
 	return json.Unmarshal(payload, v)
+}
+
+// cleanupOldRunning 清理自更新两步 rename 遗留的 .old-running 文件。
+// 运行中的 exe 不能删除,须等旧进程退出(即下次启动)后才能删。
+func cleanupOldRunning() {
+	if exe, err := os.Executable(); err == nil {
+		if err := os.Remove(exe + ".old-running"); err == nil {
+			log.Printf("[agent] 已清理自更新残留 %s.old-running", filepath.Base(exe))
+		}
+	}
 }

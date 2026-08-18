@@ -60,6 +60,7 @@ func mtlsHTTPClient(certs *AgentCerts) *http.Client {
 // 阻塞直到 ctx 取消。断线自动指数退避重连（1s→2s→…→30s 封顶）。
 func (a *Agent) Run(ctx context.Context) error {
 	agentBizID = a.cfg.AgentID
+	cleanupOldRunning() // 自更新两步 rename 的残留清理(旧进程死后才可删)
 	// P2-10:本地 Prometheus 指标端点(127.0.0.1:7781,metrics_addr 可改/off 禁用)
 	SetActiveSessionsSource(transfers.ActiveSessions)
 	if addr := a.cfg.MetricsAddr; addr != "off" {
