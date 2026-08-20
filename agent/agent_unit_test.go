@@ -123,8 +123,8 @@ func TestParseSemver(t *testing.T) {
 		{"v1.2.3", 1, 2, 3},
 		{"2.0.10", 2, 0, 10},
 		{"v0.1.0", 0, 1, 0},
-		{"v4.5.5-c9c48bc", 4, 5, 5},              // 预发布后缀的数字不累进主版本
-		{"v4.3.6-hotfix.20260811.5", 4, 3, 6},    // 复合 hotfix 后缀同理
+		{"v4.5.5-c9c48bc", 4, 5, 5},           // 预发布后缀的数字不累进主版本
+		{"v4.3.6-hotfix.20260811.5", 4, 3, 6}, // 复合 hotfix 后缀同理
 	}
 	for _, tt := range tests {
 		got := parseSemver(tt.input)
