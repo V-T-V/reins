@@ -217,8 +217,6 @@ func TestRevokeAgentAPI(t *testing.T) {
 	}
 }
 
-
-
 // TestRejectsCertFromOtherCA 验证非本 CA 签发的证书校验失败。
 // 攻击者自带 CA 签发的证书不应被信任。
 func TestRejectsCertFromOtherCA(t *testing.T) {

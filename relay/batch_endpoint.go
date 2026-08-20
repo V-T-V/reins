@@ -214,17 +214,17 @@ func (r *Relay) gcBatches() {
 func batchStatusView(tb *trackedBatch) map[string]any {
 	snap := tb.progress.Snapshot()
 	out := map[string]any{
-		"batch_id":  snap.BatchID,
-		"total":     snap.Total,
+		"batch_id":   snap.BatchID,
+		"total":      snap.Total,
 		"dispatched": snap.Dispatched,
-		"succeeded": snap.Succeeded,
-		"failed":    snap.Failed,
-		"pending":   snap.Pending,
-		"done":      snap.Done,
-		"percent":   snap.Percent,
+		"succeeded":  snap.Succeeded,
+		"failed":     snap.Failed,
+		"pending":    snap.Pending,
+		"done":       snap.Done,
+		"percent":    snap.Percent,
 		"elapsed_ms": snap.Elapsed,
-		"eta_ms":    snap.ETA,
-		"states":    snap.States,
+		"eta_ms":     snap.ETA,
+		"states":     snap.States,
 	}
 	select {
 	case <-tb.done:
