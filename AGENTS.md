@@ -2,7 +2,7 @@
 
 ## 项目内容(What)
 
-Go 实现的**企业级零信任远程访问平台**(v4.3.3)——通过反向 WebSocket 中继,让 CLI / Web 控制台远程驱动 Agent 执行全维度运维操作。对标 Teleport / Tailscale。
+Go 实现的**企业级零信任远程访问平台**(v4.4.0)——通过反向 WebSocket 中继,让 CLI / Web 控制台远程驱动 Agent 执行全维度运维操作。对标 Teleport / Tailscale。
 
 ### 三组件架构
 
@@ -49,7 +49,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
-- **成功标准**:169 Go 文件 / 31.8K 行 / 404 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10)。
+- **成功标准**:216 Go 文件 / 39.5K 行 / 454 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10 + 2026-09-03 rules 门禁冒烟)。
 
 ## 架构假设(4 项显式假设)
 
@@ -58,7 +58,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 3. **PowerShell 为 Windows 核心执行器**:-EncodedCommand(UTF16LE),命令策略黑名单 + Agent 侧二次校验。
 4. **bbolt 单文件为默认持久化**:Redis 后端可选(TaskStore interface 切换)。
 
-## 项目结构(v4.3.3)
+## 项目结构(v4.4.0)
 
 ```
 go-rmm/
@@ -104,6 +104,8 @@ go-rmm/
 │   ├── main.go         # 路由 + task/file/shell + printUsage
 │   ├── commands.go     # status/cron/agent revoke/enroll/task batch
 │   ├── deploy.go       # deploy playbook 引擎
+│   ├── deploy_init.go  # deploy init 模板生成器(basic/zip-node 会话验证模式) [v4.4.0]
+│   ├── rules.go        # rules read 命令 + rules_ack 解析/缓存/本地 .go-rmm 加载 [v4.4.0]
 │   ├── tunnel.go       # CLI 隧道(-L 端口转发)
 │   ├── update.go       # CLI update(upload/list/push/rollback)
 │   ├── ops.go          # sysinfo/service/proc/power/monitor(TUI)
@@ -121,6 +123,7 @@ go-rmm/
 ├── client/             # Go SDK(第三方可 import)
 ├── proto/              # 协议层(Envelope + 30 消息 + 二进制帧 + tunnel)
 ├── executors/          # 执行器(powershell/script/file/screenshot/browse/guiclick/power/monitor)
+│   └── rulesgate.go    # 项目规则门禁:.go-rmm/rules.md 发现+指纹+Dispatch 校验 [v4.4.0]
 ├── console/            # Web 控制台(反向代理 + 内嵌前端)
 ├── deploy/             # 部署配置(Helm/OpenAPI/systemd)
 ├── Dockerfile.relay    # Relay Docker 镜像
@@ -131,16 +134,16 @@ go-rmm/
 └── Makefile            # 世界级构建系统(15 targets)
 ```
 
-## 指标(v4.3.3)
+## 指标(v4.4.0)
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 169 |
-| 代码行 | 31,800+ |
+| Go 文件 | 216 |
+| 代码行 | 39,500+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 404 |
+| 测试用例 | 454 |
 | 基准测试 | 22 |
-| CLI 命令 | 51 |
+| CLI 命令 | 52 |
 | API 端点 | 45 |
 | 任务类型 | 9 |
 | 基础设施产物 | 10+(Docker×2/Helm/OpenAPI/goreleaser/CI/systemd/golangci) |
@@ -148,7 +151,7 @@ go-rmm/
 
 ---
 
-## 模块完成度(v4.3.3)
+## 模块完成度(v4.4.0)
 
 每个核心包的功能完成度与成熟度。✅ 生产就绪 / 🟡 骨架/接口先行 / ⏳ 预留未实现。
 
@@ -180,25 +183,28 @@ go-rmm/
 
 ---
 
-## 测试覆盖(v4.3.3)
+## 测试覆盖(v4.4.0)
 
-404 测试 + 22 基准。按包分布与重点验证场景:
+454 测试 + 22 基准。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
-| **relay** | 198 | 60 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10] |
-| **agent** | 59 | 32 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9] |
-| **executors** | 40 | 24 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控 |
+| **relay** | 204 | 62 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10] |
+| **agent** | 71 | 32 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9] |
+| **executors** | 57 | 25 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控;rules 门禁(发现去重/指纹组合/Dispatcher 校验/op=rules/变更失效闭环)[v4.4.0] |
 | **proto** | 44 | 9 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
+| **internal/wsx** | 5 | 1 | 优先级写引擎(P0 控制帧不被 P1 数据饿死——阻塞 socket 写+积压构造确定性验证/写错误经 Done 回传/ctx 取消与调用方超时契约/Start 幂等)[2026-09-12]
 | **client** | 18 | 9 | SDK 方法/流式/工具发现 |
 | **console** | 14 | 4 | 反向代理/事件转发 |
-| **cmd** | 12 | 28 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3 新增测试] |
+| **cmd** | 18 | 30 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3];rules read E2E/ack 缓存/-s 防呆/deploy 模板[v4.4.0] |
 
 **深度测试(rounds 1-10)**:round 1 修复 `TestMultiAgentRoutingE2E` 永久失败;rounds 2-7 逐层加深(relay 路由 → 执行器 → console → mTLS → 审计 → 多租户);round 8 覆盖批量分发不变量(并发投递/聚合/退避重试/幂等/ctx 取消/进度状态机);rounds 9-10 工作区深度推进——补 SecretStore/ScriptLibrary/buffer_pool/rQueue/Envelope 等弱测模块,修复空闲 Agent 掉线循环(S7 heartbeat_ack)、脚本库路径穿越漏洞、Prom 指标前缀 typo、审计写盘静默丢记录。
 
 **并发安全**:批量进度跟踪用 `sync.RWMutex` 保护,`markRunning/markSucceeded/markFailed` 与并发 `Snapshot()` 线程安全(race 检测需 cgo/gcc,本机未启用,靠互斥锁设计保证)。
 
 **测试运行**:`go test ./... -count=1`(单 relay 包约 10s)。基准:`go test ./relay/ -bench=.`(22 项)。
+
+**测试密度补强(2026-09-12)**:internal/wsx 从零测试到 5 项(优先级写引擎核心语义);relay 补 scheduler_smart 负载均衡/标签过滤/端点与 update_repo 版本仓库 13 项。**逮住真 bug**:`UpdateRepo.List` 版本排序用纯字典序——`v2.0.0 > v10.0.0`,"最新在前"承诺被违反(上传 v10 后 CLI 列表仍把 v2 当最新);修复为数值感知比较(compareVersions,数字段按数值比,时间戳自动版本天然兼容)。
 
 ---
 
@@ -207,6 +213,14 @@ go-rmm/
 按优先级排序的演进方向:
 
 ### P0 — 生产硬化
+
+**已完成(v4.4.0, 2026-09-03, sess_610cef8e loan-kiosk 部署会话复盘)**:
+- ✅ **项目规则门禁(.go-rmm/rules.md)全链路**:被部署项目在项目根放 `.go-rmm/rules.md` 写定制运维规则(勿营业时段杀壳/部署排除表/重启走哪个 cmdlet 等),AI/自动化操作前必须先加载——把"部署会话里人肉反复交代的注意事项"变成机器可执行的约束。四层实现:① `proto.TaskRequest.RulesAck` 字段(relay 结构体 re-marshal 全链路透传,含持久化重投);② `executors/rulesgate.go`——发现(allowed_roots+workspace 深度 2,跳系统目录,30s TTL 缓存)+指纹(SHA256 前 16 hex,单文件=自身/多文件=组合;门禁接受组合或任一单项目指纹——AI 读了本项目规则即可操作,不被同机其他项目卡死)+`Dispatcher.Dispatch` 校验(与命令策略同为 Agent 侧最后防线;拒绝信息**不回显指纹**防跳过阅读直接重放);③ file 任务新 op=`rules`(rules read 后端,指定 -p 目录或自动发现,FilePolicy 越界拒绝);④ CLI `rules read`(读全文+缓存 ack 到用户缓存目录)+ `task run/stream/exec/deploy` 自动携带(本地 CWD 有 `.go-rmm/rules.md` 时规则全文打 stderr 进 AI 上下文+本地指纹为 ack;显式 `--rules-ack` 优先;`--no-rules` 跳过)。豁免 file/screenshot/monitor(读规则必经+只读观测,防鸡生蛋)。Agent config `rules_gate: true` 开启,默认关(向后兼容)。
+- ✅ **真二进制三组件端到端实证**(relay+agent 前台真跑,Windows):①未读规则执行被拒(错误指引 rules read)→②rules read 打印全文+缓存 ack→③重试自动携带通过→④改规则文件→旧 ack 被拒(TTL 30s 后)→⑤重读新 ack 通过→⑥CLI 在项目目录内操作时本地规则自动打印到 stderr+本地 ack 通过。冒烟现场逮住并修复**多根交叉发现重复 bug**(allowed_roots 的 projects 根与自动追加的 exeDir 以深度 2 覆盖同一 .go-rmm,发现结果只对根去重没对文件去重——文件级去重后 ack 组合才稳定)。
+- ✅ **file 任务 AllowedRoots 装配断线修复**:config 注释承诺 allowed_roots "file 任务+大文件传输共用",实际只接线了传输引擎(transfers sharedPolicy),RegisterAll 构造的 FileExecutor AllowedRoots 恒空=所有 file 任务 fail-closed 拒绝。现 `Options.AllowedRoots` 注入+`resolveAllowedRoots` 纯函数三态(显式>整盘兜底>nil),file 任务/流式传输/规则发现三个消费方同源。
+- ✅ **部署会话痛点四连修**:①cmdpolicy hints 补齐——`schtasks /create` 指引 Register-ScheduledTask(-LogonType Interactive 落桌面会话)、`Stop-Computer`/`Restart-Computer -Force` 指引 `go-rmm power shutdown/restart`(平台原生通道+标签白名单+审计),全部是会话里被拦后手工摸索出的正解;②`-s` 路径防呆——参数是路径形态(盘符/根/点斜杠前缀+单行)但 os.Stat 失败时硬错误,不再把整条路径字符串当脚本文本发远端吃 ParserError(Temp 被清理场景);③deploy PlayStep `timeout` 字段(exec 默认 60s/script 120s 可覆盖——npm install 常超 60s 被中途杀树);④`deploy init <name> [--template basic|zip-node]` 模板生成——zip-node 固化会话验证 5 轮的部署模式(robocopy 退出码 0-7 归一化/npmmirror/排除表/Restart-ScheduledTask/健康检查 retry),`reorderInitArgs` 处理 Go flag 在位置参数后停止解析的坑(`deploy init myapp --force` 的 --force 会被静默吞)。
+- 测试 +18(rulesgate 7/CLI rules 9/hints 1/roots 1,含规则变更失效闭环与 httptest E2E),全量 `go test ./...` 12 包全绿,linux/darwin 跨平台编译门禁通过。
+
 1. **水平扩展验证**:Agent 故障切换 E2E ✅(2026-08-19)——TestAgentFailoverBetweenRelays(双 fakeRelay:主注册→宕机→1s 退避切备用→稳定无抖动)+ TestBuildRelayCandidates(W1 候选去重/主优先);顺带修 Heartbeat 零值 NewTicker panic 兜底。Redis 三层联邦(Store/EventBus)实测仍待环境(本机无 Docker/Redis)。
 
 **已完成(rounds 9-10,工作区深度推进)**:
@@ -227,6 +241,7 @@ go-rmm/
 - ✅ **命令策略白名单**(2026-08-18,原 P1-6):`cmdpolicy.Policy` 增 `SetAllowlist`(正则,自动 `(?i)`)——非空时 allow-only **交集语义**(须命中白名单且不碰黑名单;白名单写宽如 `^Get-` 也有 NTUSER.DAT/凭据导出等黑名单兜底)。配置入口:Relay `-policy-allow` flag / `GO_RMM_POLICY_ALLOW` env(逗号分隔),Agent config `policy_allow` 数组(Dispatcher.SetAllowlist,Agent 强制底线即使 Relay 被绕过也生效);非法正则启动 fail-fast。EncodedCommand 拦截错误附 script 任务(`-s` 本地脚本文件)指引——使用会话实证用户手动 `-EncodedCommand` 规避转义被拦后无从知晓正解。默认不配置 = 纯黑名单,行为不变。
 - ✅ **批量分发端点化**(2026-08-18,原 P0-1):round 8 的 BatchDispatcher 引擎(一对多/聚合/指数退避重试/实时进度)此前仅测试在用,现暴露为异步 REST:`POST /api/batch`(202 返回 batch_id,鉴权+命令策略校验+tag 匹配与 tasks/batch 同款)/`GET /api/batch/{id}`(进度快照:总/成/败/待/百分比/ETA/各目标状态)/`GET /api/batch/{id}/progress`(SSE 每秒推送,终态发 done 事件含成功率)。引擎拆出可注入 progress 的 `dispatchWithRetryTracked` 主体——goroutine 启动前查询端点即持有跟踪器;批次注册表 `sync.Map` + 完成后 1h TTL 懒清理。CLI 新增 `batch start/status/watch`(-o json 兼容)。同步版 `POST /api/tasks/batch` 保留(轻量场景)。
 - ✅ **update 能力注册 + online_since 补齐**(2026-08-18 部署实战暴露):①`updateExecutor` 类型存在但注册代码在灾难重建时丢失——Agent caps 恒不含 update,Relay 能力校验拒收 `task run -t update`,自更新通道被自己的校验锁死(鸡生蛋)。现 slave(含未配置 role)注册,master 不注册(主永不更新);②`/api/agents` 漏填 `online_since`(Registry 私有 `registeredAt` 未输出,CLI "在线自"恒显"—"),补 `Registry.OnlineSince`。
+- ✅ **一行部署无脑化(2026-08-25)**:`/install.ps1` 从静态文件改为动态模板——Relay 服务脚本时把 ExternalURL(或请求 Host/X-Forwarded-Proto 推导)烘焙进默认值,目标机器 `iex (irm ...)` 零参数全自动(免交互/非管理员自动 UAC 提权重跑/401 自动探测 Token 补问/装完轮询 /api/agents 确认上线);bootstrap 一行命令与 Web 控制台安装引导同步简化;另增 `-install-token` 部署专用 Token——服务时烘焙进脚本使 Token 也零传递,权限收窄为 Agent 注册 + GET /api/agents(其余 REST 401),主 Token 绝不烘焙。编码契约(PS 5.1 双坑实测):响应保留 UTF-8 BOM(无 BOM 文件被 PS 5.1 按 ANSI 误读,UTF-8 中文多字节会吃掉引号致解析崩溃),一行命令统一双保险去 BOM——先 `-replace '^FEFF'` 再 `-replace '^00EF00BB00BF'`(案例:nginx 静态服务 .ps1 无 charset 时 PS 5.1 irm 按 Latin-1 解码,BOM 变 ï»¿ 糊在第 1 行注释前→幻影命令→param() 不再是首语句报"赋值表达式无效";实测线上 203.0.113.99 即此故障,`/rmm/install.ps1` 被 nginx 直接静态服务(Content-Type: application/x-powershell 无 charset)且为旧版副本,须反代到 Relay 或加 charset utf-8)
 
 ### P1 — 能力补全
 4. **Linux Agent**:补齐 Linux 执行器(systemd 服务/包管理/journalctl),打通跨平台。
@@ -241,6 +256,11 @@ go-rmm/
 12. ~~Relay 速率限制~~:✅ 已完成(实现点修正为 Agent 发送侧,更贴近痛点)——`transfer_rate_limit_mb` config(MB/s,0=不限)→ TransferEngine 发送前令牌桶节流(手写零依赖,突发额度 1s 满速,ctx 取消即返);防并发下载吃满 Agent 上行挤死心跳 WS。
 
 ---
+
+## 已知坑位(踩坑实录)
+
+- **Windows 下 Git Bash 直跑 go-rmm.exe 偶发 0xC0000142 崩溃(2026-08-31,sess_610cef8e)**:症状为进程零输出直接退出,退出码 3221225794(=0xC0000142 STATUS_DLL_INIT_FAILED),`agent list`/`task run` 全崩,sleep 8 重试无效,次日自愈。**非代码缺陷**——该 exe 静态导入仅 kernel32.dll,崩溃发生在 loader 阶段(Go runtime 尚未启动),同一二进制(8/19 构建)前后均正常;定位为系统环境瞬态故障(desktop heap/会话资源耗尽或 AV 注入 DLL 初始化失败一类,当日机器同时出现文件被其他进程锁定、`rm: Device or resource busy` 等高负载征兆)。**规避**:`powershell -NoProfile -Command "& 'D:\...\go-rmm.exe' <args>"` 包装调用(换了一条进程创建路径,当日实证恢复;注意时间自愈与包装效果的混杂,下次复现时先做三方对照再下结论)。**复现时的三步定位法**:① 同一 bash 里试 `cmd //c go-rmm.exe version` 和 powershell 包装——隔离"Git Bash 创建进程特有"vs"系统级";② 试 `cmd //c ver`/`ping -n 1 127.0.0.1`——若同样 0xC0000142 则是系统级(desktop heap/AV),与 go-rmm 无关;③ 查事件查看器 Application 日志 0xC0000142 记录与 Defender 操作日志。**连带坑**:`-s` 参数语义是"本地文件路径,os.Stat 失败则原样当脚本内容发远端"(`cmd/go-rmm/main.go` uniqueNano 附近),PowerShell 里路径须用反斜杠;Temp 日期切换会清脚本,用前先 `ls` 确认存在。
+- **退出码 1 ≠ CLI 崩溃**:输出含「任务结果 成功: false / 退出码: 1 / 耗时」+ `go-rmm: 任务执行失败` → 是远端脚本失败(常见为内嵌 JS 双引号/`$` 未转义的 ParserError,stderr 可能 GBK 乱码"锟斤拷"),go-rmm 进程本身正常;无结果块且本地零输出退出才是 CLI 自身问题。远端脚本含引号/`$` 用 here-string `@'...'@` 或 base64;中文关键词用 `[char]0x8D37` 构造防编码损坏。
 
 ## 进入子项目前先读
 

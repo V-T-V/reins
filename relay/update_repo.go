@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,11 +70,64 @@ func (r *UpdateRepo) List() []VersionInfo {
 			CreatedAt: info.ModTime().UnixMilli(),
 		})
 	}
-	// 按版本降序(最新在前)
+	// 按版本降序(最新在前)——数值感知:v10.0.0 > v2.0.0。
+	// 纯字典序会把 v10 排在 v2 之前(测试 TestUpdateRepoList 逮住)。
 	sort.Slice(infos, func(i, j int) bool {
-		return infos[i].Version > infos[j].Version
+		return compareVersions(infos[i].Version, infos[j].Version) > 0
 	})
 	return infos
+}
+
+// compareVersions 数值感知的版本比较(a>b 返回 1,a<b 返回 -1,相等 0)。
+// 按非数字字符切分段,数字段按数值比("10">"2"),非数字段按字典序;
+// 自动生成的 "v20060102-150405" 时间戳版本天然兼容(等宽数字段)。
+func compareVersions(a, b string) int {
+	as := splitVersionFields(a)
+	bs := splitVersionFields(b)
+	n := len(as)
+	if len(bs) > n {
+		n = len(bs)
+	}
+	for i := 0; i < n; i++ {
+		var av, bv string
+		if i < len(as) {
+			av = as[i]
+		}
+		if i < len(bs) {
+			bv = bs[i]
+		}
+		ai, aerr := strconvAtoi(av)
+		bi, berr := strconvAtoi(bv)
+		if aerr == nil && berr == nil {
+			if ai != bi {
+				if ai > bi {
+					return 1
+				}
+				return -1
+			}
+			continue
+		}
+		if av != bv {
+			if av > bv {
+				return 1
+			}
+			return -1
+		}
+	}
+	return 0
+}
+
+// splitVersionFields 把版本串按非数字字符切成字段(v1.2.0 → [1 2 0])。
+func splitVersionFields(v string) []string {
+	return strings.FieldsFunc(v, func(r rune) bool { return r < '0' || r > '9' })
+}
+
+// strconvAtoi 包装 strconv.Atoi(空串返回错误)。
+func strconvAtoi(s string) (int, error) {
+	if s == "" {
+		return 0, fmt.Errorf("empty")
+	}
+	return strconv.Atoi(s)
 }
 
 // readSHA 读版本对应的 .sha256 文件。
