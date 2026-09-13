@@ -112,6 +112,8 @@ func run(args []string) error {
 		return cmdAgent(cfg, posArgs[1:])
 	case "task":
 		return cmdTask(cfg, posArgs[1:])
+	case "rules":
+		return cmdRules(cfg, posArgs[1:])
 	case "batch":
 		return cmdBatch(cfg, posArgs[1:])
 	case "file":
@@ -342,6 +344,8 @@ func taskRun(cfg config, args []string) error {
 	timeout := fs.Int("timeout", 60, "任务超时秒数(超时后 Agent 杀整棵进程树)")
 	idemKey := fs.String("idem", "", "幂等键(防重复执行,默认按内容自动生成)")
 	noWait := fs.Bool("no-wait", false, "不等待结果,只返回 task_id")
+	rulesAck := fs.String("rules-ack", "", "项目规则回执(Agent 开启 rules_gate 时必须;默认自动:本地 .go-rmm/rules.md 或 rules read 缓存)")
+	noRules := fs.Bool("no-rules", false, "跳过本地 .go-rmm/rules.md 自动加载(远端门禁仍会校验)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -372,13 +376,20 @@ func taskRun(cfg config, args []string) error {
 	}
 
 	taskID := "cli-" + *taskType + "-" + fmt.Sprint(time.Now().UnixMilli())
-	body := proto.TaskRequest{
+	// 项目规则 ack:显式 > 本地 .go-rmm/rules.md(打印全文,AI 上下文可见)>
+	// rules read 缓存。--no-rules 仅跳过自动来源,显式 --rules-ack 仍生效。
+	ack := *rulesAck
+	if !*noRules {
+		ack = resolveRulesAck(*agentID, *rulesAck, true)
+	}
+	body := taskSubmitBody{
 		TaskID:         taskID,
 		Type:           *taskType,
 		AgentID:        *agentID,
 		Payload:        payload,
 		Timeout:        *timeout,
 		IdempotencyKey: *idemKey,
+		RulesAck:       ack,
 	}
 
 	var resp struct {
@@ -501,6 +512,13 @@ func buildPayload(taskType, command, script, payloadFile string) (json.RawMessag
 				return nil, fmt.Errorf("读取脚本文件失败: %w", err)
 			}
 			content = string(data)
+		} else if looksLikeLocalPath(script) {
+			// 防呆:参数是路径形态但文件不存在(打错/Temp 被清理),原语义
+			// 会把整条路径字符串当脚本文本发到远端,PowerShell 报 ParserError
+			// 才发现(2026-08-31 loan-kiosk 会话实证)。硬错误就地拦截。
+			return nil, fmt.Errorf("-s 看起来是本地文件路径但文件不存在: %q\n"+
+				"  检查:路径是否打错/Temp 脚本已被系统清理需重建;\n"+
+				"  若确要执行字面脚本内容,内容不应以盘符/斜杠/.\\/ 开头", script)
 		}
 		lang := "ps1"
 		if strings.HasSuffix(script, ".bat") || strings.HasSuffix(script, ".cmd") {
@@ -511,6 +529,27 @@ func buildPayload(taskType, command, script, payloadFile string) (json.RawMessag
 	default:
 		return nil, fmt.Errorf("任务类型 %s 需要 -f <payload.json> 提供完整 JSON", taskType)
 	}
+}
+
+// looksLikeLocalPath 判断 -s 参数是否"整体长得像本地文件路径":
+// 单行且以 盘符:\ / .\ ..\ 等路径前缀开头。多行内容(真脚本文本)
+// 天然不命中;Write-Host "C:\x" 之类命令也不命中(不以路径前缀开头)。
+func looksLikeLocalPath(s string) bool {
+	if s == "" || strings.ContainsAny(s, "\n\r") || len(s) > 1024 {
+		return false
+	}
+	if len(s) >= 3 && s[1] == ':' && (s[2] == '\\' || s[2] == '/') {
+		return true // C:\ / C:/
+	}
+	if s[0] == '\\' || s[0] == '/' {
+		return true // \server\share / /unix/abs
+	}
+	for _, p := range []string{"./", ".\\", "../", "..\\"} {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // waitResult 轮询任务状态直到完成/失败/取消/超时/中断。
@@ -1695,6 +1734,8 @@ func printUsage() {
   deploy batch <pb.json> --tag <t> 多 Agent 并行部署
   workflow run <wf.json>         多步编排(条件+变量提取+on_failure)
   shell open -a <agent>          交互式终端(录屏归档)
+  rules read -a <agent> [-p dir] 加载被部署项目的 .go-rmm/rules.md 规则
+                                 (AI/自动化操作前必须先读;ack 自动缓存)
 
 ══════════════════════════════════════════════
  传输 (Transfer)

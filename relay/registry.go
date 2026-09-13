@@ -210,21 +210,37 @@ func (r *Registry) Sweep(timeout time.Duration) []string {
 
 // IncInFlight/DecInFlight/InFlight:在途任务计数(H2,供 SelectBestAgent O(1) 读)。
 func (r *Registry) IncInFlight(agentID string) {
-	r.mu.RLock(); e := r.agents[agentID]; r.mu.RUnlock()
-	if e != nil { e.inFlight.Add(1) }
+	r.mu.RLock()
+	e := r.agents[agentID]
+	r.mu.RUnlock()
+	if e != nil {
+		e.inFlight.Add(1)
+	}
 }
 func (r *Registry) DecInFlight(agentID string) {
-	r.mu.RLock(); e := r.agents[agentID]; r.mu.RUnlock()
-	if e == nil { return }
+	r.mu.RLock()
+	e := r.agents[agentID]
+	r.mu.RUnlock()
+	if e == nil {
+		return
+	}
 	// H-3:CAS 下限钳 0(防 cancel后result/重连清零后旧任务 Dec 致负漂移)
 	for {
 		old := e.inFlight.Load()
-		if old <= 0 { return }
-		if e.inFlight.CompareAndSwap(old, old-1) { return }
+		if old <= 0 {
+			return
+		}
+		if e.inFlight.CompareAndSwap(old, old-1) {
+			return
+		}
 	}
 }
 func (r *Registry) InFlight(agentID string) int64 {
-	r.mu.RLock(); e := r.agents[agentID]; r.mu.RUnlock()
-	if e == nil { return 0 }
+	r.mu.RLock()
+	e := r.agents[agentID]
+	r.mu.RUnlock()
+	if e == nil {
+		return 0
+	}
 	return e.inFlight.Load()
 }

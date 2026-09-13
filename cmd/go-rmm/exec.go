@@ -151,15 +151,11 @@ type execResult struct {
 // execOnAgent 在单个 Agent 上执行任务并等待结果。
 func execOnAgent(cfg config, agentID, taskType string, payload json.RawMessage, timeout int) *execResult {
 	taskID := "exec-" + agentID + "-" + fmt.Sprint(time.Now().UnixNano())
-	body := struct {
-		TaskID  string          `json:"task_id"`
-		Type    string          `json:"type"`
-		AgentID string          `json:"agent_id"`
-		Payload json.RawMessage `json:"payload"`
-		Timeout int             `json:"timeout"`
-	}{
+	body := taskSubmitBody{
 		TaskID: taskID, Type: taskType, AgentID: agentID,
 		Payload: payload, Timeout: timeout,
+		// 多目标场景静默携带缓存的规则 ack(单目标打印由 task run/deploy 承担)
+		RulesAck: resolveRulesAck(agentID, "", false),
 	}
 	var resp struct {
 		TaskID string `json:"task_id"`

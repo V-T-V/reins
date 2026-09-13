@@ -46,6 +46,14 @@ type Config struct {
 	// 命令必须命中至少一条规则,且仍受黑名单兜底(交集语义)。
 	// Agent 是强制底线——即使 Relay 被绕过(交互式 shell/cron)也生效。
 	PolicyAllow []string `json:"policy_allow,omitempty"`
+	// RulesGate 项目规则门禁(默认 false)。开启后,变更类任务(powershell/
+	// script/browse/guiclick/update/power)必须携带与当前 .go-rmm/rules.md
+	// 内容一致的 rules_ack 才执行——AI/自动化运维须先 `go-rmm rules read`
+	// 加载被部署项目的定制规则(如"勿在营业时段杀壳"/"部署排除目录"),
+	// 规则文件变更后旧 ack 失效。发现范围=allowed_roots+workspace(深度 2)。
+	// 没有任何规则文件时不拦截(未写规则的项目零影响);file/screenshot/
+	// monitor 豁免(读规则与只读观测通道)。
+	RulesGate bool `json:"rules_gate,omitempty"`
 	// MetricsAddr 本地 Prometheus 指标端点监听地址(P2-10)。
 	// 空默认 127.0.0.1:7781(仅本机回环,不暴露公网);"off" 禁用。
 	MetricsAddr string `json:"metrics_addr,omitempty"`

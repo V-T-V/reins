@@ -44,6 +44,10 @@ type Dispatcher struct {
 	// commandPolicy 命令策略(nil 时用默认策略)。
 	// 由 SetCommandPolicy 注入;Dispatch 前强制校验。
 	commandPolicy *CommandPolicy
+	// rulesGate 项目规则门禁(nil 或 Enabled=false 时不拦截)。
+	// 由 SetRulesGate 注入;变更类任务须携带与当前 .go-rmm/rules.md
+	// 一致的 rules_ack。与命令策略同属 Agent 侧最后防线。
+	rulesGate *RulesGate
 }
 
 // New 构造空的 Dispatcher,默认启用 DefaultCommandPolicy。
@@ -72,6 +76,15 @@ func (d *Dispatcher) SetAllowlist(patterns []string) error {
 		return errors.New("命令策略已禁用,无法设置白名单")
 	}
 	return policy.SetAllowlist(patterns)
+}
+
+// SetRulesGate 注入项目规则门禁(nil 禁用)。
+// Agent 启动时按 config.rules_gate 注入;变更类任务(powershell/script/
+// browse/guiclick/update/power)须携带当前规则的 rules_ack。
+func (d *Dispatcher) SetRulesGate(gate *RulesGate) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.rulesGate = gate
 }
 
 // Register 注册一个执行器。重复注册同一类型会覆盖（便于测试替换）。
@@ -108,6 +121,22 @@ func (d *Dispatcher) Dispatch(ctx context.Context, task proto.TaskRequest, progr
 				TaskID:  task.TaskID,
 				Success: false,
 				Error:   "Agent 侧策略拒绝: " + err.Error(),
+			}
+		}
+	}
+
+	// 项目规则门禁:变更类任务须携带当前 .go-rmm/rules.md 的 ack。
+	// 与命令策略同为 Agent 侧防线——即使 Relay 被绕过也生效。
+	// 校验在锁外执行(snapshot 有自己的锁,且可能做目录扫描)。
+	d.mu.RLock()
+	gate := d.rulesGate
+	d.mu.RUnlock()
+	if gate != nil {
+		if err := gate.Check(task.Type, task.RulesAck); err != nil {
+			return proto.TaskResult{
+				TaskID:  task.TaskID,
+				Success: false,
+				Error:   err.Error(),
 			}
 		}
 	}

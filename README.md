@@ -23,6 +23,7 @@
 - [安全](#安全)
 - [多租户与 RBAC](#多租户与-rbac)
 - [批量任务分发](#批量任务分发)
+- [项目规则门禁(.go-rmm/rules.md)](#项目规则门禁go-rmmrulesmd)
 - [API](#api)
 - [AI Agent 接入](#ai-agent-接入)
 - [指标](#指标)
@@ -375,6 +376,59 @@ go-rmm file download -a <agent> --concurrency 8 <remote> <local>
 
 ---
 
+## 项目规则门禁(.go-rmm/rules.md)
+
+被部署项目可在**项目根**放 `.go-rmm/rules.md` 写定制运维规则——AI/自动化用 go-rmm 操作该项目前必须先加载规则并遵守。规则随项目仓库走,部署同步到远端。
+
+### 规则文件示例
+
+```markdown
+# loan-kiosk-platform 运维规则
+
+1. 勿在营业时段(9:00-18:00)杀壳进程 YxLoan.exe——用户可能正在使用
+2. 部署镜像同步必须排除 runtime/ node_modules/ .env(远端运行态数据)
+3. 重启壳用 Register-ScheduledTask(-LogonType Interactive 落桌面会话),
+   不要用 schtasks /create(被命令策略拦截)
+4. 健康检查 http://localhost:3100/health 连续 3 次通过才算部署成功
+5. 中文关键词经命令传输会乱码,用 [char]0x8D39 构造
+```
+
+### 工作流(AI 视角)
+
+```bash
+# ① 加载规则:读全文 + 自动缓存 ack(规则内容指纹)
+go-rmm rules read -a agent-xxx            # 自动发现全部规则
+go-rmm rules read -a agent-xxx -p D:\proj # 只读指定项目
+
+# ② 操作:task run / exec / deploy 自动携带缓存的 ack
+go-rmm task run -a agent-xxx -c "..."     # 上一步的 ack 已自动附上
+
+# ③ 规则变更 → 旧 ack 失效,任务被拒并指引重新 read(强制读新规则)
+```
+
+### 机制分层
+
+| 层 | 行为 | 生效条件 |
+|----|------|----------|
+| 软提醒 | CLI 当前目录有 `.go-rmm/rules.md` 时,变更类命令把规则全文打印到 stderr(AI 上下文可见)并以本地指纹为 ack | 始终(本地模式) |
+| 硬门禁 | Agent 拒绝无 ack / 过期 ack 的变更类任务(powershell/script/browse/guiclick/update/power),拒绝信息不回显指纹(防跳过阅读直接重放) | agent 配置 `rules_gate: true` |
+
+- ack 语义:规则内容 SHA256 前 16 hex。多项目时接受组合指纹或任一单项目指纹(AI 读了自己项目的规则即可操作,不被同机其他项目卡死)
+- 发现范围:`allowed_roots` + `workspace`(深度 2),30s 缓存——规则文件改了半分钟内生效
+- 豁免:`file`(读规则必经)/`screenshot`/`monitor`(只读观测)
+- 已知边界:`sync`/`file upload` 走流式传输通道(非任务协议),不在门禁内;`task batch`/tag 批量路径暂不携带 ack
+
+### 一行命令部署模板
+
+```bash
+go-rmm deploy init myapp                       # basic: 上传→停→启→健康检查
+go-rmm deploy init myapp --template zip-node   # zip 包→镜像同步(排除表)→npm→重启计划任务→健康检查
+```
+
+zip-node 模板固化了真实会话验证 5 轮的部署模式(robocopy 退出码 0-7 归一化 / npmmirror / 长步骤超时这些坑都已写对)。playbook 步骤支持 `timeout`(npm install 类长步骤默认 60s 会中途杀树,必须调大)。
+
+---
+
 ## AI Agent 接入
 
 ```go
@@ -403,12 +457,12 @@ info, _ := c.Sysinfo("agent-1")
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 169 |
-| 代码行 | 31,800+ |
-| CLI 命令 | 51 |
+| Go 文件 | 216 |
+| 代码行 | 39,500+ |
+| CLI 命令 | 52 |
 | API 端点 | 42 |
 | SDK 方法 | 45+ |
-| 测试用例 | 373 |
+| 测试用例 | 436 |
 | 基准测试 | 22 |
 | 任务类型 | 9 |
 | 性能优化 | 8 项 (55x~1940x) |

@@ -67,8 +67,9 @@ func Default() *Policy {
 		{`(?i)Format-Volume`, "format-volume", ""},
 		{`(?i)Remove-Item\s+(?:-[A-Za-z]+\s+)*-?Recurse\s+(?:-[A-Za-z]+\s+)*-?Force`, "remove-item", ""},
 		{`(?i)\b(?:Remove-Item|del|erase|rd|rmdir)\s+(?:-[A-Za-z]+\s+)*-?Recurse\s+(?:-[A-Za-z]+\s+)*-?Force\s+[A-Z]:\\(?:Windows|Users|Program)`, "remove-item", ""},
-		{`(?i)Stop-Computer`, "stop-computer", ""},
-		{`(?i)Restart-Computer\s+-Force`, "restart-computer", ""},
+		// 电源操作指引:平台有原生通道(标签白名单+审计),不要用裸命令绕
+		{`(?i)Stop-Computer`, "stop-computer", "请改用 go-rmm power shutdown(平台原生通道:标签白名单+审计,防误伤非目标机)"},
+		{`(?i)Restart-Computer\s+-Force`, "restart-computer", "请改用 go-rmm power restart(平台原生通道:标签白名单+审计)"},
 		{`(?i)diskpart`, "diskpart", ""},
 		{`(?i)\breg\s+(?:delete|import|load)\s+HKLM\\SYSTEM`, "reg ", ""},
 		{`(?i)bcdedit\s+/,`, "bcdedit", ""},
@@ -96,7 +97,10 @@ func Default() *Policy {
 		{`(?i)\bGet-Content\s+.*NTUSER\.DAT`, "ntuser.dat", ""},
 		{`(?i)New-Item\s+.*HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run`, "currentversion\\run", ""},
 		{`(?i)New-ItemProperty\s+.*HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run`, "currentversion\\run", ""},
-		{`(?i)schtasks\s+/create`, "schtasks", ""},
+		// schtasks 指引(2026-08-31 loan-kiosk 会话实证:被拦后无从知晓正解,
+		// 手工摸索出 Register-ScheduledTask 才通过)——cmdlet 也能指定
+		// -LogonType Interactive 落到桌面会话,比 schtasks 更可控。
+		{`(?i)schtasks\s+/create`, "schtasks", "如需创建计划任务请用 PowerShell 原生 Register-ScheduledTask cmdlet(可指定 -LogonType Interactive 拉起到桌面会话,更可控)"},
 		{`(?i)\bat\s+\d+(?::\d)?\s+\S+\\`, " at ", ""},
 	}
 	var compiled []*regexp.Regexp

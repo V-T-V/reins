@@ -49,6 +49,10 @@ type PlayStep struct {
 	Cmd    string `json:"cmd,omitempty"`    // exec: powershell 命令
 	Script string `json:"script,omitempty"` // script: 脚本文件路径
 	Lang   string `json:"lang,omitempty"`   // script: ps1/bat
+	// Timeout 步骤超时秒数(exec 默认 60/script 默认 120)。
+	// npm install / 大包解压等长步骤必须显式调大——默认值会中途杀掉
+	// 进程树(2026-08-31 loan-kiosk 部署会话实证:npm install 常超 60s)。
+	Timeout int `json:"timeout,omitempty"`
 	// 容错
 	Retry int    `json:"retry,omitempty"` // 失败重试次数(默认 0)
 	Delay string `json:"delay,omitempty"` // 重试间隔(默认 1s)
@@ -56,18 +60,24 @@ type PlayStep struct {
 	When string `json:"when,omitempty"` // 条件表达式(简化:仅支持 "success" 判断上一步)
 }
 
+// deployRulesAck 本次 deploy run 解析出的项目规则 ack(所有步骤统一携带;
+// tag 批量模式经 /api/tasks/batch 服务端构造,暂不携带——见 README 限制说明)。
+var deployRulesAck string
+
 // cmdDeploy deploy 子命令入口。
 func cmdDeploy(cfg config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("用法: go-rmm deploy <run|validate> <playbook.json>")
+		return fmt.Errorf("用法: go-rmm deploy <run|validate|init> <playbook.json>")
 	}
 	switch args[0] {
 	case "run":
 		return deployRun(cfg, args[1:])
 	case "validate", "check":
 		return deployValidate(cfg, args[1:])
+	case "init":
+		return deployInit(args[1:])
 	default:
-		return fmt.Errorf("未知 deploy 子命令: %s (可用: run validate)", args[0])
+		return fmt.Errorf("未知 deploy 子命令: %s (可用: run validate init)", args[0])
 	}
 }
 
@@ -93,6 +103,9 @@ func deployValidate(cfg config, args []string) error {
 	fmt.Printf("   步骤: %d 步\n", len(pb.Steps))
 	for i, s := range pb.Steps {
 		fmt.Printf("     %d. [%s] %s", i+1, s.Action, s.Name)
+		if s.Timeout > 0 {
+			fmt.Printf(" (timeout=%ds)", s.Timeout)
+		}
 		if s.Retry > 0 {
 			fmt.Printf(" (retry=%d)", s.Retry)
 		}
@@ -127,6 +140,13 @@ func deployRun(cfg config, args []string) error {
 		target = "tag:" + pb.TargetTag
 	}
 	fmt.Printf("   目标: %s\n", target)
+
+	// 部署是最高风险的变更操作:开始前加载项目规则(本地 .go-rmm/rules.md
+	// 打印全文进上下文,或 rules read 缓存 ack),后续所有步骤统一携带。
+	deployRulesAck = ""
+	if !dryRun {
+		deployRulesAck = resolveRulesAck(pb.Target, "", true)
+	}
 
 	// 变量合并:CLI 默认 vars + playbook vars
 	vars := map[string]string{}
@@ -205,7 +225,7 @@ func execPlayStep(cfg config, pb PlayBook, step PlayStep, cmd, script, dst strin
 		if cmd == "" {
 			return fmt.Errorf("exec 步骤缺少 cmd")
 		}
-		return runTaskSync(cfg, target, "powershell", cmd, 60)
+		return runTaskSync(cfg, target, "powershell", cmd, stepTimeout(step, 60))
 	case "script":
 		if script == "" {
 			return fmt.Errorf("script 步骤缺少 script")
@@ -214,10 +234,18 @@ func execPlayStep(cfg config, pb PlayBook, step PlayStep, cmd, script, dst strin
 		if lang == "" {
 			lang = "ps1"
 		}
-		return runTaskSyncScript(cfg, target, script, lang, 120)
+		return runTaskSyncScript(cfg, target, script, lang, stepTimeout(step, 120))
 	default:
 		return fmt.Errorf("未知 action: %s", step.Action)
 	}
+}
+
+// stepTimeout 解析步骤超时:显式配置优先,否则用默认值。
+func stepTimeout(step PlayStep, def int) int {
+	if step.Timeout > 0 {
+		return step.Timeout
+	}
+	return def
 }
 
 // runTaskSync 下发 powershell 命令并等待完成,失败返回 error。
@@ -232,15 +260,10 @@ func runTaskSync(cfg config, agentID, taskType, cmd string, timeout int) error {
 		return err
 	}
 	taskID := "deploy-" + fmt.Sprint(time.Now().UnixNano())
-	body := struct {
-		TaskID  string          `json:"task_id"`
-		Type    string          `json:"type"`
-		AgentID string          `json:"agent_id"`
-		Payload json.RawMessage `json:"payload"`
-		Timeout int             `json:"timeout"`
-	}{
+	body := taskSubmitBody{
 		TaskID: taskID, Type: taskType, AgentID: agentID,
 		Payload: payload, Timeout: timeout,
+		RulesAck: deployRulesAck,
 	}
 	var resp struct {
 		TaskID string `json:"task_id"`
@@ -276,15 +299,10 @@ func runTaskSyncScript(cfg config, agentID, scriptPath, lang string, timeout int
 		return err
 	}
 	taskID := "deploy-script-" + fmt.Sprint(time.Now().UnixNano())
-	body := struct {
-		TaskID  string          `json:"task_id"`
-		Type    string          `json:"type"`
-		AgentID string          `json:"agent_id"`
-		Payload json.RawMessage `json:"payload"`
-		Timeout int             `json:"timeout"`
-	}{
+	body := taskSubmitBody{
 		TaskID: taskID, Type: "script", AgentID: agentID,
 		Payload: payload, Timeout: timeout,
+		RulesAck: deployRulesAck,
 	}
 	var resp struct {
 		TaskID string `json:"task_id"`

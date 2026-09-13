@@ -66,14 +66,17 @@ func TestBootstrapWithToken(t *testing.T) {
 	if info.Token != "my-secret-1234567890" {
 		t.Errorf("Token 不匹配")
 	}
-	if !strings.Contains(info.OneLineCmd, "scriptblock") {
-		t.Errorf("OneLineCmd 应是 scriptblock 调用(支持命名参数),得到 %s", info.OneLineCmd)
+	if !strings.Contains(info.OneLineCmd, "/install.ps1") {
+		t.Errorf("OneLineCmd 应指向 install.ps1(零参数版),得到 %s", info.OneLineCmd)
+	}
+	if !strings.Contains(info.OneLineCmd, "-Token 'my-secret-1234567890'") {
+		t.Errorf("OneLineCmd 应包含 -Token,得到 %s", info.OneLineCmd)
+	}
+	if strings.Contains(info.OneLineCmd, "-Server") || strings.Contains(info.OneLineCmd, "-Relay") {
+		t.Errorf("地址已由端点烘焙,OneLineCmd 不应再含 -Server/-Relay,得到 %s", info.OneLineCmd)
 	}
 	if !strings.Contains(info.OneLineCmd, "14.1.2.3") {
 		t.Errorf("OneLineCmd 应包含 host,得到 %s", info.OneLineCmd)
-	}
-	if !strings.Contains(info.OneLineCmd, "my-secret-1234567890") {
-		t.Errorf("OneLineCmd 应包含 Token,得到 %s", info.OneLineCmd)
 	}
 	if info.InstallScriptURL == "" || info.AgentDownloadURL == "" {
 		t.Errorf("InstallScriptURL/AgentDownloadURL 不应为空")
@@ -95,8 +98,53 @@ func TestBootstrapDevMode(t *testing.T) {
 	}
 	var info bootstrapInfo
 	json.NewDecoder(resp.Body).Decode(&info)
+	if !strings.HasPrefix(info.OneLineCmd, "iex (((irm '") {
+		t.Errorf("dev 模式 OneLineCmd 应以 iex ((irm ' 开头,得到 %s", info.OneLineCmd)
+	}
 	if strings.Contains(info.OneLineCmd, "-Token") {
 		t.Errorf("dev 模式 OneLineCmd 不应含 -Token,得到 %s", info.OneLineCmd)
+	}
+}
+
+// TestBootstrapInstallTokenZeroArg 配了 InstallToken 时 Token 已服务端烘焙,
+// OneLineCmd 应回退零参数形态(iex ((irm ...).TrimStart),目标机器连 Token 都不用传。
+func TestBootstrapInstallTokenZeroArg(t *testing.T) {
+	r := &Relay{
+		cfg: Config{
+			Addr:         ":7780",
+			Token:        "admin-secret-tok",
+			InstallToken: "deploy-tok",
+		},
+		agents:  NewRegistry(),
+		console: NewEventBus(),
+		policy:  DefaultCommandPolicy(),
+		store:   NewMemoryStore(),
+	}
+	mux := http.NewServeMux()
+	r.registerHTTP(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/bootstrap?host=14.1.2.3", nil)
+	req.Header.Set("Authorization", "Bearer admin-secret-tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	var info bootstrapInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(info.OneLineCmd, "iex (((irm '") {
+		t.Errorf("配 InstallToken 时 OneLineCmd 应以 iex ((irm ' 开头(零参数),得到 %s", info.OneLineCmd)
+	}
+	if strings.Contains(info.OneLineCmd, "-Token") {
+		t.Errorf("Token 已服务端烘焙,OneLineCmd 不应再含 -Token,得到 %s", info.OneLineCmd)
 	}
 }
 

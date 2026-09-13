@@ -18,9 +18,9 @@
 package main
 
 import (
-	"log"
 	"crypto/subtle"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -125,7 +125,6 @@ func (id Identity) CanAccessAgent(tags map[string]string) bool {
 	}
 	return tags["tenant"] == id.Tenant
 }
-
 
 // identityFromAuth 从已通过 authorize 的请求提取 Identity。
 func identityFromAuth(req *http.Request) Identity {

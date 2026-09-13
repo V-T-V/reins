@@ -21,7 +21,6 @@ import (
 	"net/http"
 	"time"
 
-
 	"github.com/QiuShichang/go-rmm/proto"
 )
 

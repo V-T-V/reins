@@ -41,13 +41,15 @@ func taskStream(cfg config, args []string) error {
 	taskID := "stream-" + fmt.Sprint(time.Now().UnixNano())
 	payload, _ := json.Marshal(proto.PowerShellTask{Command: *command})
 
-	// POST /api/tasks/stream(SSE 响应)
+	// POST /api/tasks/stream(SSE 响应)。单目标变更命令:加载项目规则
+	// (本地打印/缓存 ack)后携带 rules_ack(Agent 门禁校验)。
 	body := proto.TaskRequest{
-		TaskID:  taskID,
-		Type:    "powershell",
-		AgentID: *agentID,
-		Payload: payload,
-		Timeout: *timeout,
+		TaskID:   taskID,
+		Type:     "powershell",
+		AgentID:  *agentID,
+		Payload:  payload,
+		Timeout:  *timeout,
+		RulesAck: resolveRulesAck(*agentID, "", true),
 	}
 	bodyJSON, _ := json.Marshal(body)
 

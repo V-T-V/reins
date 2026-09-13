@@ -118,11 +118,15 @@ func (m *Metrics) Snapshot() map[string]any {
 
 // ObserveDuration 记录任务耗时(C1:延迟直方图,手搓零依赖)。
 func (m *Metrics) ObserveDuration(ms int64) {
-	if ms <= 0 { return }
+	if ms <= 0 {
+		return
+	}
 	atomic.AddInt64(&m.taskDurCount, 1)
 	atomic.AddInt64(&m.taskDurSumMs, ms)
 	for i, b := range durationBoundaries {
-		if ms <= b { atomic.AddInt64(&m.taskDurBuckets[i], 1) }
+		if ms <= b {
+			atomic.AddInt64(&m.taskDurBuckets[i], 1)
+		}
 	}
 }
 

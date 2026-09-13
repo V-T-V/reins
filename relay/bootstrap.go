@@ -109,15 +109,18 @@ func (r *Relay) emitBootstrap(w http.ResponseWriter, serverURL, relayURL string)
 	agentReady := checkAgentBinaryReady()
 
 	// 生成一行命令
-	// 注意:不能用 iex (irm '...') -Server ...,因为 iex 不接受命名参数。
-	// 正确做法:用 [scriptblock]::Create() 把脚本字符串编译成代码块,
-	// 再用 & 调用操作符传入命名参数。
-	tokenArg := ""
-	if r.cfg.Token != "" && !r.cfg.Dev {
-		tokenArg = " -Token '" + r.cfg.Token + "'"
+	// 零参数版:install.ps1 已由 /install.ps1 端点烘焙地址,无需 -Server/-Relay。
+	// 双保险去 BOM:服务端保留 BOM(PS 5.1 文件执行需要);字符串路径先剥 U+FEFF,
+	// 再剥 Latin-1 误读的 ï»¿(nginx 未带 charset 时 irm 按 Latin-1 解码,否则第 1 行
+	// 变幻影命令,param() 不再是首语句报"赋值表达式无效")。
+	// 带 Token 时 iex 不接受命名参数,须用 scriptblock 形式;
+	// 配了 InstallToken 时 Token 已服务端烘焙,零参数形态即可(目标机器连 Token 都不用传)。
+	stripBOM := ") -replace '^\\uFEFF') -replace '^\\u00EF\\u00BB\\u00BF'"
+	oneLine := "iex (((irm '" + serverURL + "/install.ps1'" + stripBOM + ")"
+	if r.cfg.Token != "" && !r.cfg.Dev && r.cfg.InstallToken == "" {
+		oneLine = "& ([scriptblock]::Create((((irm '" + serverURL + "/install.ps1'" + stripBOM + "))) -Token '" + r.cfg.Token + "'"
 	}
-	oneLine := "& ([scriptblock]::Create((irm '" + serverURL + "/install.ps1'))) -Server '" + serverURL + "' -Relay '" + relayURL + "'" + tokenArg
-	devCmd := "& ([scriptblock]::Create((irm '" + serverURL + "/install.ps1'))) -Server '" + serverURL + "' -Relay '" + relayURL + "'"
+	devCmd := "iex (((irm '" + serverURL + "/install.ps1'" + stripBOM + ")"
 
 	info := bootstrapInfo{
 		ServerURL:        serverURL,

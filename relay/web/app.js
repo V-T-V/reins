@@ -34,22 +34,22 @@
         overlay.style.display = "flex";
         // 自动检测 Relay IP（用当前页面的 hostname）
         var relayIP = location.hostname + (location.port ? ":" + location.port : "");
-        // 填充所有 IP 占位符(install.ps1 命令中有 3 处)
-        ["relay-ip", "relay-ip2", "relay-ip3"].forEach(function (id) {
-          var el = document.getElementById(id);
-          if (el) el.textContent = relayIP;
-        });
-        // 从 /api/bootstrap 拉取真实 Token(用户已登录,Token 在 cookie/header)
-        // 因 Web UI 无显式 Token 输入,尝试从 location 或 URL query 取,
-        // 失败时保留占位符 TOKEN,提示用户用 CLI bootstrap 获取。
+        // 填充 IP 占位符(命令中仅 1 处)
+        var ipEl = document.getElementById("relay-ip");
+        if (ipEl) ipEl.textContent = relayIP;
+        // 从 /api/bootstrap 拉取一行安装命令:安装命令已由服务端烘焙地址,
+        // 直接用 bootstrap 返回的一行命令整条替换(Token 场景含 scriptblock 形式);
+        // 失败时保留上面的占位命令。
         if (!state.bootstrapLoaded) {
           state.bootstrapLoaded = true;
           fetch(api("/api/bootstrap?host=" + location.hostname + "&port=" + (location.port || "7780")))
             .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (info) {
-              if (info && info.token) {
-                var tokenEl = document.getElementById("relay-token");
-                if (tokenEl) tokenEl.textContent = info.token;
+              var cmdEl = document.getElementById("install-cmd");
+              if (cmdEl && info && info.one_line_cmd) {
+                cmdEl.textContent = info.one_line_cmd;
+              } else if (cmdEl && info && info.one_line_dev_cmd) {
+                cmdEl.textContent = info.one_line_dev_cmd;
               }
             })
             .catch(function () { /* dev 模式或无 Token,忽略 */ });

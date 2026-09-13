@@ -86,9 +86,9 @@
     <p style="color:#8b949e">还没有 Agent 连接。按以下步骤部署：</p>
 
     <div class="step">
-      <span class="step-num">1</span><strong>在目标 Windows 机器上,以管理员身份打开 PowerShell,粘贴这一行:</strong>
+      <span class="step-num">1</span><strong>在目标 Windows 机器上打开 PowerShell,粘贴这一行(非管理员会自动弹 UAC 提权):</strong>
       <div class="cmd" onclick="navigator.clipboard.writeText(this.querySelector('code').textContent);this.querySelector('.copy-hint').textContent='已复制!'">
-        <code id="install-cmd">iex (irm 'http://<span id="relay-ip">IP:7780</span>/install.ps1') -Server 'http://<span id="relay-ip2">IP:7780</span>' -Relay 'ws://<span id="relay-ip3">IP:7780</span>/agent' -Token '<span id="relay-token">TOKEN</span>'</code>
+        <code id="install-cmd">iex (((irm 'http://<span id="relay-ip">IP:7780</span>/install.ps1') -replace '^\uFEFF') -replace '^\u00EF\u00BB\u00BF')</code>
         <span class="copy-hint">点击复制</span>
       </div>
       <p style="color:#6e7681;font-size:12px;margin-top:6px">这一行会自动:下载 Agent → 注册 Windows 服务 → 启动并连接 Relay</p>

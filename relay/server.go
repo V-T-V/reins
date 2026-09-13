@@ -28,7 +28,7 @@ import (
 //   - 绑定一个 agentID / consoleID（身份）。
 //   - 串行化 Write（coder/websocket 的 Write 本身并发安全，但封装后便于加业务逻辑）。
 type wsConn struct {
-	*wsx.Writer // 优先级写引擎(共享 internal/wsx;底层连接经 Conn() 访问)
+	*wsx.Writer        // 优先级写引擎(共享 internal/wsx;底层连接经 Conn() 访问)
 	id          string // 连接 ID（UUID，非业务身份）
 	role        string // "agent" / "console"
 	biz         string // 业务身份：agentID 或 consoleID
@@ -307,7 +307,7 @@ type Relay struct {
 	agents     *Registry
 	console    *EventBus
 	store      TaskStore      // 任务持久化(R2/F1),可为 nil(关闭持久化)
-	ca         *ca.CA        // 内置 CA(C7 身份认证),可为 nil(关闭 mTLS)
+	ca         *ca.CA         // 内置 CA(C7 身份认证),可为 nil(关闭 mTLS)
 	policy     *CommandPolicy // 命令安全策略(S4)
 	audit      *AuditLog      // 审计日志(F1)
 	scheduler  *Scheduler     // H2 定时任务调度器,可为 nil
@@ -385,6 +385,16 @@ func (r *Relay) authorize(req *http.Request) error {
 	return nil
 }
 
+// installTokenOK 校验请求携带的是否为部署专用 Token(-install-token)。
+// 部署 Token 权限收窄:仅 Agent WS 注册与 GET /api/agents,其余端点不认。
+func (r *Relay) installTokenOK(req *http.Request) bool {
+	if r.cfg.InstallToken == "" {
+		return false
+	}
+	token := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+	return subtle.ConstantTimeCompare([]byte(token), []byte(r.cfg.InstallToken)) == 1
+}
+
 // handleAgentWS 处理 Agent 的反向 WS 连接。
 //
 // 鉴权策略（S3 修复）：
@@ -393,8 +403,8 @@ func (r *Relay) authorize(req *http.Request) error {
 //   - Origin：Agent 非浏览器，InsecureSkipVerify 仅在 Dev 模式（收紧）
 func (r *Relay) handleAgentWS(w http.ResponseWriter, req *http.Request) {
 	if r.ca == nil {
-		// 非 mTLS：用 token 校验
-		if err := r.authorize(req); err != nil {
+		// 非 mTLS：用 token 校验(部署专用 Token 也可注册)
+		if err := r.authorize(req); err != nil && !r.installTokenOK(req) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

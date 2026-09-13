@@ -223,7 +223,7 @@ func (r *Relay) handleUpdateUpload(w http.ResponseWriter, req *http.Request) {
 // BinaryPath 引用模式适合任意大小(经 filetransfer 分片预上传);
 // BinaryB64 内联仅适合中等大小(<20MB,WS 32MB 限制内)且链路低延迟。
 type protoUpdateTaskInline struct {
-	BinaryB64  string `json:"binary_b64,omitempty"` // base64 编码的二进制
+	BinaryB64  string `json:"binary_b64,omitempty"`  // base64 编码的二进制
 	BinaryPath string `json:"binary_path,omitempty"` // Agent 侧已上传的新二进制路径
 	SHA256     string `json:"sha256"`
 	Version    string `json:"version"`

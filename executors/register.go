@@ -12,6 +12,11 @@ type Options struct {
 	// Workspace 相对路径的解析基准目录,注入到 FileExecutor 与共享策略。
 	// 留空则回退到 filepath.Abs 的默认行为(CWD)。
 	Workspace string
+	// AllowedRoots 文件任务(file executor)的允许根目录。留空 = fail-closed
+	// (所有文件任务拒绝)。与大文件传输引擎的共享策略应传入同一份,
+	// 使 file 任务与流式传输的路径边界一致(config.allowed_roots 的
+	// "file 任务 + 大文件传输共用"语义)。
+	AllowedRoots []string
 	// Role 角色:"master"(主,最小能力集)/ "slave"(从,全集)/ ""(兼容=slave)。
 	// master 只注册 powershell/script/file/browse(基础运维),不注册 screenshot/monitor/power/guiclick,
 	// 减少攻击面 + 保证稳定性。master 还会由 agent 包额外注册 watchdog executor。
@@ -49,10 +54,14 @@ func RegisterAll(d *Dispatcher, opts Options) []string {
 	}
 	// D4:把 Workspace 注入 FileExecutor 的策略,使相对路径可预期解析。
 	// file 跨平台,master/slave 都需要(主用它推救援文件/读日志)。
+	// AllowedRoots 同步注入:file 任务与流式传输共用同一份允许根
+	// (config.allowed_roots 的约定语义;此前只接线了传输引擎,file 任务
+	// 恒 fail-closed 是装配断线)。
 	fileExec := NewFile()
 	if opts.Workspace != "" {
 		fileExec.policy.Workspace = opts.Workspace
 	}
+	fileExec.policy.AllowedRoots = opts.AllowedRoots
 	d.Register(fileExec)
 	d.Register(newBrowseImpl()) // 默认 stub;-tags browse 编译时为真实实现
 

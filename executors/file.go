@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/QiuShichang/go-rmm/proto"
@@ -53,7 +54,8 @@ func (e *FileExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFunc)
 	if err := decode(payload, &task); err != nil {
 		return fail("", err.Error())
 	}
-	if task.Path == "" {
+	// op=rules 的 Path 可空(自动发现模式),其余 op 必须显式给路径。
+	if task.Path == "" && task.Op != "rules" {
 		return fail("", "path 不能为空")
 	}
 
@@ -62,6 +64,15 @@ func (e *FileExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFunc)
 	case "upload", "write", "chunk_upload", "download", "read", "chunk_download":
 		if err := e.policy.Check(task.Path); err != nil {
 			return fail("", err.Error())
+		}
+	case "rules":
+		// 指定项目目录时校验目录落在允许根内(规则文件路径由本执行器拼接,
+		// 不接受调用方直接指定任意文件)。自动发现模式按 AllowedRoots 扫描,
+		// 逐文件再过 Check(双保险)。
+		if task.Path != "" {
+			if err := e.policy.Check(task.Path); err != nil {
+				return fail("", err.Error())
+			}
 		}
 	}
 
@@ -74,9 +85,71 @@ func (e *FileExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFunc)
 		return e.chunkUpload(task)
 	case "chunk_download":
 		return e.chunkDownload(task)
+	case "rules":
+		return e.rules(task)
 	default:
 		return fail("", "不支持的 op: "+task.Op)
 	}
+}
+
+// rules 读取项目规则文件(op=rules,`go-rmm rules read` 的后端)。
+//
+//   - task.Path 指定项目目录:读 <Path>/.go-rmm/rules.md,不存在时返回
+//     exists=false 的条目(调用方据此区分"该项目没写规则"与"读失败")
+//   - task.Path 为空:在 AllowedRoots+Workspace 内自动发现(深度受限),
+//     返回全部规则文件与组合 ack
+//
+// 返回 Data: {"files":[{path,bytes,sha256_16,content,exists,error}], "ack":...}。
+func (e *FileExecutor) rules(task proto.FileTask) proto.TaskResult {
+	var entries []RuleFileEntry
+	if task.Path != "" {
+		candidate := filepath.Join(task.Path, RulesDirName, RulesFileName)
+		entry, err := readRuleFile(candidate)
+		if err != nil {
+			// 区分"项目没写规则"与"读失败":Stat 不存在是正常态
+			if os.IsNotExist(err) || strings.Contains(err.Error(), "不存在") {
+				entries = append(entries, RuleFileEntry{Path: candidate, Exists: false,
+					Error: "项目未定义规则文件(无 .go-rmm/rules.md)"})
+			} else {
+				return fail("", err.Error())
+			}
+		} else {
+			entry.Exists = true
+			entries = append(entries, entry)
+		}
+	} else {
+		roots := append([]string{}, e.policy.AllowedRoots...)
+		if e.policy.Workspace != "" {
+			roots = append(roots, e.policy.Workspace)
+		}
+		for _, f := range DiscoverRuleFiles(roots) {
+			// 自动发现结果逐文件再过策略(允许根可能因符号链接等漂移)
+			if err := e.policy.Check(f); err != nil {
+				continue
+			}
+			entry, err := readRuleFile(f)
+			if err != nil {
+				continue
+			}
+			entry.Exists = true
+			entries = append(entries, entry)
+		}
+	}
+
+	// ack 只对真实读到的文件计算(不存在的条目不参与指纹)
+	var readable []RuleFileEntry
+	for _, en := range entries {
+		if en.Exists && en.SHA16 != "" {
+			readable = append(readable, en)
+		}
+	}
+	ack := ""
+	if len(readable) > 0 {
+		ack = RulesAckCombined(readable)
+	}
+	r := ok("")
+	r.Data, _ = jsonMarshal(map[string]any{"files": entries, "ack": ack})
+	return r
 }
 
 // upload [Deprecated 架构中6] ContentB64 内联路径——主路径为流式 /api/transfer/*。

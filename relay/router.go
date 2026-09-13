@@ -23,25 +23,25 @@ import (
 func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", r.handleListAgents)
 	mux.HandleFunc("POST /api/tasks", r.handlePostTask)
-	mux.HandleFunc("POST /api/tasks/batch", r.handleBatchTask)              // C10 批量下发
-	mux.HandleFunc("POST /api/batch", r.handleBatchStart)                   // P0-1 异步批量(重试+进度)
-	mux.HandleFunc("GET /api/batch/{id}", r.handleBatchStatus)              // P0-1 批次进度快照
-	mux.HandleFunc("GET /api/batch/{id}/progress", r.handleBatchProgressSSE) // P0-1 批次进度 SSE
-	mux.HandleFunc("POST /api/tasks/cancel", r.handleCancelTask)            // C6 取消任务
-	mux.HandleFunc("GET /api/tasks", r.handleListTasks)                     // C4/F1 任务历史
-	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)                      // C4 单任务详情+结果
+	mux.HandleFunc("POST /api/tasks/batch", r.handleBatchTask)                                            // C10 批量下发
+	mux.HandleFunc("POST /api/batch", r.handleBatchStart)                                                 // P0-1 异步批量(重试+进度)
+	mux.HandleFunc("GET /api/batch/{id}", r.handleBatchStatus)                                            // P0-1 批次进度快照
+	mux.HandleFunc("GET /api/batch/{id}/progress", r.handleBatchProgressSSE)                              // P0-1 批次进度 SSE
+	mux.HandleFunc("POST /api/tasks/cancel", r.handleCancelTask)                                          // C6 取消任务
+	mux.HandleFunc("GET /api/tasks", r.handleListTasks)                                                   // C4/F1 任务历史
+	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)                                                    // C4 单任务详情+结果
 	mux.HandleFunc("POST /api/enroll-token", r.RequireRole("agent.enroll-token", r.handleGenEnrollToken)) // C7(短1守卫)
 	mux.HandleFunc("POST /api/enroll", r.handleEnroll)
-	mux.HandleFunc("POST /api/renew", r.handleRenew)                      // C7 Agent 换证书
+	mux.HandleFunc("POST /api/renew", r.handleRenew)                                              // C7 Agent 换证书
 	mux.HandleFunc("POST /api/agents/revoke", r.RequireRole("agent.revoke", r.handleRevokeAgent)) // G2(短1守卫)
-	mux.HandleFunc("GET /api/crons", r.handleListCrons)                     // H2 cron 列表
-	mux.HandleFunc("POST /api/crons", r.handleAddCron)                      // H2 新建 cron
-	mux.HandleFunc("DELETE /api/crons/", r.handleDeleteCron)                // H2 删除 cron
-	mux.HandleFunc("POST /api/shell/open", r.handleShellOpen)               // H3 开终端会话
-	mux.HandleFunc("POST /api/shell/input", r.handleShellInput)             // H3 发 stdin
-	mux.HandleFunc("POST /api/shell/close", r.handleShellClose)             // H3 关会话
-	mux.HandleFunc("POST /api/transfer/upload", r.handleTransferUpload)     // J2 上传
-	mux.HandleFunc("POST /api/transfer/download", r.handleTransferDownload) // J2 下载
+	mux.HandleFunc("GET /api/crons", r.handleListCrons)                                           // H2 cron 列表
+	mux.HandleFunc("POST /api/crons", r.handleAddCron)                                            // H2 新建 cron
+	mux.HandleFunc("DELETE /api/crons/", r.handleDeleteCron)                                      // H2 删除 cron
+	mux.HandleFunc("POST /api/shell/open", r.handleShellOpen)                                     // H3 开终端会话
+	mux.HandleFunc("POST /api/shell/input", r.handleShellInput)                                   // H3 发 stdin
+	mux.HandleFunc("POST /api/shell/close", r.handleShellClose)                                   // H3 关会话
+	mux.HandleFunc("POST /api/transfer/upload", r.handleTransferUpload)                           // J2 上传
+	mux.HandleFunc("POST /api/transfer/download", r.handleTransferDownload)                       // J2 下载
 	mux.HandleFunc("GET /api/events", r.handleSSE)
 	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
 	mux.HandleFunc("GET /healthz", r.handleHealthz)     // D8 深度健康检查
@@ -88,6 +88,8 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/scripts/", r.handleScriptRun)
 	// D1:Agent 二进制下载（一行安装用）
 	r.registerDownloadDir(mux)
+	// 一行零参数部署:/install.ps1 服务时动态烘焙外部地址(精确匹配优先于 "/" 静态兜底)
+	r.registerInstallScript(mux)
 	// B2:部署引导(一行安装命令)
 	mux.HandleFunc("GET /api/bootstrap", r.handleBootstrap)
 }
@@ -349,7 +351,8 @@ func (r *Relay) handleGetTask(w http.ResponseWriter, req *http.Request) {
 
 // GET /api/agents —— 返回所有在线 Agent。
 func (r *Relay) handleListAgents(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	// 部署专用 Token 可读(装完上线确认)
+	if err := r.authorize(req); err != nil && !r.installTokenOK(req) {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -497,7 +500,6 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 			task.AgentID, task.Type, r.agentCapabilities(task.AgentID))))
 		return
 	}
-
 
 	if err := r.dispatchTask(conn, task); err != nil {
 		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("转发任务失败: %w", err)))

@@ -35,7 +35,9 @@ func registerExecutors(cfg Config) *executors.Dispatcher {
 	executors.RegisterAll(d, executors.Options{
 		VisionClient: visionClient,
 		Workspace:    cfg.Workspace, // D4:相对路径解析基准
-		Role:         cfg.Role,      // M1:master 注册最小能力集
+		// file 任务与流式传输共用同一份允许根(config.allowed_roots 的约定语义)。
+		AllowedRoots: resolveAllowedRoots(cfg),
+		Role:         cfg.Role, // M1:master 注册最小能力集
 	})
 
 	// update 自更新执行器纳入 Dispatcher(仅 slave;master 不上报 update 能力——
@@ -60,24 +62,22 @@ func registerExecutors(cfg Config) *executors.Dispatcher {
 	// 创建共享的 FilePolicy 实例,同时用于 file 任务和大文件传输。
 	//
 	// P0-S4 修复:默认 fail-closed(AllowedRoots 空 = 拒绝所有),
-	// 强制用户显式配置工作目录。之前用 defaultRoots() 默认放开整盘是错误的
-	// (与 DefaultFilePolicy "留空 fail-closed" 的设计意图相反)。
-	// 为兼容已有部署(用户可能未配置 AllowedRoots),增加 config 开关:
+	// 强制用户显式配置工作目录。为兼容已有部署增加 config 开关:
 	//   - 未配置 AllowedRoots 且 AllowAllRoots=true(默认):用整盘兜底,记录告警
 	//   - 未配置 AllowedRoots 且 AllowAllRoots=false:严格 fail-closed
+	//
+	// 根目录解析统一走 resolveAllowedRoots(纯函数):与 RegisterAll 注入
+	// FileExecutor 的根同源,file 任务与流式传输边界一致(此前只接线了
+	// 传输引擎,file 任务恒 fail-closed 是装配断线)。
+	if len(cfg.AllowedRoots) == 0 && cfg.AllowAllRoots {
+		log.Printf("[agent] ⚠️ 未配置 allowed_roots,默认放开整盘(不安全)。建议显式配置工作目录或设 allow_all_roots=false")
+	}
 	sharedPolicy := executors.DefaultFilePolicy()
 	// D4 修复:注入 Workspace 作为相对路径的解析基准。
 	// 使用户传 "foo.txt" / "workspace\foo.txt" 可预期地落到允许根内,
 	// 不受 Agent 启动 CWD 影响。
 	sharedPolicy.Workspace = cfg.Workspace
-	if len(cfg.AllowedRoots) > 0 {
-		sharedPolicy.AllowedRoots = cfg.AllowedRoots
-	} else if cfg.AllowAllRoots {
-		// 向后兼容:默认整盘(带告警)
-		sharedPolicy.AllowedRoots = defaultRoots()
-		log.Printf("[agent] ⚠️ 未配置 allowed_roots,默认放开整盘(不安全)。建议显式配置工作目录或设 allow_all_roots=false")
-	}
-	// else:严格 fail-closed,所有文件操作拒绝直到配置 AllowedRoots
+	sharedPolicy.AllowedRoots = resolveAllowedRoots(cfg)
 	transfers.SetPolicy(func(path string) error {
 		return sharedPolicy.Check(path)
 	})
@@ -90,7 +90,29 @@ func registerExecutors(cfg Config) *executors.Dispatcher {
 		log.Printf("[agent] 下载发送限速已启用: %.1f MB/s", cfg.TransferRateLimitMB)
 	}
 
+	// 项目规则门禁:变更类任务须携带当前 .go-rmm/rules.md 的 ack。
+	// 发现范围与文件策略同源(allowed_roots+workspace),规则文件与
+	// 项目部署位置天然一致。默认关闭,config rules_gate 开启。
+	d.SetRulesGate(executors.NewRulesGate(cfg.RulesGate, resolveAllowedRoots(cfg), cfg.Workspace))
+	if cfg.RulesGate {
+		log.Printf("[agent] 项目规则门禁已启用: 变更类任务须携带 rules_ack(先 go-rmm rules read 加载规则)")
+	}
+
 	return d
+}
+
+// resolveAllowedRoots 解析文件操作允许根(纯函数,无副作用):
+//   - 配置了 allowed_roots → 原样返回(caller 已追加 workspace/exeDir)
+//   - 未配置且 allow_all_roots=true(默认) → 平台整盘兜底(带告警由调用方打)
+//   - 未配置且 allow_all_roots=false → nil(严格 fail-closed)
+func resolveAllowedRoots(cfg Config) []string {
+	if len(cfg.AllowedRoots) > 0 {
+		return cfg.AllowedRoots
+	}
+	if cfg.AllowAllRoots {
+		return defaultRoots()
+	}
+	return nil
 }
 
 // defaultRoots 返回平台的默认允许根目录（当用户未显式配置 AllowedRoots 时使用）。
