@@ -310,6 +310,33 @@ fmt.Printf("进度 %.0f%%, 成功 %d, 失败 %d\n",
     progress.Snapshot().Percent, progress.Snapshot().Succeeded, progress.Snapshot().Failed)
 ```
 
+### DAG 编排核心(internal/dagflow,v4.5.0)
+
+批量分发解决"一批 Agent 同时跑一个任务";多阶段运维流程(备份 → 升级 → 健康检查 → 失败回滚)需要**依赖编排**——`internal/dagflow` 提供纯逻辑、零依赖、确定性可测的 DAG 调度核心:
+
+```go
+g := &dagflow.Graph{
+    MaxConcurrency: 3,
+    Nodes: []dagflow.Node{
+        {ID: "backup"},
+        {ID: "upgrade", Deps: []string{"backup"}},
+        {ID: "health",  Deps: []string{"upgrade"}},
+        {ID: "alert",   Deps: []string{"upgrade"}, ContinueOnError: true}, // 上游失败也照跑
+    },
+}
+if err := g.Validate(); err != nil { /* 环/悬空依赖/自依赖,报错点名肇事节点 */ }
+res := g.Run(ctx) // res.Nodes 逐节点 succeeded/failed/skipped + res.StartOrder
+```
+
+| 能力 | 语义 |
+|------|------|
+| 图校验 | 重复 ID/悬空依赖/自依赖/重复依赖/Kahn 判环,环上节点点名报告 |
+| 并发上限 | 就绪集合按 ID 字典序取前 `MaxConcurrency` 个启动;`<=0` 串行 |
+| 失败级联 | 节点失败后传递下游整枝 `skipped`(从未启动),防半升级状态继续跑 |
+| 软依赖 | 节点标 `ContinueOnError` = 自身依赖全部软化:上游成败不限,但仍须等其终态(拓扑顺序保留) |
+| 确定性 | 串行模式启动序列完全可复现(同输入同序列);并发模式每轮派发批内按 ID 序,启动/跳过集合只由结果决定 |
+| 取消语义 | ctx 取消:未启动节点按 `skipped` 收尾;带环非法图不死锁不 panic,环上节点 `skipped` 收尾 |
+
 ---
 
 ## 文件传输
@@ -457,12 +484,12 @@ info, _ := c.Sysinfo("agent-1")
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 216 |
-| 代码行 | 39,500+ |
+| Go 文件 | 221 |
+| 代码行 | 40,900+ |
 | CLI 命令 | 52 |
 | API 端点 | 42 |
 | SDK 方法 | 45+ |
-| 测试用例 | 436 |
+| 测试用例 | 460 |
 | 基准测试 | 22 |
 | 任务类型 | 9 |
 | 性能优化 | 8 项 (55x~1940x) |

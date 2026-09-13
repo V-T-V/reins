@@ -2,7 +2,7 @@
 
 ## 项目内容(What)
 
-Go 实现的**企业级零信任远程访问平台**(v4.4.0)——通过反向 WebSocket 中继,让 CLI / Web 控制台远程驱动 Agent 执行全维度运维操作。对标 Teleport / Tailscale。
+Go 实现的**企业级零信任远程访问平台**(v4.5.0)——通过反向 WebSocket 中继,让 CLI / Web 控制台远程驱动 Agent 执行全维度运维操作。对标 Teleport / Tailscale。
 
 ### 三组件架构
 
@@ -49,7 +49,8 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G3**:9 类任务执行器 + 51 CLI 命令 + 42 API 端点,覆盖诊断/执行/传输/部署/配置/监控/管理/守护/安全。
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
-- **成功标准**:216 Go 文件 / 39.5K 行 / 454 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10 + 2026-09-03 rules 门禁冒烟)。
+- **G6**(v4.5.0):批量任务编排 DAG 核心(`internal/dagflow`)——多阶段运维流程(备份→升级→健康检查→失败回滚)的依赖建模、并发上限调度、失败级联跳过与 ContinueOnError 软依赖,纯逻辑零依赖、确定性可测。
+- **成功标准**:221 Go 文件 / 41K 行 / 460 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10 + 2026-09-03 rules 门禁冒烟)。
 
 ## 架构假设(4 项显式假设)
 
@@ -58,7 +59,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 3. **PowerShell 为 Windows 核心执行器**:-EncodedCommand(UTF16LE),命令策略黑名单 + Agent 侧二次校验。
 4. **bbolt 单文件为默认持久化**:Redis 后端可选(TaskStore interface 切换)。
 
-## 项目结构(v4.4.0)
+## 项目结构(v4.5.0)
 
 ```
 go-rmm/
@@ -124,6 +125,7 @@ go-rmm/
 ├── proto/              # 协议层(Envelope + 30 消息 + 二进制帧 + tunnel)
 ├── executors/          # 执行器(powershell/script/file/screenshot/browse/guiclick/power/monitor)
 │   └── rulesgate.go    # 项目规则门禁:.go-rmm/rules.md 发现+指纹+Dispatch 校验 [v4.4.0]
+├── internal/dagflow/   # DAG 编排调度核心(依赖图+并发上限+失败级联,纯逻辑零依赖) [v4.5.0]
 ├── console/            # Web 控制台(反向代理 + 内嵌前端)
 ├── deploy/             # 部署配置(Helm/OpenAPI/systemd)
 ├── Dockerfile.relay    # Relay Docker 镜像
@@ -134,14 +136,14 @@ go-rmm/
 └── Makefile            # 世界级构建系统(15 targets)
 ```
 
-## 指标(v4.4.0)
+## 指标(v4.5.0)
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 216 |
-| 代码行 | 39,500+ |
+| Go 文件 | 221 |
+| 代码行 | 40,900+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 454 |
+| 测试用例 | 460 |
 | 基准测试 | 22 |
 | CLI 命令 | 52 |
 | API 端点 | 45 |
@@ -151,7 +153,7 @@ go-rmm/
 
 ---
 
-## 模块完成度(v4.4.0)
+## 模块完成度(v4.5.0)
 
 每个核心包的功能完成度与成熟度。✅ 生产就绪 / 🟡 骨架/接口先行 / ⏳ 预留未实现。
 
@@ -174,6 +176,7 @@ go-rmm/
 | **proto** 协议 | 95% | Envelope + 30 消息 + 二进制帧 + tunnel | ✅ |
 | **console** Web | 80% | 反向代理 + 内嵌前端 + 实时事件 | 🟡 |
 | **executors** | 90% | 8 执行器实现 + 跨平台 | ✅ |
+| **internal/dagflow** | 85% | DAG 编排核心(Validate 图校验+Run 并发上限调度+失败级联+软依赖,串行模式启动序列完全确定) | 🟡 调度核心就绪,relay/CLI 编排端点接入待做 |
 
 **安全假设(显式)**:
 - 单 Relay 为默认(水平扩展需 Redis 共享状态,接口已就绪)。
@@ -183,7 +186,7 @@ go-rmm/
 
 ---
 
-## 测试覆盖(v4.4.0)
+## 测试覆盖(v4.5.0)
 
 454 测试 + 22 基准。按包分布与重点验证场景:
 
@@ -194,6 +197,7 @@ go-rmm/
 | **executors** | 57 | 25 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控;rules 门禁(发现去重/指纹组合/Dispatcher 校验/op=rules/变更失效闭环)[v4.4.0] |
 | **proto** | 44 | 9 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
 | **internal/wsx** | 5 | 1 | 优先级写引擎(P0 控制帧不被 P1 数据饿死——阻塞 socket 写+积压构造确定性验证/写错误经 Done 回传/ctx 取消与调用方超时契约/Start 幂等)[2026-09-12]
+| **internal/dagflow** | 13 | 1 | 图校验 8 类非法图逐一拒绝+环点名;串行启动序列 50 次重跑逐位一致;并发峰值恰守上限 3;失败级联(health/watch 跳过+alert 软依赖照跑+跳过者从未启动);软依赖仍须等终态;ctx 取消 skipped 收尾;带环图不死锁 [v4.5.0] |
 | **client** | 18 | 9 | SDK 方法/流式/工具发现 |
 | **console** | 14 | 4 | 反向代理/事件转发 |
 | **cmd** | 18 | 30 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3];rules read E2E/ack 缓存/-s 防呆/deploy 模板[v4.4.0] |
