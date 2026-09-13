@@ -116,6 +116,8 @@ func run(args []string) error {
 		return cmdRules(cfg, posArgs[1:])
 	case "batch":
 		return cmdBatch(cfg, posArgs[1:])
+	case "dag":
+		return cmdDAG(cfg, posArgs[1:])
 	case "file":
 		return cmdFile(cfg, posArgs[1:])
 	case "shell":

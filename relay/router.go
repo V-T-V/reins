@@ -27,6 +27,9 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/batch", r.handleBatchStart)                                                 // P0-1 异步批量(重试+进度)
 	mux.HandleFunc("GET /api/batch/{id}", r.handleBatchStatus)                                            // P0-1 批次进度快照
 	mux.HandleFunc("GET /api/batch/{id}/progress", r.handleBatchProgressSSE)                              // P0-1 批次进度 SSE
+	mux.HandleFunc("POST /api/dag", r.handleDAGSubmit)                                                    // v4.6 DAG 编排提交
+	mux.HandleFunc("GET /api/dag", r.handleDAGList)                                                       // v4.6 编排列表
+	mux.HandleFunc("GET /api/dag/{id}", r.handleDAGStatus)                                                // v4.6 编排状态快照
 	mux.HandleFunc("POST /api/tasks/cancel", r.handleCancelTask)                                          // C6 取消任务
 	mux.HandleFunc("GET /api/tasks", r.handleListTasks)                                                   // C4/F1 任务历史
 	mux.HandleFunc("GET /api/tasks/", r.handleGetTask)                                                    // C4 单任务详情+结果

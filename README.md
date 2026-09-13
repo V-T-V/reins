@@ -337,6 +337,31 @@ res := g.Run(ctx) // res.Nodes 逐节点 succeeded/failed/skipped + res.StartOrd
 | 确定性 | 串行模式启动序列完全可复现(同输入同序列);并发模式每轮派发批内按 ID 序,启动/跳过集合只由结果决定 |
 | 取消语义 | ctx 取消:未启动节点按 `skipped` 收尾;带环非法图不死锁不 panic,环上节点 `skipped` 收尾 |
 
+**REST / CLI 接入(v4.6.0)**:
+
+```bash
+# 提交编排(先 Validate,非法图 400;202 返回 dag_id)
+curl -X POST $RELAY/api/dag -H "Authorization: Bearer $TOKEN" -d '{
+  "name":"upgrade-flow","max_concurrency":2,"nodes":[
+    {"id":"backup","tag":"env=prod","type":"powershell","payload":{"command":"backup.ps1"},"timeout":60},
+    {"id":"upgrade","deps":["backup"],"tag":"env=prod","type":"powershell","payload":{"command":"upgrade.ps1"}},
+    {"id":"alert","deps":["upgrade"],"agent_id":"ops-1","type":"powershell","payload":{"command":"notify"},"continue_on_error":true}
+  ]}'
+
+# 状态快照:逐节点 running/succeeded/failed/skipped + err + task_ids + start_order
+curl $RELAY/api/dag/<dag_id> -H "Authorization: Bearer $TOKEN"
+
+# 编排列表(最近 50 条)
+curl $RELAY/api/dag -H "Authorization: Bearer $TOKEN"
+
+# CLI 等价
+go-rmm dag apply -f flow.json -concurrency 2
+go-rmm dag status <dag_id> -w       # -w 轮询到终态
+go-rmm dag list
+```
+
+节点执行体复用既有任务链路(agent_id 直指或 tag 扇出 → store 持久化 + WS 投递 → 轮询任务终态);失败节点下游由调度核心级联跳过(**零任务投递**);提交期逐节点过命令策略校验(高危命令 403),全程审计。
+
 ---
 
 ## 文件传输
