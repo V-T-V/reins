@@ -921,6 +921,17 @@ func fileUpload(cfg config, args []string) error {
 	if totalSize > 0 {
 		q.Set("size", fmt.Sprintf("%d", totalSize))
 	}
+	// P2-11:非管道模式预计算整文件 SHA256 随 query 下发——Agent 侧收完即比对,
+	// 损坏当场拒绝(删 .part 回 500)而非事后发现(彼时损坏文件已被 rename 成
+	// 正式文件留在目标位置)。管道模式(-)stdin 只能读一遍,无法预计算,
+	// 维持响应回传 sha256 的事后比对兜底。
+	if localPath != "-" {
+		preSHA, shaErr := computeFileSHA256(localPath)
+		if shaErr != nil {
+			return fmt.Errorf("预计算 SHA256 失败: %w", shaErr)
+		}
+		q.Set("sha256", preSHA)
+	}
 	u := cfg.relay + "/api/transfer/upload?" + q.Encode()
 
 	fmt.Printf("上传 %s → %s:%s\n", localPath, agentID, remotePath)

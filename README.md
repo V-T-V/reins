@@ -82,7 +82,7 @@
 | 流式执行 | `task stream -a <agent> -c "ping -t 8.8.8.8"` (SSE 实时 stdout) |
 | 多 Agent 并行 | `exec -a a1,a2,a3 -c "hostname"` |
 | 交互式 Shell | `shell open -a <agent>` (asciinema 录屏) |
-| 文件传输 | `file upload/download` (SHA256 + 断点续传 + 并发分片) |
+| 文件传输 | `file upload/download` (per-chunk SHA256 + 断点续传 + 并发分片) |
 | 目录同步 | `sync push/pull` |
 | 端口转发 | `tunnel -L 3306:db:3306` (SSH -L) |
 
@@ -375,13 +375,18 @@ go-rmm dag list
 | 并发分片 | `>50MB` 自动切 10MB/片 × 4 路并发(可调),重叠 RTT 提速 |
 | 断点续传 | 中断重跑自动跳过已传分片(按文件名+大小校验) |
 | 流式低内存 | SectionReader 边读边传,每 worker ~64KB(非整片缓冲) |
-| SHA256 双边校验 | Agent 算 hash 回传 + CLI 本地比对,合并后整文件校验 |
+| SHA256 三层校验 | ① per-chunk:每片 hash 随 query 下发,Agent 收完单片立即比对,损坏当场失败重传(防损坏片被断点续传永久跳过) ② Agent 算 hash 回传 + CLI 本地比对 ③ 合并后整文件校验(磁盘位腐烂兜底) |
 | 进度 ETA | 瞬时速率(滑动窗口)+ 剩余时间预估 |
 | path 互斥 | 同 path 并发上传自动拒绝(防双写 `.part` 致 SHA256 不匹配) |
 | 已满快路径 | `.part` 已满时直接 rename + complete,不等 sender 跳字节 |
 | 孤儿分片 sweep | Agent 每 30 分钟清理 2 小时前的残留 `.ftpart*` |
 | 死连接 watchdog | 半开连接(NAT 超时)2×心跳无收包则强制重连,秒级恢复 |
 | 能力协商 | 分片下载需 Agent `xfer_offset` 能力,旧 Agent 显式拒绝 |
+
+> per-chunk SHA256(2026-09-13)零协议改动落地:复用既有 `sha256` query →
+> `file_xfer_init.SHA256` → Agent `expectedSHA256` 链路(原预估需协议改动,实测
+> 通道自 J2 stream-through 起就存在,分片/非分片上传只是没接线)。管道模式
+> (`-` stdin)单遍流无法预计算,维持响应回传 hash 的事后比对兜底。
 
 ### 用法
 

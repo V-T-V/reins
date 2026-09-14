@@ -247,6 +247,20 @@ func uploadOnce(cfg config, agentID, localPath, remotePath string, totalSize int
 				thisSize := chunkLen(j.idx)
 				chunkName := fmt.Sprintf("%s.ftpart%04d", remotePath, j.idx)
 
+				// P2-11:per-chunk SHA256 强制。发送前对该片算 hash(SectionReader
+				// 独立于发送再开一遍,流式 64KB 内存),随 query 传给 Agent——
+				// Agent 侧 init.SHA256 既有链路收完单片立即比对,损坏当场失败重传,
+				// 不再等合并后整文件校验才发现(彼时断点续传只查大小,损坏片被
+				// 永久跳过 → 整文件重试 2 次全败,只能人工清远端分片)。
+				chunkSHA, shaErr := computeSectionSHA256(wf, off, thisSize)
+				if shaErr != nil {
+					once.Do(func() {
+						cancel()
+						errs <- fmt.Errorf("分片 %d 算 SHA256 失败: %w", j.idx, shaErr)
+					})
+					return
+				}
+
 				var lastErr error
 				for retry := 0; retry < chunkMaxRetryArg; retry++ {
 					if ctx.Err() != nil {
@@ -255,7 +269,7 @@ func uploadOnce(cfg config, agentID, localPath, remotePath string, totalSize int
 					// R3 流式:用 SectionReader 边读边传(不再 make 10MB slice)。
 					// 内存从 10MB/worker 降到 ~64KB/worker,且 ContentLength 正确。
 					section := io.NewSectionReader(wf, off, thisSize)
-					if err := uploadSingleChunk(cfg, agentID, chunkName, section, thisSize, localPath, j.idx); err != nil {
+					if err := uploadSingleChunk(cfg, agentID, chunkName, section, thisSize, localPath, j.idx, chunkSHA); err != nil {
 						lastErr = err
 						// R3 统计:重试计数(首次失败也算,供最终摘要输出)
 						stats.totalRetries.Add(1)
@@ -384,7 +398,8 @@ outer:
 // uploadSingleChunk 上传单个分片(复用现有 upload 端点)。
 // R3 流式:body 是分片内容 reader(SectionReader),length 是精确字节数。
 // R4:失败时读取错误 body 前 512 字节拼进错误信息(区分磁盘满/路径拒绝/占用)。
-func uploadSingleChunk(cfg config, agentID, chunkName string, body io.Reader, length int64, srcFile string, idx int) error {
+// P2-11:chunkSHA 非空时随 query 传给 Agent(单片收完立即校验,损坏当场失败)。
+func uploadSingleChunk(cfg config, agentID, chunkName string, body io.Reader, length int64, srcFile string, idx int, chunkSHA string) error {
 	transferID := fmt.Sprintf("xfer-%d-chunk%d", time.Now().UnixNano(), idx)
 
 	q := url.Values{}
@@ -392,6 +407,9 @@ func uploadSingleChunk(cfg config, agentID, chunkName string, body io.Reader, le
 	q.Set("path", chunkName)
 	q.Set("transfer_id", transferID)
 	q.Set("size", fmt.Sprintf("%d", length))
+	if chunkSHA != "" {
+		q.Set("sha256", chunkSHA)
+	}
 	u := cfg.relay + "/api/transfer/upload?" + q.Encode()
 
 	req, err := http.NewRequest("POST", u, body)
@@ -571,6 +589,18 @@ func computeFileSHA256(path string) (string, error) {
 	defer f.Close()
 	h := sha256.New()
 	if _, err := io.CopyBuffer(h, f, make([]byte, 64*1024)); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// computeSectionSHA256 算文件 [off, off+size) 段的 SHA256(流式 SectionReader,
+// 不把分片载入内存——与 R3 发送路径同一低内存约定,代价是该片多读一遍磁盘)。
+// P2-11:供分片上传前计算 per-chunk hash。
+func computeSectionSHA256(f *os.File, off, size int64) (string, error) {
+	h := sha256.New()
+	section := io.NewSectionReader(f, off, size)
+	if _, err := io.CopyBuffer(h, section, make([]byte, 64*1024)); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

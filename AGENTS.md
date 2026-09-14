@@ -50,7 +50,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
 - **G6**(v4.5.0→v4.6.0):批量任务编排 DAG——`internal/dagflow` 调度核心(依赖建模+并发上限+失败级联跳过+ContinueOnError 软依赖,纯逻辑零依赖、确定性可测);v4.6.0 接入 relay 编排端点(POST /api/dag 提交/GET 列表与逐节点状态快照,策略逐节点校验+审计+TTL 注册表)与 CLI(`go-rmm dag apply/list/status`),节点执行体复用既有任务投递链路(store 持久化+WS dispatch+终态轮询)。
-- **成功标准**:225 Go 文件 / 41K 行 / 467 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10 + 2026-09-03 rules 门禁冒烟)。
+- **成功标准**:228 Go 文件 / 41.9K 行 / 476 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10 + 2026-09-03 rules 门禁冒烟)。
 
 ## 架构假设(4 项显式假设)
 
@@ -141,10 +141,10 @@ go-rmm/
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 221 |
-| 代码行 | 40,900+ |
+| Go 文件 | 228 |
+| 代码行 | 41,900+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 467 |
+| 测试用例 | 476 |
 | 基准测试 | 22 |
 | CLI 命令 | 52 |
 | API 端点 | 45 |
@@ -171,7 +171,7 @@ go-rmm/
 | **relay** 水平扩展 | 70% | TaskStore interface + Redis + Pub/Sub 联邦;多 Relay 故障切换 | 🟡 生产验证待补 |
 | **agent** 执行器 | 90% | 9 类任务(PS/script/file/screenshot/browse/guiclick/update/power/monitor) | ✅ |
 | **agent** 连接管理 | 95% | 反向 WS + 断线重连 + 心跳 + 主从双 Agent + 死连接 watchdog(S1)+ 孤儿分片 sweep(S3) | ✅ |
-| **agent** 文件传输 | 90% | 并发分片 + 断点续传 + path 互斥(R1)+ 已满快路径(R2)+ 流式低内存(R3)+ 能力协商(S4) | ✅ |
+| **agent** 文件传输 | 90% | 并发分片 + 断点续传 + path 互斥(R1)+ 已满快路径(R2)+ 流式低内存(R3)+ 能力协商(S4)+ per-chunk SHA256 收完即校验(损坏当场删 .part 拒绝)[2026-09-13] | ✅ |
 | **agent** Linux | 85% | script lang=sh + monitor /proc + CLI 命令族平台方言化全覆盖(logs/sysinfo/service/proc/net/find/config/diagnose/compare/sync/watch/snapshot/tag,双方言一次直达;workflow/playbook/exec 为用户内容型)+ 三平台编译门禁(P1-4 七步);Linux 实机部署验证待补 | 🟡 |
 | **cmd** CLI | 90% | 51 命令 + 流式 + TUI + 退出码体系 | ✅ |
 | **client** SDK | 85% | 45+ 方法 + 流式 + 工具发现 | ✅ |
@@ -190,19 +190,19 @@ go-rmm/
 
 ## 测试覆盖(v4.6.0)
 
-467 测试 + 22 基准。按包分布与重点验证场景:
+467 测试 + 22 基准(v4.6.0 口径;2026-09-13 per-chunk SHA256 后为 476,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
-| **relay** | 208 | 62 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10] |
-| **agent** | 71 | 32 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9] |
+| **relay** | 209 | 63 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10];transfer upload sha256 透传 E2E(真 WS fake Agent 全链路)[2026-09-13] |
+| **agent** | 73 | 33 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9];单片 SHA 校验防线(匹配成功 rename/不匹配删 .part 防续传死循环)[2026-09-13] |
 | **executors** | 57 | 25 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控;rules 门禁(发现去重/指纹组合/Dispatcher 校验/op=rules/变更失效闭环)[v4.4.0] |
 | **proto** | 44 | 9 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
 | **internal/wsx** | 5 | 1 | 优先级写引擎(P0 控制帧不被 P1 数据饿死——阻塞 socket 写+积压构造确定性验证/写错误经 Done 回传/ctx 取消与调用方超时契约/Start 幂等)[2026-09-12]
 | **internal/dagflow** | 13 | 1 | 图校验 8 类非法图逐一拒绝+环点名;串行启动序列 50 次重跑逐位一致;并发峰值恰守上限 3;失败级联(health/watch 跳过+alert 软依赖照跑+跳过者从未启动);软依赖仍须等终态;ctx 取消 skipped 收尾;带环图不死锁 [v4.5.0];v4.6.0 relay 端到端:3 节点失败级联剧场(start_order 确定 prep→deploy/verify 零投递)+软依赖照跑+策略拦截 403+提交期校验 |
 | **client** | 18 | 9 | SDK 方法/流式/工具发现 |
 | **console** | 14 | 4 | 反向代理/事件转发 |
-| **cmd** | 21 | 30 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3];rules read E2E/ack 缓存/-s 防呆/deploy 模板[v4.4.0] |
+| **cmd** | 26 | 31 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3];rules read E2E/ack 缓存/-s 防呆/deploy 模板[v4.4.0];per-chunk SHA256(computeSectionSHA 段 hash/分片 query 下发/非分片预计算 E2E/Agent 拒绝冒泡)[2026-09-13] |
 
 **深度测试(rounds 1-10)**:round 1 修复 `TestMultiAgentRoutingE2E` 永久失败;rounds 2-7 逐层加深(relay 路由 → 执行器 → console → mTLS → 审计 → 多租户);round 8 覆盖批量分发不变量(并发投递/聚合/退避重试/幂等/ctx 取消/进度状态机);rounds 9-10 工作区深度推进——补 SecretStore/ScriptLibrary/buffer_pool/rQueue/Envelope 等弱测模块,修复空闲 Agent 掉线循环(S7 heartbeat_ack)、脚本库路径穿越漏洞、Prom 指标前缀 typo、审计写盘静默丢记录。
 
@@ -211,6 +211,8 @@ go-rmm/
 **测试运行**:`go test ./... -count=1`(单 relay 包约 10s)。基准:`go test ./relay/ -bench=.`(22 项)。
 
 **测试密度补强(2026-09-12)**:internal/wsx 从零测试到 5 项(优先级写引擎核心语义);relay 补 scheduler_smart 负载均衡/标签过滤/端点与 update_repo 版本仓库 13 项。**逮住真 bug**:`UpdateRepo.List` 版本排序用纯字典序——`v2.0.0 > v10.0.0`,"最新在前"承诺被违反(上传 v10 后 CLI 列表仍把 v2 当最新);修复为数值感知比较(compareVersions,数字段按数值比,时间戳自动版本天然兼容)。
+
+**per-chunk SHA256 强制(2026-09-13,P2-11 上传侧收口)**:+8 测(cmd 5/relay 1/agent 2)。**实现点修正**:原预估"需协议改动(滚动升级兼容性风险)",实测 `sha256` query → `file_xfer_init.SHA256` → Agent `expectedSHA256` 收完即比对 通道自 J2 起就存在,只是 CLI 上传路径从未接线——分片 `uploadSingleChunk` 与非分片 `fileUpload` 都只做事后比对(彼时损坏文件已被 Agent rename 成正式文件留在目标位置)。接线后修复真实痛点:断点续传 `checkCompletedChunks` 只查大小,损坏片被永久跳过 → 整文件重试 2 次全败。首个 transfer 端点 E2E(httptest relay + 真 WS fake Agent,init 透传断言+二进制帧累积+complete 回传)。
 
 ---
 
@@ -258,7 +260,7 @@ go-rmm/
 8. **Web 控制台深化**:批量分发进度可视化 ✅(2026-08-19)——控制台新增批量面板(按 tag 提交异步批次,进度条+成功/失败/待投计数+ETA+各目标状态网格+终态成功率,轮询 1s,复用 /api/batch×3 端点);租户/组织管理 UI、审计回放仍待做。
 9. ~~race 检测 CI~~:✅ 已完成——`ci.yml` 的 Test step 即 `go test -cover -race`(3563a3c 落地,本机与 CI 双验证零警告)。
 10. ~~Agent Prometheus 指标端点~~:✅ 已完成——`127.0.0.1:7781/metrics`(仅本机回环,metrics_addr 可改/off 禁用),xfer 五计数器+sessions_active gauge+reconnects_total+uptime+build_info,gormmm_ 三 m 命名空间统一。
-11. **文件传输 per-chunk SHA256 强制**:当前单片 `.ftpartNN` 无 hash 校验(合并后整文件校验兜底),加 per-chunk 强制可提前发现损坏,但需协议改动(滚动升级兼容性风险)。
+11. ~~文件传输 per-chunk SHA256 强制~~:✅ 已完成(2026-09-13,上传侧收口)——**实现点修正:零协议改动**。原预估"需协议改动(滚动升级兼容性风险)",实测 `sha256` query → `file_xfer_init.SHA256` → Agent `expectedSHA256` 收完即比对 的通道自 J2 stream-through 起就存在,只是 CLI 上传路径没接线(分片 `uploadSingleChunk` 与非分片 `fileUpload` 都只在事后比对响应回传 hash——彼时损坏文件已被 Agent rename 成正式文件留在目标位置)。现:①分片上传每片发送前 `computeSectionSHA256`(SectionReader 流式,~64KB 内存,代价是该片多读一遍磁盘)随 query 下发,损坏当场失败重传——修复真实痛点:断点续传 `checkCompletedChunks` 只查大小,损坏片(大小恰好匹配)被永久跳过 → 整文件重试 2 次全败只能人工清远端分片;②非分片路径预计算整文件 hash 进 query(管道模式 `-` stdin 单遍流无法预计算,维持事后比对兜底);③agent 侧 mismatch 路径删 `.part`(既有行为,本次补直接测试)。下载侧未动(HTTP 响应为纯 octet-stream,Agent 算的分片 hash 无回传通道,改响应协议风险大——合并后整文件校验继续兜底)。磁盘位腐烂(传输后落盘损坏)仍靠整文件校验兜底,诚实边界。
 12. ~~Relay 速率限制~~:✅ 已完成(实现点修正为 Agent 发送侧,更贴近痛点)——`transfer_rate_limit_mb` config(MB/s,0=不限)→ TransferEngine 发送前令牌桶节流(手写零依赖,突发额度 1s 满速,ctx 取消即返);防并发下载吃满 Agent 上行挤死心跳 WS。
 
 ---
