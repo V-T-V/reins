@@ -127,7 +127,7 @@
 | **Secret 管理** | 凭据 TTL+一次性,不落 audit |
 | **Session 录屏** | asciinema v2,可回放 |
 | **可观测性** | slog + Prometheus + pprof;Agent 本地 `127.0.0.1:7781/metrics`(xfer 计数/会话/重连/uptime) |
-| **Webhook 告警** | Slack/钉钉/企业微信 |
+| **Webhook 告警** | Slack/钉钉/企业微信;5 事件(任务失败/Agent 离线/策略拦截/电源操作/证书撤销),`-webhooks` flag 或 `GO_RMM_WEBHOOKS` |
 | **水平扩展** | TaskStore interface + Redis + Pub/Sub |
 | **AI Agent SDK** | `client.New()` → 45+ 方法 + 流式执行 |
 

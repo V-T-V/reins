@@ -152,6 +152,7 @@ func (r *Relay) handleDAGSubmit(w http.ResponseWriter, req *http.Request) {
 			if r.audit != nil {
 				r.audit.Log(AuditEntry{Event: "task_blocked", Type: n.Type, Detail: fmt.Sprintf("dag:%s/%s %s", body.Name, n.ID, err.Error())})
 			}
+			notifyPolicyBlocked(n.AgentID, n.Type, fmt.Sprintf("dag:%s/%s %s", body.Name, n.ID, err.Error())) // F11:webhook 告警
 			writeJSON(w, http.StatusForbidden, errMap(err))
 			return
 		}

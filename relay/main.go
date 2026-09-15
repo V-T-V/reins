@@ -29,7 +29,7 @@ func main() {
 	cfg := parseFlags()
 	// S2:结构化日志(JSON 生产 / Text 开发)
 	initLogger(cfg.Dev)
-	initWebhooks() // F11:webhook 告警
+	initWebhooks(cfg.Webhooks) // F11:webhook 告警(flag > GO_RMM_WEBHOOKS env)
 
 	// 零配置体验:非 dev 模式下自动生成并保存 token(dev 模式不校验)
 	if cfg.Token == "" && !cfg.Dev {

@@ -197,6 +197,7 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 		if r.audit != nil {
 			r.audit.Log(AuditEntry{Event: "task_blocked", Type: body.Type, Detail: "batch:" + body.Tag + " " + err.Error()})
 		}
+		notifyPolicyBlocked("", body.Type, "batch:"+body.Tag+" "+err.Error()) // F11:webhook 告警
 		writeJSON(w, http.StatusForbidden, errMap(err))
 		return
 	}
@@ -432,6 +433,26 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
+	// C9 命令安全策略校验：拦截高危命令。
+	// P1-7 修复(2026-09-14):校验必须在离线缓存分支**之前**——否则高危命令发给
+	// 离线 Agent 会以 202 缓存绕过策略,等 Agent 上线由 dispatchPendingTasks
+	// 补投时无二次校验,命令直达 Agent(与 P1-1 批量路径绕过同构)。
+	if err := r.policy.CheckCommandPayload(task.Type, task.Payload); err != nil {
+		log.Printf("[policy] 拦截高危任务 task=%s type=%s: %v", task.TaskID, task.Type, err)
+		metrics.Inc("blocked")
+		if r.audit != nil {
+			r.audit.Log(AuditEntry{
+				Event:   "task_blocked",
+				AgentID: task.AgentID,
+				TaskID:  task.TaskID,
+				Type:    task.Type,
+				Detail:  err.Error(),
+			})
+		}
+		notifyPolicyBlocked(task.AgentID, task.Type, err.Error()) // F11:webhook 告警
+		writeJSON(w, http.StatusForbidden, errMap(err))
+		return
+	}
 	// H-2:离线分支——曾注册且不支持→400;从未上线或支持→缓存 202
 	conn := r.agents.Conn(task.AgentID)
 	caps := r.agentCapabilities(task.AgentID)
@@ -448,23 +469,6 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 	}
 	if !r.agentSupports(task.AgentID, task.Type) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent %s 不支持任务类型 %s (能力: %v)", task.AgentID, task.Type, caps)))
-		return
-	}
-
-	// C9 命令安全策略校验：拦截高危命令
-	if err := r.policy.CheckCommandPayload(task.Type, task.Payload); err != nil {
-		log.Printf("[policy] 拦截高危任务 task=%s type=%s: %v", task.TaskID, task.Type, err)
-		metrics.Inc("blocked")
-		if r.audit != nil {
-			r.audit.Log(AuditEntry{
-				Event:   "task_blocked",
-				AgentID: task.AgentID,
-				TaskID:  task.TaskID,
-				Type:    task.Type,
-				Detail:  err.Error(),
-			})
-		}
-		writeJSON(w, http.StatusForbidden, errMap(err))
 		return
 	}
 
@@ -875,6 +879,7 @@ func (r *Relay) handleRevokeAgent(w http.ResponseWriter, req *http.Request) {
 	if r.audit != nil {
 		r.audit.Log(AuditEntry{Event: "agent_revoked", AgentID: body.AgentID, Detail: "证书撤销"})
 	}
+	notifyAgentRevoked(body.AgentID) // F11:webhook 告警(证书撤销)
 	log.Printf("[ca] 撤销 Agent %s 证书", body.AgentID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"agent_id": body.AgentID,

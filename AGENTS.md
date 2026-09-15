@@ -50,7 +50,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
 - **G6**(v4.5.0→v4.6.0):批量任务编排 DAG——`internal/dagflow` 调度核心(依赖建模+并发上限+失败级联跳过+ContinueOnError 软依赖,纯逻辑零依赖、确定性可测);v4.6.0 接入 relay 编排端点(POST /api/dag 提交/GET 列表与逐节点状态快照,策略逐节点校验+审计+TTL 注册表)与 CLI(`go-rmm dag apply/list/status`),节点执行体复用既有任务投递链路(store 持久化+WS dispatch+终态轮询)。
-- **成功标准**:228 Go 文件 / 41.9K 行 / 476 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10 + 2026-09-03 rules 门禁冒烟)。
+- **成功标准**:228 Go 文件 / 41.9K 行 / 492 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10 + 2026-09-03 rules 门禁冒烟 + 2026-09-14 webhook/tls_watcher 收口)。
 
 ## 架构假设(4 项显式假设)
 
@@ -141,10 +141,10 @@ go-rmm/
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 228 |
-| 代码行 | 41,900+ |
+| Go 文件 | 230 |
+| 代码行 | 42,000+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 476 |
+| 测试用例 | 492 |
 | 基准测试 | 22 |
 | CLI 命令 | 52 |
 | API 端点 | 45 |
@@ -161,12 +161,12 @@ go-rmm/
 | 模块 | 完成度 | 关键能力 | 状态 |
 |------|--------|----------|------|
 | **relay** 路由层 | 95% | 42 REST 端点 + SSE 事件流 + 鉴权链 | ✅ |
-| **relay** 可观测性 | 90% | /api/metrics(JSON)+ /metrics(Prom)+ xfer 传输指标(M1)+ pprof | ✅ |
+| **relay** 可观测性 | 90% | /api/metrics(JSON)+ /metrics(Prom)+ xfer 传输指标(M1)+ pprof + webhook 告警 5 事件全接线[2026-09-14] | ✅ |
 | **relay** 任务投递 | 95% | WS 转发 + CAS 存储 + Reaper 超时回收 + 智能调度 | ✅ |
 | **relay** 批量分发 | 95% | 一对多 + 聚合 + 指数退避重试 + 实时进度 + REST 异步端点(POST /api/batch + SSE 进度) [round 8+2026-08-18] | ✅ |
 | **relay** DAG 编排 | 95% | POST /api/dag 提交(Validate+逐节点策略校验)+ GET 列表/逐节点状态快照;节点=agent_id/tag 扇出投递+终态轮询;失败级联跳过对下游零投递 [v4.6.0] | ✅ |
 | **relay** 多租户 | 90% | 组织/角色策略/配额/隔离过滤 + bbolt 持久化(tenants bucket,重启恢复) + authorize 接入 OrgEnabled fail-closed [2026-08-18] | ✅ |
-| **relay** 安全层 | 90% | mTLS + 内置 CA + CRL + 命令策略黑名单 + Secret 管理 | ✅ |
+| **relay** 安全层 | 90% | mTLS + 内置 CA + CRL + 命令策略黑名单(离线缓存路径同拦,P1-7[2026-09-14]) + Secret 管理 | ✅ |
 | **relay** 审计 | 95% | hash chain 防篡改 + 异步落盘 + SIEM 导出 [round 6] | ✅ |
 | **relay** 水平扩展 | 70% | TaskStore interface + Redis + Pub/Sub 联邦;多 Relay 故障切换 | 🟡 生产验证待补 |
 | **agent** 执行器 | 90% | 9 类任务(PS/script/file/screenshot/browse/guiclick/update/power/monitor) | ✅ |
@@ -190,15 +190,15 @@ go-rmm/
 
 ## 测试覆盖(v4.6.0)
 
-467 测试 + 22 基准(v4.6.0 口径;2026-09-13 per-chunk SHA256 后为 476,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
+492 测试 + 22 基准(2026-09-14 webhook/tls_watcher 收口后口径,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
-| **relay** | 209 | 63 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10];transfer upload sha256 透传 E2E(真 WS fake Agent 全链路)[2026-09-13] |
+| **relay** | 225 | 65 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10];transfer upload sha256 透传 E2E(真 WS fake Agent 全链路)[2026-09-13];webhook 收口(5 事件接线+flag/env 配置+通知体结构+真 handler 403/失败 result/证书撤销 E2E)+离线缓存策略绕过回归(P1-7)[2026-09-14];tls_watcher(CheckCertExpiry 正常/过期/三错误路径+CertDaysLeftMetric 双口径+LoadCertForRelay)[2026-09-14] |
 | **agent** | 73 | 33 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9];单片 SHA 校验防线(匹配成功 rename/不匹配删 .part 防续传死循环)[2026-09-13] |
 | **executors** | 57 | 25 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控;rules 门禁(发现去重/指纹组合/Dispatcher 校验/op=rules/变更失效闭环)[v4.4.0] |
 | **proto** | 44 | 9 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
-| **internal/wsx** | 5 | 1 | 优先级写引擎(P0 控制帧不被 P1 数据饿死——阻塞 socket 写+积压构造确定性验证/写错误经 Done 回传/ctx 取消与调用方超时契约/Start 幂等)[2026-09-12]
+| **internal/wsx** | 5 | 1 | 优先级写引擎(P0 控制帧不被 P1 数据饿死——阻塞 socket 写+积压构造确定性验证/写错误经 Done 回传/ctx 契约两段分层断言(调用方 ctx 已取消=确定性 ctx.Err;writer ctx 取消=只锚定不挂死,nil/err 均合法——原"必须报错"断言与"可能迟到但不会丢"设计语义冲突,调度偏置下稳定翻车,2026-09-14 修订)/Start 幂等)[2026-09-12]
 | **internal/dagflow** | 13 | 1 | 图校验 8 类非法图逐一拒绝+环点名;串行启动序列 50 次重跑逐位一致;并发峰值恰守上限 3;失败级联(health/watch 跳过+alert 软依赖照跑+跳过者从未启动);软依赖仍须等终态;ctx 取消 skipped 收尾;带环图不死锁 [v4.5.0];v4.6.0 relay 端到端:3 节点失败级联剧场(start_order 确定 prep→deploy/verify 零投递)+软依赖照跑+策略拦截 403+提交期校验 |
 | **client** | 18 | 9 | SDK 方法/流式/工具发现 |
 | **console** | 14 | 4 | 反向代理/事件转发 |
@@ -213,6 +213,8 @@ go-rmm/
 **测试密度补强(2026-09-12)**:internal/wsx 从零测试到 5 项(优先级写引擎核心语义);relay 补 scheduler_smart 负载均衡/标签过滤/端点与 update_repo 版本仓库 13 项。**逮住真 bug**:`UpdateRepo.List` 版本排序用纯字典序——`v2.0.0 > v10.0.0`,"最新在前"承诺被违反(上传 v10 后 CLI 列表仍把 v2 当最新);修复为数值感知比较(compareVersions,数字段按数值比,时间戳自动版本天然兼容)。
 
 **per-chunk SHA256 强制(2026-09-13,P2-11 上传侧收口)**:+8 测(cmd 5/relay 1/agent 2)。**实现点修正**:原预估"需协议改动(滚动升级兼容性风险)",实测 `sha256` query → `file_xfer_init.SHA256` → Agent `expectedSHA256` 收完即比对 通道自 J2 起就存在,只是 CLI 上传路径从未接线——分片 `uploadSingleChunk` 与非分片 `fileUpload` 都只做事后比对(彼时损坏文件已被 Agent rename 成正式文件留在目标位置)。接线后修复真实痛点:断点续传 `checkCompletedChunks` 只查大小,损坏片被永久跳过 → 整文件重试 2 次全败。首个 transfer 端点 E2E(httptest relay + 真 WS fake Agent,init 透传断言+二进制帧累积+complete 回传)。
+
+**webhook 告警收口 + P1-7 离线缓存策略洞(2026-09-14)**:+16 测(relay 11 webhook + 5 tls_watcher),总数 492。①**webhook 半成品收口**:5 个文档承诺事件此前只有 agent_offline 一个接线点,task_failed/policy_blocked/power_executed/agent_revoked 全是零触发点的空壳(notify 函数存在但无人调用);现 6 处接线(任务失败 result 分支/单任务+批量+DAG 三处策略拦截/power 下发成功/证书撤销),配置补 `-webhooks` flag(flag > `GO_RMM_WEBHOOKS` env,与其它配置同优先级序),删 `WebhookConfig.Enabled` 死字段,通知体{source,event,timestamp,data}经 httptest sink 确定性验证+三个真 handler E2E(403 拦截/真 WS fake Agent 回失败 result/真 CA revoke)。②**P1-7 安全洞(webhook E2E 构造离线目标时意外暴露)**:`handlePostTask` 离线缓存分支在命令策略校验**之前** return 202——高危命令发给离线 Agent 被缓存,Agent 上线 `dispatchPendingTasks` 补投时无二次校验,命令直达 Agent(与 P1-1 批量路径绕过同构);修复=策略校验挪到离线分支之前(校验不依赖在线态),离线缓存任务天然合法,回归测试锚定"离线目标高危命令必须 403 不得 202 缓存"。③**tls_watcher 零测试模块补测**(5 测):自签证书 NotAfter 可控生成器,DaysLeft 截断语义锚定(36h→1/-48h→-2/**72h 恰整天边界因毫秒延迟抖到 2——改 84h 半整天窗口**),三错误路径(缺文件/非 PEM/坏 DER)+CertDaysLeftMetric 双口径一致+错误 -1。④**wsx TestContextCancel flaky 修复**:原断言"writer ctx 取消后写必须报错"与设计语义("可能迟到但不会丢"——取消后已入队帧允许被迟到消费成功写出)冲突,cancel 与 writer 消费 controlCh 的 select 竞态+loopback 写 fast path 必成功,调度偏置下稳定返回 nil 翻车;修订为两段分层:调用方 ctx 已取消(未 Start)=确定性 `context.Canceled` 断言,writer ctx 取消=只锚定"不挂死"契约,5 连跑稳定。
 
 ---
 

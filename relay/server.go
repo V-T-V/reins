@@ -575,6 +575,10 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 						Detail:  fmt.Sprintf("success=%v exit=%d duration=%dms", res.Success, res.ExitCode, res.Duration),
 					})
 				}
+				// F11:webhook 告警(任务失败)
+				if !res.Success {
+					notifyTaskFailed(agentID, res.TaskID, res.Error)
+				}
 				r.console.Broadcast(Event{
 					Kind:    proto.TypeTaskResult,
 					AgentID: agentID,

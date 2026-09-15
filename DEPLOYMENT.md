@@ -280,8 +280,10 @@ scrape_configs:
 ### Webhook 告警
 
 ```bash
+# flag(优先)或环境变量,二选一
+go-rmm-relay -webhooks "https://hooks.slack.com/xxx,https://oapi.dingtalk.com/yyy"
 export GO_RMM_WEBHOOKS="https://hooks.slack.com/xxx"
-# 自动触发:任务失败/Agent离线/策略拦截/电源操作
+# 自动触发:任务失败/Agent离线/策略拦截(单任务/批量/DAG)/电源操作/证书撤销
 ```
 
 ### 健康检查

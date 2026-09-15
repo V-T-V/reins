@@ -27,6 +27,9 @@ type Config struct {
 	// 命令必须命中至少一条白名单规则,且仍受 32 条黑名单兜底(交集语义)。
 	// 例:-policy-allow '^Get-Service,^Get-Process,^node '
 	PolicyAllow string
+	// F11 webhook 告警(逗号分隔 URL)。触发:task_failed/agent_offline/policy_blocked/
+	// power_executed/agent_revoked;flag 优先,空则回退 GO_RMM_WEBHOOKS 环境变量。
+	Webhooks string
 }
 
 // parseFlags 解析命令行参数。
@@ -47,6 +50,8 @@ func parseFlags() Config {
 	flag.BoolVar(&c.DebugPprof, "debug-pprof", getEnv("GO_RMM_DEBUG_PPROF", "") != "", "启用 /debug/pprof(默认关,生产关闭防内存侦察;dev 模式自动开)")
 	// P1-6:命令策略白名单(黑名单 best-effort 可绕,白名单 allow-only 收紧)
 	flag.StringVar(&c.PolicyAllow, "policy-allow", getEnv("GO_RMM_POLICY_ALLOW", ""), "命令白名单(逗号分隔正则;非空则 allow-only:须命中白名单且不碰黑名单)")
+	// F11:webhook 告警(空则回退 GO_RMM_WEBHOOKS 环境变量)
+	flag.StringVar(&c.Webhooks, "webhooks", getEnv("GO_RMM_WEBHOOKS", ""), "webhook 告警 URL(逗号分隔;触发 task_failed/agent_offline/policy_blocked/power_executed/agent_revoked)")
 	flag.Parse()
 	return c
 }

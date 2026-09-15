@@ -106,6 +106,7 @@ func (r *Relay) handlePower(w http.ResponseWriter, req *http.Request) {
 			Detail:  fmt.Sprintf("op=%s force=%v delay=%d", raw.Op, raw.Force, raw.Delay),
 		})
 	}
+	notifyPowerExecuted(raw.AgentID, raw.Op, raw.Delay) // F11:webhook 告警(电源操作)
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"agent_id": raw.AgentID,

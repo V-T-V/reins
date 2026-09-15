@@ -1,17 +1,17 @@
 // Package main — Webhook 告警(F11 扩展)。
 //
-// 任务失败/Agent 离线/策略拦截 时自动发 HTTP POST 到配置的 webhook URL。
+// 任务失败/Agent 离线/策略拦截/电源操作/证书撤销 时自动发 HTTP POST 到配置的 webhook URL。
 // 支持 Slack/DingTalk/企业微信/自定义 HTTP 端点。
 //
-// 配置(config.json 或环境变量):
+// 配置(flag 或环境变量,优先级 flag > env):
 //
-//	"webhooks": ["https://hooks.slack.com/...", "https://oapi.dingtalk.com/..."]
+//	-webhooks "https://hooks.slack.com/...,https://oapi.dingtalk.com/..."
 //	或 GO_RMM_WEBHOOKS="url1,url2"
 //
-// 触发事件:
-//   - task_failed     任务执行失败
+// 触发事件(2026-09-14 收口:5 类事件全接线):
+//   - task_failed     任务执行失败(Agent 回传 result.Success=false)
 //   - agent_offline   Agent 离线
-//   - policy_blocked  命令策略拦截
+//   - policy_blocked  命令策略拦截(单任务/批量/DAG 节点)
 //   - power_executed  电源操作执行
 //   - agent_revoked   Agent 证书撤销
 package main
@@ -27,12 +27,6 @@ import (
 	"time"
 )
 
-// WebhookConfig webhook 配置。
-type WebhookConfig struct {
-	URLs    []string // webhook URL 列表
-	Enabled bool
-}
-
 // webhookURLs 全局 webhook URL 列表。
 var (
 	webhookURLs   []string
@@ -40,17 +34,38 @@ var (
 	webhookClient = &http.Client{Timeout: 10 * time.Second}
 )
 
-// initWebhooks 从环境变量初始化 webhook URLs。
-func initWebhooks() {
-	urls := os.Getenv("GO_RMM_WEBHOOKS")
-	if urls != "" {
-		webhookURLsMu.Lock()
-		webhookURLs = strings.Split(urls, ",")
-		webhookURLsMu.Unlock()
-		if len(webhookURLs) > 0 {
-			slog.Info("webhook 告警已启用", "count", len(webhookURLs))
+// parseWebhookURLs 解析逗号分隔的 webhook URL 列表(去空白/去空项)。
+func parseWebhookURLs(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var urls []string
+	for _, u := range strings.Split(raw, ",") {
+		if u = strings.TrimSpace(u); u != "" {
+			urls = append(urls, u)
 		}
 	}
+	return urls
+}
+
+// initWebhooks 初始化 webhook URLs。
+// 优先级:flag 显式配置(-webhooks) > 环境变量(GO_RMM_WEBHOOKS)。
+func initWebhooks(flagURLs string) {
+	urls := parseWebhookURLs(flagURLs)
+	if len(urls) == 0 {
+		urls = parseWebhookURLs(os.Getenv("GO_RMM_WEBHOOKS"))
+	}
+	setWebhookURLs(urls)
+	if len(urls) > 0 {
+		slog.Info("webhook 告警已启用", "count", len(urls))
+	}
+}
+
+// setWebhookURLs 设置全局 webhook URL 列表(测试/运行时配置用)。
+func setWebhookURLs(urls []string) {
+	webhookURLsMu.Lock()
+	webhookURLs = urls
+	webhookURLsMu.Unlock()
 }
 
 // notifyWebhook 异步发送 webhook 通知(非阻塞,失败静默)。
@@ -119,6 +134,13 @@ func notifyPowerExecuted(agentID, op string, delay int) {
 		"agent_id": agentID,
 		"op":       op,
 		"delay":    delay,
+	})
+}
+
+// notifyAgentRevoked Agent 证书撤销通知。
+func notifyAgentRevoked(agentID string) {
+	notifyWebhook("agent_revoked", map[string]any{
+		"agent_id": agentID,
 	})
 }
 
