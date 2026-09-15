@@ -11,28 +11,49 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
-// AgentLoad Agent 负载信息(从最近 monitor 采样提取)。
-type AgentLoad struct {
-	AgentID    string
-	CPUUsage   float64 // %
-	MemUsedPct float64 // %
-	TaskCount  int     // 当前在途任务数
-	LastSeen   time.Time
+// loadSampleTTL monitor 负载采样有效期(XL6):monitor 任务默认 3s 一采,
+// 2 分钟无新采样(任务早已结束/Agent 空闲)视为过期,评分回 0——
+// 宁可用"无数据"也不拿陈旧负载数据当实时值。
+const loadSampleTTL = 2 * time.Minute
+
+// parseMonitorLoad 从 monitor progress 的 Message 提取负载采样(XL6)。
+//
+// monitor 执行器上报格式为 `"<msg> | <MonitorSample JSON>"`(msg 如 "采样 #2"),
+// 此处取首个 '{' 到末尾 '}' 的 JSON 段解析出 CPU/内存使用率。
+// 非 monitor 消息/坏 JSON/无 JSON 一律返回 ok=false,由调用方忽略。
+func parseMonitorLoad(msg string) (cpu, memPct float64, ok bool) {
+	start := strings.Index(msg, "{")
+	if start < 0 {
+		return 0, 0, false
+	}
+	end := strings.LastIndex(msg, "}")
+	if end <= start {
+		return 0, 0, false
+	}
+	var sample proto.MonitorSample
+	if err := json.Unmarshal([]byte(msg[start:end+1]), &sample); err != nil {
+		return 0, 0, false
+	}
+	return sample.CPUUsage, sample.MemUsedPct, true
 }
 
 // SelectBestAgent 智能选择最优 Agent。
 //
 // 策略:
 //  1. 过滤:在线 + 支持 taskType + 匹配 tag
-//  2. 排序:负载综合分(CPU * 0.4 + Mem * 0.3 + TaskCount * 0.3)升序
+//  2. 排序:负载综合分 CPU*0.4 + Mem*0.3 + 在途任务数*10 升序(任务权重最高——
+//     一个在途任务(10 分)重于 25% CPU 差距;CPU/内存来自 monitor 采样缓存,
+//     TTL 内的采样参与评分,过期/无采样按 0 处理=无数据不阻塞调度)
 //  3. 返回最优
 func (r *Relay) SelectBestAgent(tag, taskType string) (string, error) {
 	candidates := r.agents.Snapshot()
@@ -55,12 +76,12 @@ func (r *Relay) SelectBestAgent(tag, taskType string) (string, error) {
 		if tag != "" && !matchTagAny(a.Tags, tag) {
 			continue
 		}
-		// tag 为空但 Tags 也为空 → 放行(tag="" 表示无过滤)
-		// tag 为空且 Tags 有值 → 也放行
-		// 负载评分(简化:无实时 monitor 数据时用 0 分)
-		// 生产环境从 metrics 缓存取最近 monitor 采样
-		cpu := 0.0 // TODO: 从 metrics 取
-		mem := 0.0 // TODO: 从 metrics 取
+		// 负载评分(XL6 接线):monitor 采样经 progress 帧回流 Registry 负载缓存,
+		// TTL 内的采样参与评分,过期/无采样回 0(等同无数据,不阻塞调度)。
+		cpu, mem := 0.0, 0.0
+		if c, m, seen, ok := r.agents.LoadOf(a.AgentID); ok && time.Since(seen) <= loadSampleTTL {
+			cpu, mem = c, m
+		}
 		tasks := float64(r.getInflightCount(a.AgentID))
 		score := cpu*0.4 + mem*0.3 + tasks*10 // task weight 高
 		pool = append(pool, scored{a, score})

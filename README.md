@@ -109,7 +109,7 @@
 | 能力 | 命令 |
 |------|------|
 | 系统体检 | `sysinfo -a <agent>` |
-| 实时监控 | `monitor top` (glances TUI: CPU/Mem/Disk/Net/GPU) |
+| 实时监控 | `monitor top` (glances TUI: CPU/Mem/Disk/Net/GPU;采样回流智能调度作真实负载) |
 | 系统快照 | `snapshot take` + `snapshot diff` |
 | 实时事件 | `events` (SSE: agent上线/任务结果/策略拦截) |
 | 网络诊断 | `net ping/dns/trace/ports/check` |
@@ -129,6 +129,7 @@
 | **可观测性** | slog + Prometheus + pprof;Agent 本地 `127.0.0.1:7781/metrics`(xfer 计数/会话/重连/uptime) |
 | **Webhook 告警** | Slack/钉钉/企业微信;5 事件(任务失败/Agent 离线/策略拦截/电源操作/证书撤销),`-webhooks` flag 或 `GO_RMM_WEBHOOKS` |
 | **水平扩展** | TaskStore interface + Redis + Pub/Sub |
+| **智能调度** | `GET /api/scheduler/best` 按 CPU*0.4+内存*0.3+在途任务*10 选最低载 Agent;CPU/内存取 monitor 采样回流(2 分钟 TTL,过期按无数据处理) |
 | **AI Agent SDK** | `client.New()` → 45+ 方法 + 流式执行 |
 
 ---

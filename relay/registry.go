@@ -19,6 +19,9 @@ type agentEntry struct {
 	registeredAt time.Time       // 注册时间
 	xferStats    proto.Heartbeat // V1:最近一次心跳携带的传输计数器
 	inFlight     atomic.Int64    // H2:在途任务数(dispatch+1/终态·回退-1)
+	loadCPU      float64         // XL6:最近 monitor 采样的 CPU 使用率(%)
+	loadMem      float64         // XL6:最近 monitor 采样的内存使用率(%)
+	loadSeen     time.Time       // XL6:负载采样时刻(SelectBestAgent 按 TTL 判新鲜)
 }
 
 // Registry 维护在线 Agent 注册表。
@@ -243,4 +246,31 @@ func (r *Registry) InFlight(agentID string) int64 {
 		return 0
 	}
 	return e.inFlight.Load()
+}
+
+// UpdateLoad 记录 Agent 最近一次 monitor 采样的负载(XL6:monitor progress 帧
+// 回流时调用,SelectBestAgent 评分用)。cpu/memPct 单位 %。Agent 不在线返回 false。
+func (r *Registry) UpdateLoad(agentID string, cpu, memPct float64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.agents[agentID]
+	if !ok {
+		return false
+	}
+	e.loadCPU = cpu
+	e.loadMem = memPct
+	e.loadSeen = time.Now()
+	return true
+}
+
+// LoadOf 返回 Agent 负载采样快照(XL6)。seen 是采样时刻,调用方按 TTL 判新鲜;
+// 无采样(未跑过 monitor)时 ok=false,seen 为零值。
+func (r *Registry) LoadOf(agentID string) (cpu, memPct float64, seen time.Time, ok bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	e, ok := r.agents[agentID]
+	if !ok || e.loadSeen.IsZero() {
+		return 0, 0, time.Time{}, false
+	}
+	return e.loadCPU, e.loadMem, e.loadSeen, true
 }

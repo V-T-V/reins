@@ -50,7 +50,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 - **G4**:水平扩展就绪(TaskStore interface + Redis 后端 + Pub/Sub 事件联邦 + Agent 多 Relay 故障切换)。
 - **G5**(v4.3.3):批量任务分发(一对多/聚合/重试/进度跟踪)+ 多租户组织/角色策略/配额 + 审计 SIEM 导出。
 - **G6**(v4.5.0→v4.6.0):批量任务编排 DAG——`internal/dagflow` 调度核心(依赖建模+并发上限+失败级联跳过+ContinueOnError 软依赖,纯逻辑零依赖、确定性可测);v4.6.0 接入 relay 编排端点(POST /api/dag 提交/GET 列表与逐节点状态快照,策略逐节点校验+审计+TTL 注册表)与 CLI(`go-rmm dag apply/list/status`),节点执行体复用既有任务投递链路(store 持久化+WS dispatch+终态轮询)。
-- **成功标准**:228 Go 文件 / 41.9K 行 / 492 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10 + 2026-09-03 rules 门禁冒烟 + 2026-09-14 webhook/tls_watcher 收口)。
+- **成功标准**:231 Go 文件 / 42K 行 / 496 测试 + 22 基准 / 端到端全路径验证通过(rounds 1-10 + 2026-09-03 rules 门禁冒烟 + 2026-09-14 webhook/tls_watcher/智能调度负载收口)。
 
 ## 架构假设(4 项显式假设)
 
@@ -141,10 +141,10 @@ go-rmm/
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 230 |
+| Go 文件 | 231 |
 | 代码行 | 42,000+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 492 |
+| 测试用例 | 496 |
 | 基准测试 | 22 |
 | CLI 命令 | 52 |
 | API 端点 | 45 |
@@ -162,7 +162,7 @@ go-rmm/
 |------|--------|----------|------|
 | **relay** 路由层 | 95% | 42 REST 端点 + SSE 事件流 + 鉴权链 | ✅ |
 | **relay** 可观测性 | 90% | /api/metrics(JSON)+ /metrics(Prom)+ xfer 传输指标(M1)+ pprof + webhook 告警 5 事件全接线[2026-09-14] | ✅ |
-| **relay** 任务投递 | 95% | WS 转发 + CAS 存储 + Reaper 超时回收 + 智能调度 | ✅ |
+| **relay** 任务投递 | 95% | WS 转发 + CAS 存储 + Reaper 超时回收 + 智能调度(monitor 采样负载回流评分,TTL 过期回 0)[2026-09-14] | ✅ |
 | **relay** 批量分发 | 95% | 一对多 + 聚合 + 指数退避重试 + 实时进度 + REST 异步端点(POST /api/batch + SSE 进度) [round 8+2026-08-18] | ✅ |
 | **relay** DAG 编排 | 95% | POST /api/dag 提交(Validate+逐节点策略校验)+ GET 列表/逐节点状态快照;节点=agent_id/tag 扇出投递+终态轮询;失败级联跳过对下游零投递 [v4.6.0] | ✅ |
 | **relay** 多租户 | 90% | 组织/角色策略/配额/隔离过滤 + bbolt 持久化(tenants bucket,重启恢复) + authorize 接入 OrgEnabled fail-closed [2026-08-18] | ✅ |
@@ -190,11 +190,11 @@ go-rmm/
 
 ## 测试覆盖(v4.6.0)
 
-492 测试 + 22 基准(2026-09-14 webhook/tls_watcher 收口后口径,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
+496 测试 + 22 基准(2026-09-14 webhook/tls_watcher/智能调度负载收口后口径,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
-| **relay** | 225 | 65 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10];transfer upload sha256 透传 E2E(真 WS fake Agent 全链路)[2026-09-13];webhook 收口(5 事件接线+flag/env 配置+通知体结构+真 handler 403/失败 result/证书撤销 E2E)+离线缓存策略绕过回归(P1-7)[2026-09-14];tls_watcher(CheckCertExpiry 正常/过期/三错误路径+CertDaysLeftMetric 双口径+LoadCertForRelay)[2026-09-14] |
+| **relay** | 229 | 66 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10];transfer upload sha256 透传 E2E(真 WS fake Agent 全链路)[2026-09-13];webhook 收口(5 事件接线+flag/env 配置+通知体结构+真 handler 403/失败 result/证书撤销 E2E)+离线缓存策略绕过回归(P1-7)[2026-09-14];tls_watcher(CheckCertExpiry 正常/过期/三错误路径+CertDaysLeftMetric 双口径+LoadCertForRelay)[2026-09-14];智能调度负载接线(monitor 采样回流评分/TTL 过期无视/真 WS progress E2E)[2026-09-14] |
 | **agent** | 73 | 33 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9];单片 SHA 校验防线(匹配成功 rename/不匹配删 .part 防续传死循环)[2026-09-13] |
 | **executors** | 57 | 25 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控;rules 门禁(发现去重/指纹组合/Dispatcher 校验/op=rules/变更失效闭环)[v4.4.0] |
 | **proto** | 44 | 9 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
@@ -215,6 +215,8 @@ go-rmm/
 **per-chunk SHA256 强制(2026-09-13,P2-11 上传侧收口)**:+8 测(cmd 5/relay 1/agent 2)。**实现点修正**:原预估"需协议改动(滚动升级兼容性风险)",实测 `sha256` query → `file_xfer_init.SHA256` → Agent `expectedSHA256` 收完即比对 通道自 J2 起就存在,只是 CLI 上传路径从未接线——分片 `uploadSingleChunk` 与非分片 `fileUpload` 都只做事后比对(彼时损坏文件已被 Agent rename 成正式文件留在目标位置)。接线后修复真实痛点:断点续传 `checkCompletedChunks` 只查大小,损坏片被永久跳过 → 整文件重试 2 次全败。首个 transfer 端点 E2E(httptest relay + 真 WS fake Agent,init 透传断言+二进制帧累积+complete 回传)。
 
 **webhook 告警收口 + P1-7 离线缓存策略洞(2026-09-14)**:+16 测(relay 11 webhook + 5 tls_watcher),总数 492。①**webhook 半成品收口**:5 个文档承诺事件此前只有 agent_offline 一个接线点,task_failed/policy_blocked/power_executed/agent_revoked 全是零触发点的空壳(notify 函数存在但无人调用);现 6 处接线(任务失败 result 分支/单任务+批量+DAG 三处策略拦截/power 下发成功/证书撤销),配置补 `-webhooks` flag(flag > `GO_RMM_WEBHOOKS` env,与其它配置同优先级序),删 `WebhookConfig.Enabled` 死字段,通知体{source,event,timestamp,data}经 httptest sink 确定性验证+三个真 handler E2E(403 拦截/真 WS fake Agent 回失败 result/真 CA revoke)。②**P1-7 安全洞(webhook E2E 构造离线目标时意外暴露)**:`handlePostTask` 离线缓存分支在命令策略校验**之前** return 202——高危命令发给离线 Agent 被缓存,Agent 上线 `dispatchPendingTasks` 补投时无二次校验,命令直达 Agent(与 P1-1 批量路径绕过同构);修复=策略校验挪到离线分支之前(校验不依赖在线态),离线缓存任务天然合法,回归测试锚定"离线目标高危命令必须 403 不得 202 缓存"。③**tls_watcher 零测试模块补测**(5 测):自签证书 NotAfter 可控生成器,DaysLeft 截断语义锚定(36h→1/-48h→-2/**72h 恰整天边界因毫秒延迟抖到 2——改 84h 半整天窗口**),三错误路径(缺文件/非 PEM/坏 DER)+CertDaysLeftMetric 双口径一致+错误 -1。④**wsx TestContextCancel flaky 修复**:原断言"writer ctx 取消后写必须报错"与设计语义("可能迟到但不会丢"——取消后已入队帧允许被迟到消费成功写出)冲突,cancel 与 writer 消费 controlCh 的 select 竞态+loopback 写 fast path 必成功,调度偏置下稳定返回 nil 翻车;修订为两段分层:调用方 ctx 已取消(未 Start)=确定性 `context.Canceled` 断言,writer ctx 取消=只锚定"不挂死"契约,5 连跑稳定。
+
+**智能调度负载接线(XL6 收口,2026-09-14)**:+4 测(relay 225→229),总数 496。`SelectBestAgent` 的负载评分自始是空壳——`cpu := 0.0 // TODO: 从 metrics 取`,CPU/内存恒 0,评分实际只剩在途任务数,"负载均衡选最优 Agent"的文档承诺名不副实。现接线:**monitor 执行器的 progress 帧回流**(`serveAgent` 收 `Step=="monitor"` 的 TaskProgress → `parseMonitorLoad` 从 `"<msg> | <MonitorSample JSON>"` 消息体提取 CPU/内存使用率 → `Registry.UpdateLoad` 负载缓存)→ `SelectBestAgent` 评分取 TTL 内(2 分钟)采样参与 `cpu*0.4+mem*0.3+任务数*10`,**过期/无采样评分回 0**——宁可用"无数据"也不拿陈旧负载数据当实时值(时钟不可注入,TTL 过期测试同包直改 `loadSeen` 回拨,是唯一确定性手段)。顺带:删 `AgentLoad` 死结构体(零引用)、修 SelectBestAgent 文档注释里与实现不符的评分公式(`TaskCount*0.3` → 实际 `任务数*10`)。测试:parseMonitorLoad 八分支(真实格式/嵌套字段/omitempty 零值 ok=true/无 JSON/悬掉 `{`/`}` 在 `{` 前/坏 JSON/空串)+UpdateLoad/LoadOf 契约+评分三锚(采样驱动选择/1 个在途任务(10 分)压过 60 分负载差/TTL 过期采样被无视使陈旧重载者反超胜出)+真 WS E2E(monitor 帧回流 LoadOf 断言/非 monitor step 与无 JSON 消息不触碰缓存/采样入缓存后 SelectBestAgent 闭环)。
 
 ---
 

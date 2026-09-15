@@ -590,6 +590,12 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 		case proto.TypeTaskProgress:
 			var p proto.TaskProgress
 			if err := env.Decode(&p); err == nil {
+				// XL6:monitor 采样回流 → 更新 Registry 负载缓存(供 SelectBestAgent 评分)
+				if p.Step == "monitor" {
+					if cpu, memPct, ok := parseMonitorLoad(p.Message); ok {
+						r.agents.UpdateLoad(agentID, cpu, memPct)
+					}
+				}
 				r.console.Broadcast(Event{
 					Kind:    proto.TypeTaskProgress,
 					AgentID: agentID,
