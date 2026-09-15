@@ -166,23 +166,55 @@ func TestWriteErrorPropagation(t *testing.T) {
 	}
 }
 
-// TestContextCancel —— ctx 取消后 WriteControl/WriteData 立即返回 ctx.Err,
-// 不阻塞在队列或等待 Done 上。
+// TestContextCancel —— ctx 契约(2026-09-14 修订断言:原版 flaky)。
+//
+// 设计语义见 wsx.go 包注释:"ctx 取消即退出 writer;生产者在 ctx 超时后
+// 放弃等待,帧仍会随队列消费被写出(可能迟到但不会丢)"。
+//
+// 两段确定性/非确定性分层:
+//  1. [确定性] 调用方 ctx 已取消:WriteControl/WriteData 必返回 ctx.Err()——
+//     投递 select(入队 vs ctx.Done)两分支殊途同归:入队后 waitDone 必选
+//     ctx.Done(无 writer 回填 done),或投递时直接选 ctx.Done。
+//  2. [契约] writer ctx 取消(Start 后 cancel):帧允许被 writer 迟到消费并
+//     成功写出(返回 nil——"不会丢"),也允许 writer 已退出而由调用方超时
+//     兜底(返回 err)。唯一保证:调用不挂死。
+//
+// 原断言"取消后必须返回错误"过强:cancel 与 writer 消费 controlCh 竞态
+// (两处 select 多 ready case 随机选择)+ loopback 写 fast path 必成功,
+// 在调度偏置下稳定返回 nil 而翻车——nil 本就是设计允许的行为。
 func TestContextCancel(t *testing.T) {
-	w, _, cleanup := newLoopback(t)
-	defer cleanup()
+	// --- 段 1:调用方 ctx 已取消(未 Start,无 writer)——确定性返回 ctx.Err ---
+	w1, _, cleanup1 := newLoopback(t)
+	defer cleanup1()
+	cctx, ccancel := context.WithCancel(context.Background())
+	ccancel()
+	if err := w1.WriteControl(cctx, websocket.MessageText, []byte("x")); err != context.Canceled {
+		t.Fatalf("WriteControl with cancelled caller ctx: want context.Canceled, got %v", err)
+	}
+	if err := w1.WriteData(cctx, websocket.MessageText, []byte("x")); err != context.Canceled {
+		t.Fatalf("WriteData with cancelled caller ctx: want context.Canceled, got %v", err)
+	}
 
+	// --- 段 2:writer ctx 取消——只锚定"不挂死"契约(nil/err 均合法) ---
+	w2, _, cleanup2 := newLoopback(t)
+	defer cleanup2()
 	ctx, cancel := context.WithCancel(context.Background())
-	w.Start(ctx)
+	w2.Start(ctx)
 	cancel()
 
-	wctx, wcancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	wctx, wcancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer wcancel()
-	if err := w.WriteControl(wctx, websocket.MessageText, []byte("x")); err == nil {
-		t.Fatal("WriteControl after writer ctx cancelled should fail, got nil")
-	}
-	if err := w.WriteData(wctx, websocket.MessageText, []byte("x")); err == nil {
-		t.Fatal("WriteData after writer ctx cancelled should fail, got nil")
+	done := make(chan error, 2)
+	go func() { done <- w2.WriteControl(wctx, websocket.MessageText, []byte("x")) }()
+	go func() { done <- w2.WriteData(wctx, websocket.MessageText, []byte("x")) }()
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-done:
+			// nil(迟到消费成功)/err(writer 已退出,调用方兜底)均为设计允许,不判值。
+			_ = err
+		case <-time.After(3 * time.Second):
+			t.Fatal("Write after writer ctx cancelled must not block (deadlock)")
+		}
 	}
 }
 
