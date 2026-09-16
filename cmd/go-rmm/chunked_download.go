@@ -328,6 +328,12 @@ outer:
 // downloadSingleChunk 下载单个分片到 partFile。
 // off = 文件内偏移,thisSize = 本次下载字节数。
 func downloadSingleChunk(cfg config, agentID, remotePath, partFile string, off, thisSize int64, idx int) error {
+	// Phase1 直连优先:单片先试直连(offset/limit 分片);不可达时熔断走中继
+	if !noDirectMode && !directDisabled.Load() {
+		if derr := tryDirectDownloadChunk(cfg, agentID, remotePath, partFile, off, thisSize); derr == nil {
+			return nil
+		}
+	}
 	transferID := fmt.Sprintf("dl-%d-chunk%d", time.Now().UnixNano(), idx)
 	q := url.Values{}
 	q.Set("agent_id", agentID)

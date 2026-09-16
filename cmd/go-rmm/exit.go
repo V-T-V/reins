@@ -52,3 +52,10 @@ func errNotFound(msg string) error {
 func errBlocked(msg string) error {
 	return &exitError{code: exitBlocked, msg: msg}
 }
+
+// isExitBlocked 判断错误是否为策略拦截终态(Phase1 直连回落逻辑用:
+// 策略拒绝不应回落重试,中继路径同样会被 Agent 拒)。
+func isExitBlocked(err error) bool {
+	e, ok := err.(*exitError)
+	return ok && e.code == exitBlocked
+}

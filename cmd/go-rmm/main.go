@@ -827,6 +827,8 @@ func cmdFile(cfg config, args []string) error {
 	if len(args) == 0 {
 		return errors.New("用法: go-rmm file <upload|download> [args]")
 	}
+	// Phase1 直连开关(--no-direct / GO_RMM_NO_DIRECT),剥离后不进位置参数
+	args = applyDirectFlag(args)
 	switch args[0] {
 	case "upload", "up":
 		return fileUpload(cfg, args[1:])
@@ -873,6 +875,20 @@ func fileUpload(cfg config, args []string) error {
 	}
 	if agentID == "" {
 		return errors.New("-a <agent_id> 必填")
+	}
+
+	// Phase1 直连优先:非管道模式先试直连(Agent 开启 xfer_listen 且同网段可达时
+	// 字节流不过 Relay,千兆线速;失败自动回落下方中继路径,上传 .part 续传天然衔接)
+	if !noDirectMode && !directDisabled.Load() && localPath != "-" {
+		err := tryDirectUploadFile(cfg, agentID, localPath, remotePath)
+		switch {
+		case err == nil:
+			return nil
+		case isExitBlocked(err):
+			return err // 路径策略拒绝是终态:中继路径同样会被 Agent 拒,直接上报
+		case !errors.Is(err, errDirectUnavailable):
+			fmt.Fprintf(os.Stderr, "⚠️  直连上传失败(%v),回落中继路径\n", err)
+		}
 	}
 
 	// 管道模式:localPath == "-" 从 stdin 读
@@ -1016,6 +1032,15 @@ func fileDownload(cfg config, args []string) error {
 		// 先查远端文件大小(powershell 任务)
 		if sz, err := remoteFileSize(cfg, agentID, remotePath); err == nil && sz > chunkThreshold {
 			return fileDownloadChunked(cfg, agentID, remotePath, localPath, sz)
+		}
+	}
+
+	// Phase1 直连优先:非管道模式先试直连,失败回落中继
+	if !noDirectMode && !directDisabled.Load() && localPath != "-" {
+		if err := tryDirectDownloadFile(cfg, agentID, remotePath, localPath); err == nil {
+			return nil
+		} else if !errors.Is(err, errDirectUnavailable) {
+			fmt.Fprintf(os.Stderr, "⚠️  直连下载失败(%v),回落中继路径\n", err)
 		}
 	}
 

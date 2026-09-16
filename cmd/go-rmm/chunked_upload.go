@@ -337,6 +337,14 @@ func uploadOnce(cfg config, agentID, localPath, remotePath string, totalSize int
 					// R3 流式:用 SectionReader 边读边传(不再 make 10MB slice)。
 					// 内存从 10MB/worker 降到 ~64KB/worker,且 ContentLength 正确。
 					section := io.NewSectionReader(wf, off, thisSize)
+					// Phase1 直连优先:单片先试直连(票据按基路径签发,前缀覆盖 .ftpartNNNN;
+					// probe 失败/Agent 未开启时 directDisabled 熔断,后续片直接走中继零开销)
+					if !noDirectMode && !directDisabled.Load() {
+						if derr := tryDirectUploadChunk(cfg, agentID, chunkName, section, thisSize, chunkSHA, remotePath); derr == nil {
+							uploaded.Add(thisSize)
+							continue
+						}
+					}
 					if err := uploadSingleChunk(cfg, agentID, chunkName, section, thisSize, localPath, j.idx, chunkSHA); err != nil {
 						lastErr = err
 						// R3 统计:重试计数(首次失败也算,供最终摘要输出)
