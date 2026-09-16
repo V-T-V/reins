@@ -80,3 +80,6 @@ asr-hotwords.json
 download_largev3.py
 deploy-out/
 *.mjs
+
+# relay 运行时数据目录
+data/
