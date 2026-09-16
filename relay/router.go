@@ -45,6 +45,7 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/shell/close", r.handleShellClose)                                   // H3 关会话
 	mux.HandleFunc("POST /api/transfer/upload", r.handleTransferUpload)                           // J2 上传
 	mux.HandleFunc("POST /api/transfer/download", r.handleTransferDownload)                       // J2 下载
+	mux.HandleFunc("POST /api/transfer/direct", r.handleTransferDirect)                           // Phase1 直连票据
 	mux.HandleFunc("GET /api/events", r.handleSSE)
 	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
 	mux.HandleFunc("GET /healthz", r.handleHealthz)     // D8 深度健康检查

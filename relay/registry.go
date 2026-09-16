@@ -147,6 +147,17 @@ func (r *Registry) OnlineSince(agentID string) int64 {
 	return 0
 }
 
+// XferAddrsOf 返回 Agent 注册时上报的直连传输地址列表(Phase 1 内网直连)。
+// 未开启直连(xfer_listen 未配置)或 Agent 不在线返回 nil。
+func (r *Registry) XferAddrsOf(agentID string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if e, ok := r.agents[agentID]; ok {
+		return e.info.XferAddrs
+	}
+	return nil
+}
+
 // FindByTag 返回带指定标签的在线 Agent ID 列表(C10 批量下发用)。
 // tag 格式 "key=value",匹配 Agent 的 Tags。
 func (r *Registry) FindByTag(tag string) []string {
