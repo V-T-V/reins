@@ -61,6 +61,16 @@ type Config struct {
 	// 并发下载吃满上行会挤死心跳 WS;0 或缺省 = 不限速。
 	// 例:10 = 10 MB/s(留出心跳与任务通道的带宽余量)。
 	TransferRateLimitMB float64 `json:"transfer_rate_limit_mb,omitempty"`
+	// XferListen 直连传输监听地址(Phase 1 内网直连,如 ":7783")。
+	// 空 = 关闭直连(默认,行为不变);开启后 Agent 在本网段监听 HTTPS 直传端口,
+	// 注册时上报本机非回环 IPv4 × 端口。CLI 与 Agent 同网段可达时字节流走直连
+	// (千兆线速),Relay 只做票据授权;不可达时 CLI 自动回落中继路径。
+	// 安全:一次性票据(Relay 签发/60s 过期/路径+方向绑定/用后即焚)+ 自签 TLS 加密;
+	// 路径策略/per-chunk SHA256/断点续传与中继路径完全一致。
+	XferListen string `json:"xfer_listen,omitempty"`
+	// XferAdvertise 直连广播地址显式覆盖(多网卡/NAT 映射场景,如 ["10.1.2.3:7783"])。
+	// 留空 = 自动枚举本机非回环 IPv4 地址。
+	XferAdvertise []string `json:"xfer_advertise,omitempty"`
 	// MinVersion 允许的最低版本(防降级)。
 	// 自更新时若新版本 < MinVersion 则拒绝。留空则不强制。
 	MinVersion string `json:"min_version,omitempty"`
@@ -153,6 +163,10 @@ func (c Config) Validate() error {
 	if c.MaxConcurrentTasks < 0 {
 		return fmt.Errorf("max_concurrent_tasks 不能为负数")
 	}
+	// Phase 1 直连监听地址形态校验(host:port,如 ":7783")
+	if c.XferListen != "" && !strings.Contains(c.XferListen, ":") {
+		return fmt.Errorf("xfer_listen 必须是 host:port 形态(如 \":7783\"),得到 %q", c.XferListen)
+	}
 	// 主从角色校验
 	if c.Role != "" && c.Role != "master" && c.Role != "slave" {
 		return fmt.Errorf("role 必须是 master/slave/空(兼容),得到 %q", c.Role)
@@ -216,6 +230,7 @@ func loadConfig(args []string) (cmd string, cfg Config, err error) {
 	agentID := fs.String("id", cfg.AgentID, "Agent ID")
 	mtls := fs.Bool("mtls", cfg.MTLS, "启用 mTLS 模式（wss://+客户端证书）")
 	role := fs.String("role", cfg.Role, "角色: master(主,稳定)/ slave(从,可更新)。空=兼容单 Agent")
+	xferListen := fs.String("xfer-listen", cfg.XferListen, "直连传输监听地址(如 :7783,空=关闭)")
 	if e := fs.Parse(args[1:]); e != nil {
 		return cmd, cfg, e
 	}
@@ -226,6 +241,7 @@ func loadConfig(args []string) (cmd string, cfg Config, err error) {
 	if *role != "" {
 		cfg.Role = *role
 	}
+	cfg.XferListen = *xferListen
 	return cmd, cfg, nil
 }
 

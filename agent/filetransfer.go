@@ -459,6 +459,28 @@ func (te *TransferEngine) completeUpload(id string, success bool, bytes int64, h
 // SendDownloadData 发送下载的二进制数据帧（Agent→Relay）。
 // 用 websocket.Writer 流式发送，不全载入内存。
 func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, transferID string, progressCb func(proto.FileTransferProgress), completeCb func(proto.FileTransferComplete)) {
+	writeChunk := func(data []byte) error {
+		writeCtx, writeCancel := context.WithTimeout(ctx, 15*time.Second) // 弱网:下载写 deadline
+		defer writeCancel()
+		// 构造二进制帧：[transferID_len u8][transferID][isLast u8][data]
+		frame := proto.BuildBinaryFrame(transferID, false, data)
+		return wc.writeBinaryData(writeCtx, frame)
+	}
+	finalize := func() error {
+		// H-5:isLast 写错检查(WS 半坏时原 ignoring 让对端悬挂至 30 分钟 ctx 超时)
+		frame := proto.BuildBinaryFrame(transferID, true, nil)
+		return wc.writeBinaryData(ctx, frame)
+	}
+	te.streamDownload(ctx, transferID, writeChunk, finalize, progressCb, completeCb)
+}
+
+// streamDownload 下载流核心:读文件 → 限速 → writeChunk → 增量 SHA256 → finalize → 终态回调。
+// WS 中继路径(SendDownloadData)与 Phase 1 直连 HTTP 路径共用,
+// 保证限速(P2-12)/分片 limit/进度限流/下载计数两条路径语义一致。
+// finalize 在全部数据写完且无错误时调用一次(WS:isLast 空帧;直连:可为 nil)。
+func (te *TransferEngine) streamDownload(ctx context.Context, transferID string,
+	writeChunk func(data []byte) error, finalize func() error,
+	progressCb func(proto.FileTransferProgress), completeCb func(proto.FileTransferComplete)) {
 	te.mu.Lock()
 	sess, ok := te.sessions[transferID]
 	te.mu.Unlock()
@@ -481,17 +503,12 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 				n = int(sess.limit - sess.bytesDone)
 			}
 			h.Write(buf[:n])
-			// 构造二进制帧：[transferID_len u8][transferID][isLast u8][data]
-			frame := proto.BuildBinaryFrame(transferID, false, buf[:n])
 			te.mu.Lock()
 			limiter := te.sendLimiter
 			te.mu.Unlock()
-			limiter.Wait(ctx, n)                                              // P2-12:发送前节流,保护心跳 WS 的上行带宽
-			writeCtx, writeCancel := context.WithTimeout(ctx, 15*time.Second) // 弱网:下载写 deadline
-			wErr := wc.writeBinaryData(writeCtx, frame)
-			writeCancel()
-			if wErr != nil {
-				completeCb(proto.FileTransferComplete{TransferID: transferID, Success: false, Error: "WS写失败: " + wErr.Error(), Bytes: sess.bytesDone})
+			limiter.Wait(ctx, n) // P2-12:发送前节流,保护心跳 WS 的上行带宽
+			if wErr := writeChunk(buf[:n]); wErr != nil {
+				completeCb(proto.FileTransferComplete{TransferID: transferID, Success: false, Error: "写失败: " + wErr.Error(), Bytes: sess.bytesDone})
 				return
 			}
 			sess.bytesDone += int64(n)
@@ -515,12 +532,11 @@ func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, tran
 		}
 	}
 
-	// H-5:isLast 写错检查(WS 半坏时原 ignoring 让对端悬挂至 30 分钟 ctx 超时)
-	frame := proto.BuildBinaryFrame(transferID, true, nil)
-	writeErr := wc.writeBinaryData(ctx, frame)
-	if writeErr != nil {
-		completeCb(proto.FileTransferComplete{TransferID: transferID, Success: false, Error: "isLast 帧写失败: " + writeErr.Error(), Bytes: sess.bytesDone})
-		return
+	if finalize != nil {
+		if writeErr := finalize(); writeErr != nil {
+			completeCb(proto.FileTransferComplete{TransferID: transferID, Success: false, Error: "isLast 帧写失败: " + writeErr.Error(), Bytes: sess.bytesDone})
+			return
+		}
 	}
 
 	hash := hex.EncodeToString(h.Sum(nil))

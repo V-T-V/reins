@@ -29,6 +29,7 @@ type Agent struct {
 	disp  *executors.Dispatcher
 	pool  *WorkerPool // C6 并发限流
 	certs *AgentCerts // C8 mTLS 证书（nil=非 mTLS 模式）
+	xfer  *xferDirectServer // Phase1 直连监听(nil=未开启)
 }
 
 func NewAgent(cfg Config, disp *executors.Dispatcher) *Agent {
@@ -72,6 +73,14 @@ func (a *Agent) Run(ctx context.Context) error {
 	// W7:mTLS 证书后台续签(进程级;原只在启动时检查→24h 必过期→永久离线)
 	if a.certs != nil {
 		go a.certRenewLoop(ctx)
+	}
+	// Phase1 内网直连监听(进程级,不随 WS 连接起伏;失败降级中继不致命)
+	if a.cfg.XferListen != "" {
+		if xd, err := startXferDirect(ctx, a.cfg); err != nil {
+			log.Printf("[xfer-direct] 启动失败,直连不可用(继续中继模式): %v", err)
+		} else {
+			a.xfer = xd
+		}
 	}
 	// W1:候选 Relay 列表 = 主 URL 优先 + 备用(去重)
 	candidates := buildRelayCandidates(a.cfg.RelayURL, a.cfg.RelayURLs)
@@ -295,6 +304,10 @@ func (a *Agent) sendRegister(ctx context.Context, wc *wsConn) error {
 		Capabilities: caps,
 		Tags:         tags,
 	}
+	// Phase1:直连监听在跑才上报地址(未开启/启动失败均不上报,CLI 据此回落中继)
+	if a.xfer != nil {
+		reg.XferAddrs = a.xfer.Addrs()
+	}
 	return wc.writeEnvelope(ctx, proto.TypeRegister, "relay", reg)
 }
 
@@ -433,6 +446,14 @@ func (a *Agent) recvLoop(ctx context.Context, wc *wsConn) error {
 			var cancel proto.FileTransferCancel
 			if err := env.Decode(&cancel); err == nil {
 				transfers.Cancel(cancel.TransferID)
+			}
+		case proto.TypeXferTicket:
+			// Phase1:Relay 推来的直连票据授权(存内存,一次性消费,60s TTL 懒清理)
+			var grant proto.XferTicketGrant
+			if err := env.Decode(&grant); err == nil {
+				xferTickets.Add(grant)
+				log.Printf("[xfer-direct] 收到票据 %s (%s %s,过期 %d)",
+					grant.TicketID[:8], grant.Direction, grant.Path, grant.ExpiryUnix)
 			}
 		case proto.TypeTunnelOpen:
 			safeCall("tunnel_open", func() { a.handleTunnelOpen(ctx, wc, env) })
