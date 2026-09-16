@@ -160,6 +160,12 @@ func TestFileUploadPrecomputedSHA(t *testing.T) {
 	var mu sync.Mutex
 	var gotQuerySHA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Phase1:fileUpload 先试直连票据请求,stub 应答未开启(回落中继后走下方断言)
+		if r.URL.Path == "/api/transfer/direct" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"direct": false, "reason": "stub 未开启直连"})
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		gotQuerySHA = r.URL.Query().Get("sha256")

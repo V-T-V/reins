@@ -44,6 +44,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
@@ -295,7 +297,9 @@ func (s *xferDirectServer) handleBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.TransferID == "" {
-		body.TransferID = "direct-" + fmt.Sprint(time.Now().UnixNano())
+		// uuid 而非 UnixNano:4 路并发分片同纳秒 begin 会撞 ID,
+		// sessions/dataTk 相互覆盖 → pathInUse 泄漏 → 后续全部"路径被占用"
+		body.TransferID = "direct-" + uuid.NewString()
 	}
 	// 票据校验 + 一次性消费(方向/路径绑定在票据内)
 	if !ticketAuth(r, body.Path, body.Direction, true) {
@@ -378,6 +382,7 @@ func (s *xferDirectServer) sweepDataTokens(ttl time.Duration) {
 func (s *xferDirectServer) handleData(w http.ResponseWriter, r *http.Request) {
 	transferID := r.URL.Query().Get("transfer_id")
 	if !s.popDataToken(r, transferID) {
+		log.Printf("[xfer-direct] data 鉴权失败 transferID=%s remote=%s", transferID, r.RemoteAddr)
 		xferErr(w, http.StatusUnauthorized, "data_token 无效")
 		return
 	}

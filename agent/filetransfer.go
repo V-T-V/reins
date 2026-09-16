@@ -249,7 +249,7 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 		te.mu.Lock()
 		te.sessions[init.TransferID] = &transferSession{
 			id: init.TransferID, direction: "upload", path: init.Path,
-			file: f, total: init.Size, startTime: time.Now(),
+			file: f, total: init.Size, startTime: time.Now(), lastProg: time.Now(),
 			expectedSHA256: init.SHA256,
 			hash:           h, // C2/P0-D2:增量 hash(续传时已喂入已有部分)
 		}
@@ -310,7 +310,7 @@ func (te *TransferEngine) HandleInit(init proto.FileTransferInit) proto.FileTran
 		te.mu.Lock()
 		te.sessions[init.TransferID] = &transferSession{
 			id: init.TransferID, direction: "download", path: init.Path,
-			file: f, total: info.Size(), limit: limit, startTime: time.Now(),
+			file: f, total: info.Size(), limit: limit, startTime: time.Now(), lastProg: time.Now(),
 		}
 		te.mu.Unlock()
 		ready.Accepted = true
@@ -591,6 +591,31 @@ func (te *TransferEngine) CloseAll() {
 	}
 }
 
+// sweepIdleSessions 清理空闲超时的传输会话(Phase1 直连 begin 后 data 永不到达的
+// pathInUse 泄漏兜底:客户端崩溃/断网时 session 持 path 占用,后续同路径传输被
+// "路径被占用"永久拒绝)。活动会话每 500ms 刷新 lastProg,不受影响。
+func (te *TransferEngine) sweepIdleSessions(threshold time.Duration) int {
+	te.mu.Lock()
+	var freed []string
+	for id, s := range te.sessions {
+		if time.Since(s.lastProg) > threshold {
+			if s.file != nil {
+				s.file.Close()
+			}
+			if s.path != "" {
+				delete(te.pathInUse, s.path)
+			}
+			delete(te.sessions, id)
+			freed = append(freed, id)
+		}
+	}
+	te.mu.Unlock()
+	if len(freed) > 0 {
+		log.Printf("[xfer] 清理 %d 个空闲超时会话(阈值 %s): %v", len(freed), threshold, freed)
+	}
+	return len(freed)
+}
+
 // SweepOrphanPartsLoop 周期扫描 workspace,删除孤儿分片(S3:防磁盘泄漏)。
 // CLI 分片上传崩溃/网络断时,.ftpartNN 残留无清理,长期堆积占满磁盘。
 // 策略:mtime > 2 小时 且 path 不在 pathInUse 中(非活跃传输)的 *.ftpart* 删除。
@@ -605,6 +630,7 @@ func (te *TransferEngine) SweepOrphanPartsLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			te.sweepOrphanParts(threshold)
+			te.sweepIdleSessions(2 * time.Minute) // Phase1:悬空会话兜底
 		}
 	}
 }

@@ -25,6 +25,8 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // noDirectMode --no-direct 显式关闭直连(或 GO_RMM_NO_DIRECT=1)。
@@ -49,7 +51,15 @@ func applyDirectFlag(args []string) []string {
 	if os.Getenv("GO_RMM_NO_DIRECT") != "" {
 		noDirectMode = true
 	}
-	return stripValueFlags(args, "--no-direct")
+	// 布尔 flag:纯 token 过滤(stripValueFlags 会把下一个参数当值吞掉)
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "--no-direct" || a == "--no-direct=true" || a == "--no-direct=1" {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // directHTTPClient 直连专用 client:自签 TLS 跳过证书校验
@@ -169,7 +179,9 @@ func (ds *directSession) begin(path, direction string, extra map[string]any) (*d
 		body[k] = v
 	}
 	if body["transfer_id"] == nil {
-		body["transfer_id"] = fmt.Sprintf("direct-%d", time.Now().UnixNano())
+		// uuid 而非 UnixNano:并发分片同纳秒撞 ID → agent 侧 sessions/dataTk
+		// 相互覆盖 → data_token 401 + pathInUse 泄漏(E2E 逮住)
+		body["transfer_id"] = "direct-" + uuid.NewString()
 	}
 	b, _ := json.Marshal(body)
 	req, err := http.NewRequest("POST", ds.baseURL+"/xfer/begin", bytes.NewReader(b))

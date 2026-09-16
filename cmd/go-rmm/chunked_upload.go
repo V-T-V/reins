@@ -342,8 +342,11 @@ func uploadOnce(cfg config, agentID, localPath, remotePath string, totalSize int
 					if !noDirectMode && !directDisabled.Load() {
 						if derr := tryDirectUploadChunk(cfg, agentID, chunkName, section, thisSize, chunkSHA, remotePath); derr == nil {
 							uploaded.Add(thisSize)
-							continue
+							break // 分片成功,退出重试循环(continue 会把成功当重试再来一遍)
 						}
+						// 直连失败可能已部分消费 section(resume seek/传输中断),
+						// 回卷到起点再走中继,否则中继收到残缺流 → SHA 不符
+						section.Seek(0, io.SeekStart)
 					}
 					if err := uploadSingleChunk(cfg, agentID, chunkName, section, thisSize, localPath, j.idx, chunkSHA); err != nil {
 						lastErr = err
