@@ -74,6 +74,11 @@ type Config struct {
 	// MinVersion 允许的最低版本(防降级)。
 	// 自更新时若新版本 < MinVersion 则拒绝。留空则不强制。
 	MinVersion string `json:"min_version,omitempty"`
+	// AutoUpdate 自动更新轮询间隔(如 "1h"/"30m";0 或缺省 = 关闭,默认关)。
+	// 开启后 Agent 周期查 Relay 版本仓库最新版,数值大于当前版本时自动
+	// HTTP 流式下载 → SHA256 校验 → rename+.bak+重启(与健康回滚同一套安全网)。
+	// 仅 slave 角色生效(master 永不自动更新);最小 1m。
+	AutoUpdateInterval time.Duration `json:"auto_update,omitempty"`
 	// MaxConcurrentTasks 最大并发执行任务数(C6 并发限流)。0 或负数表示不限。
 	// 默认 4,防止被并发任务打爆。
 	MaxConcurrentTasks int `json:"max_concurrent_tasks,omitempty"`
@@ -166,6 +171,10 @@ func (c Config) Validate() error {
 	// Phase 1 直连监听地址形态校验(host:port,如 ":7783")
 	if c.XferListen != "" && !strings.Contains(c.XferListen, ":") {
 		return fmt.Errorf("xfer_listen 必须是 host:port 形态(如 \":7783\"),得到 %q", c.XferListen)
+	}
+	// 自动更新间隔下限(过短会连环更新+回滚抖动)
+	if c.AutoUpdateInterval != 0 && c.AutoUpdateInterval < time.Minute {
+		return fmt.Errorf("auto_update 间隔过短(最小 1m,建议 30m~24h): %v", c.AutoUpdateInterval)
 	}
 	// 主从角色校验
 	if c.Role != "" && c.Role != "master" && c.Role != "slave" {

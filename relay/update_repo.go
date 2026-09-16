@@ -16,7 +16,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -140,10 +142,14 @@ func (r *UpdateRepo) readSHA(version string) string {
 }
 
 // Save 保存上传的二进制 + 计算 SHA256。
-// 返回 (version, sha256, error)。
+// 返回 (version, sha256, error)。显式 dev 版本拒收(未版本化构建推上生产
+// = 版本比较/防降级全部失效,线上实测就有 agent 跑在 dev 上)。
 func (r *UpdateRepo) Save(version string, reader io.Reader) (string, string, error) {
 	if version == "" {
 		version = "v" + time.Now().Format("20060102-150405")
+	}
+	if version == "dev" {
+		return "", "", fmt.Errorf("拒绝 dev 版本(未注入版本号的构建):用 -ldflags -X main.version=vX.Y.Z 构建或显式传有意义版本")
 	}
 	ext := ".exe"
 	binPath := filepath.Join(r.dir, version+ext)
@@ -223,21 +229,96 @@ func (r *Relay) handleUpdateUpload(w http.ResponseWriter, req *http.Request) {
 // BinaryPath 引用模式适合任意大小(经 filetransfer 分片预上传);
 // BinaryB64 内联仅适合中等大小(<20MB,WS 32MB 限制内)且链路低延迟。
 type protoUpdateTaskInline struct {
-	BinaryB64  string `json:"binary_b64,omitempty"`  // base64 编码的二进制
-	BinaryPath string `json:"binary_path,omitempty"` // Agent 侧已上传的新二进制路径
-	SHA256     string `json:"sha256"`
-	Version    string `json:"version"`
-	MinVersion string `json:"min_version"`
-	Force      bool   `json:"force"`
+	DownloadURL string `json:"download_url,omitempty"` // Relay 侧 HTTP 下载地址(Agent 自取)
+	BinaryB64   string `json:"binary_b64,omitempty"`   // base64 编码的二进制
+	BinaryPath  string `json:"binary_path,omitempty"`  // Agent 侧已上传的新二进制路径
+	SHA256      string `json:"sha256"`
+	Version     string `json:"version"`
+	MinVersion  string `json:"min_version"`
+	Force       bool   `json:"force"`
+}
+
+// relayDownloadURL 推导 /api/updates/download 的外可达地址。
+// ExternalURL 优先(经 nginx 反代/TLS 终端的部署),否则按请求 Host 推导。
+func (r *Relay) relayDownloadURL(req *http.Request, version string) string {
+	base := r.cfg.ExternalURL
+	if base == "" {
+		scheme := "https"
+		if req.TLS == nil {
+			scheme = "http"
+		}
+		if fp := req.Header.Get("X-Forwarded-Proto"); fp != "" {
+			scheme = fp
+		}
+		host := req.Host
+		if fh := req.Header.Get("X-Forwarded-Host"); fh != "" {
+			host = fh
+		}
+		base = scheme + "://" + host
+	}
+	return strings.TrimRight(base, "/") + "/api/updates/download?version=" + url.QueryEscape(version)
+}
+
+// handleUpdateLatest GET /api/updates/latest —— 最新版本(Agent 自动更新轮询用)。
+func (r *Relay) handleUpdateLatest(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	if r.updateRepo == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"latest": nil, "enabled": false})
+		return
+	}
+	versions := r.updateRepo.List()
+	if len(versions) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"latest": nil, "enabled": true})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"latest": versions[0], "enabled": true})
+}
+
+// handleUpdateDownload GET /api/updates/download?version=vX —— 流式下发二进制。
+// Agent 自动更新与 download 模式 update 任务的统一拉取通道(token/mTLS 鉴权)。
+func (r *Relay) handleUpdateDownload(w http.ResponseWriter, req *http.Request) {
+	if err := r.authorize(req); err != nil {
+		writeJSON(w, http.StatusUnauthorized, errMap(err))
+		return
+	}
+	if r.updateRepo == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("版本仓库未启用")))
+		return
+	}
+	version := req.URL.Query().Get("version")
+	binPath := r.updateRepo.BinPath(version)
+	if binPath == "" {
+		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("版本 %s 不在仓库", version)))
+		return
+	}
+	f, err := os.Open(binPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errMap(err))
+		return
+	}
+	defer f.Close()
+	info, _ := f.Stat()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", fmt.Sprint(info.Size()))
+	w.Header().Set("X-Xfer-SHA256", r.updateRepo.readSHA(version))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, f)
 }
 
 // handleUpdateApply POST /api/updates/apply —— 触发 Agent 更新。
-// 请求体: {"agent_id":"...", "version":"v1.2.0", "force":false, "binary_path":"可选"}
-// 二进制来源两种模式:
-//   - binary_path(推荐): Agent 侧已预上传的新二进制路径(经 file upload 分片传输),
+// 请求体: {"agent_id":"...", "version":"v1.2.0", "force":false,
+//          "binary_path":"可选", "mode":"download(默认)|path|inline"}
+// 二进制来源三种模式:
+//   - download(默认,推荐): 任务只带 DownloadURL(Aelay 自身 /api/updates/download),
+//     Agent 用自己的 token/mTLS 经 HTTP 流式拉取——不内联进内存不占 WS 帧,
+//     公网大文件也稳。CLI update push -f 现默认走此模式。
+//   - binary_path(引用): Agent 侧已预上传的新二进制路径(经 file upload 分片传输),
 //     任务 payload 只带路径引用——内联 7MB+ 二进制单帧 WS 写在公网链路必然超时
 //     (2026-08-18 实测:v4.5.1 推送连续 context deadline exceeded)。
-//   - 默认: 从仓库读二进制 base64 内联(仅适合小体积/低延迟链路)。
+//   - inline(遗留): 从仓库读二进制 base64 内联(仅适合小体积/低延迟链路)。
 func (r *Relay) handleUpdateApply(w http.ResponseWriter, req *http.Request) {
 	if err := r.authorize(req); err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
@@ -253,10 +334,22 @@ func (r *Relay) handleUpdateApply(w http.ResponseWriter, req *http.Request) {
 		Force   bool   `json:"force"`
 		// BinaryPath Agent 侧已预上传的新二进制绝对路径,与版本仓库 SHA 校验配套。
 		BinaryPath string `json:"binary_path,omitempty"`
+		// Mode 二进制来源模式:download(默认)/path/inline。
+		Mode string `json:"mode,omitempty"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errMap(err))
 		return
+	}
+	if body.Mode == "" {
+		// 默认 legacy 内联(滚动升级安全:旧 Agent 不认识 download_url 字段,
+		// 新 CLI 显式传 mode=download 时也要过 update_dl 能力门)
+		body.Mode = "inline"
+	}
+	if body.Mode == "download" && !r.agents.Supports(body.AgentID, "update_dl") {
+		// 能力门:旧 Agent 无 update_dl → 降级 legacy 内联(行为与旧版一致)
+		log.Printf("[update] agent %s 无 update_dl 能力,download 模式降级为 inline", body.AgentID)
+		body.Mode = "inline"
 	}
 	if body.AgentID == "" || body.Version == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id/version 不能为空")))
@@ -283,7 +376,16 @@ func (r *Relay) handleUpdateApply(w http.ResponseWriter, req *http.Request) {
 	taskID := "update-" + body.AgentID + "-" + fmt.Sprint(time.Now().UnixNano())
 	var updatePayload []byte
 	binarySize := 0
-	if body.BinaryPath != "" {
+	if body.Mode == "download" && body.BinaryPath == "" {
+		// download 模式:任务只带下载地址,Agent 自己 HTTP 流式拉取
+		updatePayload, _ = json.Marshal(protoUpdateTaskInline{
+			DownloadURL: r.relayDownloadURL(req, body.Version),
+			SHA256:      sha,
+			Version:     body.Version,
+			MinVersion:  agentVersion, // 防降级
+			Force:       body.Force,
+		})
+	} else if body.BinaryPath != "" {
 		updatePayload, _ = json.Marshal(protoUpdateTaskInline{
 			BinaryPath: body.BinaryPath,
 			SHA256:     sha,
@@ -343,4 +445,12 @@ func (r *Relay) getAgentVersion(agentID string) string {
 		}
 	}
 	return ""
+}
+
+// handleVersion GET /api/version —— Relay 版本可见性(部署漂移一眼可辨:
+// 线上跑的是什么、落后仓库 HEAD 多少,不再靠猜)。
+func (r *Relay) handleVersion(w http.ResponseWriter, req *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"version": version, "protocol": proto.Version, "component": "relay",
+	})
 }

@@ -9,10 +9,16 @@
 package proto
 
 // UpdateTask Agent 自更新任务载荷。
-// 支持两种模式:
+// 支持三种模式(优先级从高到低):
+//   - DownloadURL: Agent 自己经 HTTP 从 Relay 版本仓库流式拉取(公网大文件推荐,
+//     不占 WS 帧也不内联进内存;Agent 用自身 token/mTLS 鉴权)
 //   - BinaryPath: 指向 Agent 侧已上传的文件路径(经 filetransfer 预上传)
-//   - BinaryB64: 内联 base64 二进制(简化,不经 filetransfer,<20MB 适用)
+//   - BinaryB64: 内联 base64 二进制(遗留模式,低延迟链路小体积适用)
 type UpdateTask struct {
+	// DownloadURL 新二进制的 HTTP 下载地址(Relay /api/updates/download?version=)。
+	// Agent 流式下载到 exeDir/.auto 再走统一 execUpdate(sha/防降级/rename/健康回滚)。
+	DownloadURL string `json:"download_url,omitempty"`
+
 	// BinaryPath Agent 侧新二进制的绝对路径(已通过 file upload 推送)。
 	BinaryPath string `json:"binary_path,omitempty"`
 

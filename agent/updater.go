@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -23,6 +24,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/QiuShichang/go-rmm/proto"
 )
@@ -37,6 +39,10 @@ type UpdateExecutor struct{}
 
 // updateExec 全局实例。
 var updateExec = &UpdateExecutor{}
+
+// updateMu 更新互斥:推送式 update 任务(WC 通道下发)与 auto_update 轮询
+// (HTTP 通道)可能并发到达,execUpdate 的 rename 舞步不可重入。
+var updateMu sync.Mutex
 
 // versionsMatchMin 防降级检查:version 是否 >= minVersion。
 // 简化 semver 比较:解析 "v1.2.3" → [1,2,3] 逐段比。
@@ -119,15 +125,30 @@ func updatePendingMarkerPath() string {
 //   - BinaryB64: 内联 base64(解码写临时文件)
 //   - BinaryPath: 已存在的文件路径
 func (e *UpdateExecutor) execUpdate(payload []byte) proto.TaskResult {
+	updateMu.Lock()
+	defer updateMu.Unlock()
+
 	var task proto.UpdateTask
 	if err := jsonUnmarshalUpdate(payload, &task); err != nil {
 		return proto.TaskResult{Success: false, Error: "解析 update 任务失败: " + err.Error()}
 	}
 
-	// 确定二进制来源:优先 BinaryB64(内联),其次 BinaryPath(文件)
+	// 确定二进制来源:优先 DownloadURL(HTTP 流式自取,公网推荐),
+	// 其次 BinaryB64(内联),再次 BinaryPath(文件)
 	var binaryPath string
 	cleanupTemp := false
-	if task.BinaryB64 != "" {
+	if task.DownloadURL != "" {
+		// download 模式:Agent 自己从 Relay 版本仓库拉取(复用自动更新的下载器,
+		// 鉴权凭证用进程级 Agent 实例的 token/mTLS)
+		a := currentAgent
+		if a == nil {
+			a = &Agent{}
+		}
+		if err := a.downloadTo(context.Background(), task.DownloadURL, task.SHA256); err != nil {
+			return proto.TaskResult{Success: false, Error: "下载新二进制失败: " + err.Error()}
+		}
+		binaryPath = autoUpdateBinPath()
+	} else if task.BinaryB64 != "" {
 		// 解码 base64 写到 exeDir/go-rmm-agent.exe.new
 		binData, err := base64.StdEncoding.DecodeString(task.BinaryB64)
 		if err != nil {

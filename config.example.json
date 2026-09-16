@@ -6,8 +6,12 @@
   "relay_urls": [],
   "token": "your-auth-or-enrollment-token",
 
-  "heartbeat": "15s",
+  "_dur_comment": "时间字段(heartbeat/auto_update)为纳秒整数:15s=15000000000,1m=60000000000,1h=3600000000000。",
+  "heartbeat": 15000000000,
   "max_concurrent_tasks": 4,
+
+  "_auto_update_comment": "自动更新(默认关闭):每 1h 检查 Relay 版本仓库,数值大于当前版本时自动 HTTP 流式下载+SHA256 校验+rename 重启(与 60s 健康回滚同一套安全网)。仅 slave 生效,最小 1m。",
+  "auto_update": 0,
 
   "_xfer_comment": "Phase1 内网直连传输(默认关闭)。开启后 Agent 监听本网段直传端口并注册上报,CLI 同网段可达时字节流不过 Relay(千兆线速),Relay 只做一次性票据授权(60s 过期/路径+方向绑定/用后即焚);不可达自动回落中继。路径策略/per-chunk SHA256/断点续传与中继完全一致。",
   "xfer_listen": "",

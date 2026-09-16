@@ -2,6 +2,26 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [v4.7.1] — 2026-09-17 自动更新链路(深度排查 + 优化)
+
+### 排查结论(生产实证:http://203.0.113.99)
+- 更新链路是**纯推送制**——Agent 无任何自主升级路径,仓库最新停在 v4.5.7(8/16)后无人推送,线上 agent 永远停在旧版;线上 relay 早于 v4.6.0(/api/dag 404 实锤),在线 agent 跑 dev 构建。
+- CLI `update push -f` 默认走 base64 内联——代码注释自认公网 7MB+ 必超时(2026-08-18 实证),最顺手的用法恰恰是坏用法。
+- 重启时序(U2)与健康回滚(60s+.bak)核实健壮,未发现问题。
+
+### 新能力
+- **Agent 自动更新**(`auto_update` 配置,默认关):周期查 `GET /api/updates/latest` → 数值比较(dev 当前版本按 0.0.0 处理,线上 dev 构建可被拉正)→ HTTP 流式下载+SHA256 校验 → 复用 execUpdate 统一收尾(防降级/.bak/两步 rename/pendingRestart/60s 健康回滚全套安全网)。仅 slave 角色;首轮延迟 90s 避开健康自检窗口;与推送式更新 updateMu 互斥。
+- **Relay 版本分发端点**:`GET /api/updates/latest`(Agent 轮询)+ `GET /api/updates/download?version=`(流式二进制,带 X-Xfer-SHA256 头)+ `GET /api/version`(部署漂移一眼可辨)。
+- **apply download 模式**:update 任务只带 download_url(Agent 自己 HTTP 拉取,零内联零 WS 帧);CLI `update push` 默认请求此模式,`--path` 显式引用优先。
+- **update_dl 能力协商**:新 Agent 注册该能力;Relay 只对有能力的 Agent 走 download,旧 Agent 自动降级 legacy 内联(滚动升级安全:先升 relay/CLI,agent 逐台跟上)。
+- **dev 版本拒收**:仓库 Save 拒绝显式 dev 版本(未版本化构建推上生产=版本比较/防降级全失效)。
+
+### E2E 实证(本地三组件)
+旧版 agent(v4.7.0-old,auto_update=1m)→ 上传 v4.7.1-new → 61s 后自动发现→下载→更新→进程退出 → 重启后 agent list 显示 v4.7.1-new,健康标记确认清除,.bak 就位,.old-running 自动清理。
+
+### 测试
++13 测(relay 7:latest 数值感知/空仓库/download 404+内容+sha 头/dev 拒收/apply download 零内联/能力门降级内联/URL 推导三态;agent 4:HTTP 基地址推导表/升级决策表含 dev 拉正/下载 sha 校验+失败清理/间隔校验;CLI 2:push 默认 download/--path 模式),另修 config.example.json heartbeat "15s" 文档 bug(Duration 只认纳秒数字)。
+
 ## [v4.7.0] — 2026-09-16 内网直连传输(Phase 1) + 分片绝对路径修复
 
 ### Phase 1 内网直连传输(吞吐数量级提升)

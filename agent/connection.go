@@ -23,6 +23,9 @@ import (
 // 进程级变量，在 Run 启动时设置。
 var agentBizID string
 
+// currentAgent 进程级 Agent 实例(update 任务 download 模式取 token/mTLS 凭证用)。
+var currentAgent *Agent
+
 // Agent 主体：持有配置与 dispatcher，管理到 Relay 的反向连接。
 type Agent struct {
 	cfg   Config
@@ -33,11 +36,13 @@ type Agent struct {
 }
 
 func NewAgent(cfg Config, disp *executors.Dispatcher) *Agent {
-	return &Agent{
+	a := &Agent{
 		cfg:  cfg,
 		disp: disp,
 		pool: NewWorkerPool(cfg.MaxConcurrentTasks), // C6
 	}
+	currentAgent = a
+	return a
 }
 
 // WithCerts 注入 mTLS 证书（C8）。
@@ -73,6 +78,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	// W7:mTLS 证书后台续签(进程级;原只在启动时检查→24h 必过期→永久离线)
 	if a.certs != nil {
 		go a.certRenewLoop(ctx)
+	}
+	// 自动更新轮询(可选,默认关;进程级,独立于 WS 连接起伏)
+	if a.cfg.AutoUpdateInterval > 0 {
+		go a.autoUpdateLoop(ctx)
 	}
 	// Phase1 内网直连监听(进程级,不随 WS 连接起伏;失败降级中继不致命)
 	if a.cfg.XferListen != "" {
@@ -285,6 +294,9 @@ func (a *Agent) sendRegister(ctx context.Context, wc *wsConn) error {
 	// S4:文件传输能力协商。新版 Agent 支持分片下载(offset/limit),
 	// 注册 xfer_offset 让 Relay/CLI 据此决定是否走分片(旧 Agent 无此能力 → 显式拒绝)。
 	caps = append(caps, "xfer_offset")
+	// update_dl:update 任务支持 download_url 模式(Agent 自己 HTTP 流式拉取)。
+	// Relay 据此决定 apply 模式:无此能力的旧 Agent 自动降级 base64 内联(legacy)。
+	caps = append(caps, "update_dl")
 	// M1 主从架构:Tags 自动加 role 标识,便于 Relay/CLI 按 role 筛选。
 	// 不修改原 cfg.Tags(避免污染配置),构造副本。
 	tags := make(map[string]string, len(a.cfg.Tags)+1)

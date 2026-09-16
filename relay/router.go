@@ -56,8 +56,11 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/tunnel/close", r.handleTunnelClose)
 	// 自更新:Agent 版本仓库 + 分发
 	mux.HandleFunc("GET /api/updates", r.handleUpdateList)
+	mux.HandleFunc("GET /api/updates/latest", r.handleUpdateLatest)
+	mux.HandleFunc("GET /api/updates/download", r.handleUpdateDownload)
 	mux.HandleFunc("POST /api/updates/upload", r.handleUpdateUpload)
 	mux.HandleFunc("POST /api/updates/apply", r.handleUpdateApply)
+	mux.HandleFunc("GET /api/version", r.handleVersion)
 	// 电源操作(标签白名单鉴权)
 	mux.HandleFunc("POST /api/power", r.RequireRole("power.shutdown", r.handlePower))
 	// S6:Prometheus 文本格式(供 Prometheus scraper)

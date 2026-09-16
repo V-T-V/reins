@@ -178,14 +178,19 @@ func updatePush(cfg config, args []string) error {
 		return fmt.Errorf("需要 --version 或 -f 指定版本/文件")
 	}
 
-	// 调 apply 端点触发更新(--path 时带 binary_path 引用,零内联)
+	// 调 apply 端点触发更新。
+	// 模式优先级:--path 显式引用 > download(Agent 自己 HTTP 流式拉取,默认)。
+	// download 是 v4.7.0 起的安全默认——内联 base64 在公网链路 7MB+ 必超时
+	// (2026-08-18 实证);Relay 对无 update_dl 能力的旧 Agent 自动降级内联。
 	body := map[string]any{
 		"agent_id": agentID,
 		"version":  version,
 		"force":    force,
+		"mode":     "download",
 	}
 	if remotePath != "" {
 		body["binary_path"] = remotePath
+		body["mode"] = "path"
 	}
 	var resp struct {
 		AgentID    string `json:"agent_id"`
