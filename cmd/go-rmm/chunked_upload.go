@@ -144,6 +144,9 @@ func (s *xferStats) print(label string) {
 
 // isRetryableXferErr 判断错误是否值得整文件重试(网络/Relay/SHA 不符)。
 // 用户 Ctrl+C(ctx canceled)不重试。
+// MERGE_FAIL 是结构性失败(远端 PowerShell 合并逻辑确定性报错,重试只会
+// 全量重传后同样失败——绝对路径 Join-Path bug 时代实测 3 轮重传 3×159MB 全废),
+// 不重试,直接把错误暴露给用户。
 func isRetryableXferErr(err error) bool {
 	if err == nil {
 		return false
@@ -153,7 +156,72 @@ func isRetryableXferErr(err error) bool {
 	if strings.Contains(msg, "context canceled") || strings.Contains(msg, "interrupt") {
 		return false
 	}
+	// 结构性合并失败不重试(2026-09-16 sess_8d55d252 实证:
+	// partsdir=C:\Windows\system32 notfound 重试 3 次逐字相同)
+	if strings.Contains(msg, "MERGE_FAIL") {
+		return false
+	}
 	return true // 其他错误(网络/Relay/SHA/超时)都可重试
+}
+
+// --- 远端路径辅助(2026-09-16 绝对路径修复) ---
+//
+// 分片链路的 PowerShell 探测/合并脚本自 FT 起假设 remotePath 是相对路径
+// (workspace 内文件名)。remotePath 为绝对路径时,PS 的 Join-Path 遇到
+// 绝对路径子项会拼出 "dir\C:\..." 的非法路径(PS 5.1 实测),导致:
+//   - checkCompletedChunks 列不到已完成分片 → 断点续传失效,重试全量重传
+//   - workspaceProbePS 全部候选 Test-Path False → 回退 CWD(C:\Windows\system32)
+//   - buildMergeCommand 找不到分片 → MERGE_FAIL partsdir=... notfound
+// 现按绝对/相对分流:绝对路径时直接用 Go 侧拼好的完整绝对路径(不在 PS 里
+// Join-Path),相对路径维持原有 workspace 自省流程。
+//
+// 注意:不能用 filepath.IsAbs/Base/Dir——CLI 可能跑在 Linux 控制 Windows Agent,
+// "C:\go-rmm\x.tar" 在 Linux 的 filepath 下不是绝对路径也不会按 '\' 分割。
+
+// remoteIsAbs 判断远端路径是否绝对:以 / 或 \ 开头(Unix/UNC),或 Windows 盘符。
+func remoteIsAbs(p string) bool {
+	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`) {
+		return true
+	}
+	return len(p) >= 3 && p[0] >= 'A' && p[0] <= 'z' && (p[1] == ':') && (p[2] == '\\' || p[2] == '/')
+}
+
+// remoteBaseName 返回远端路径的文件名部分(兼容 / 与 \ 两种分隔符)。
+func remoteBaseName(p string) string {
+	if i := strings.LastIndexAny(p, `/\`); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// remoteDirName 返回远端路径的目录部分;无分隔符返回 "."。
+func remoteDirName(p string) string {
+	if i := strings.LastIndexAny(p, `/\`); i >= 0 {
+		if i == 0 {
+			return string(p[0]) // "/foo" → "/"
+		}
+		return p[:i]
+	}
+	return "."
+}
+
+// psQuote 把字符串包成 PS 单引号字面量(内部 ' 翻倍转义)。
+func psQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// buildChunkListCommand 构造"列远端已完成分片"的 PowerShell 命令。
+// 绝对路径:直接 Get-ChildItem 目标目录(无 workspace 自省)。
+// 相对路径:原 workspaceProbePS 探测流程(向后兼容)。
+func buildChunkListCommand(remotePath string) string {
+	if remoteIsAbs(remotePath) {
+		return fmt.Sprintf(
+			"Get-ChildItem -LiteralPath %s -Filter %s -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + '|' + $_.Length }",
+			psQuote(remoteDirName(remotePath)), psQuote(remoteBaseName(remotePath)+".ftpart*"))
+	}
+	return fmt.Sprintf(`%s
+Get-ChildItem (Join-Path $ws '%s.ftpart*') -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + '|' + $_.Length }
+`, fmt.Sprintf(workspaceProbePS, remotePath), remotePath)
 }
 
 // sameFile 判断两次 os.Stat 是否指向同一文件(mtime+size 一致)。
@@ -442,10 +510,9 @@ func uploadSingleChunk(cfg config, agentID, chunkName string, body io.Reader, le
 // O6 修复:严格校验分片名(纯数字序号)+ 大小匹配,拒绝 .ftpartNN.part 临时文件。
 func checkCompletedChunks(cfg config, agentID string, remotePath string, totalChunks int, totalSize int64) map[int]bool {
 	completed := make(map[int]bool)
-	// 下发 powershell 先探测 workspace,再列 .ftpart* 文件(相对路径会落到 CWD 找不到)
-	listCmd := fmt.Sprintf(`%s
-Get-ChildItem (Join-Path $ws '%s.ftpart*') -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + '|' + $_.Length }
-`, fmt.Sprintf(workspaceProbePS, remotePath), remotePath)
+	// 2026-09-16 绝对路径修复:按绝对/相对分流构造列目录命令
+	// (绝对路径下原 Join-Path 拼出非法路径,列不到任何分片 → 断点续传失效)
+	listCmd := buildChunkListCommand(remotePath)
 	listTaskID := fmt.Sprintf("list-%d", time.Now().UnixNano())
 	body := map[string]any{
 		"task_id":  listTaskID,
@@ -462,9 +529,10 @@ Get-ChildItem (Join-Path $ws '%s.ftpart*') -ErrorAction SilentlyContinue | ForEa
 		return completed
 	}
 	stdout, _ := result["stdout"].(string)
-	// 解析 "name|size\n..." 格式
-	baseName := remotePath
-	prefix := baseName + ".ftpart"
+	// 解析 "name|size\n..." 格式。
+	// 2026-09-16:Get-ChildItem 返回的是裸文件名,前缀必须用 base name
+	// (绝对路径模式下 remotePath 含目录,直接拼会永不匹配)。
+	prefix := remoteBaseName(remotePath) + ".ftpart"
 	// isDigit 判断纯数字(2位序号),拒绝 .ftpart08.part 这种未完成临时文件
 	isDigit := func(s string) bool {
 		if s == "" {
@@ -543,8 +611,44 @@ if (-not $ws) { $ws = (Get-Location).Path }
 // 绝对路径,所以合并命令在目标机上自省(workspaceProbePS):
 //  1. 探测含分片的 workspace(唯一真相)
 //  2. 在 workspace 里合并分片 + 清理分片 + 输出 "MERGE_OK <sha256>"
+//
+// 2026-09-16 绝对路径修复:remotePath 为绝对路径时(如 C:\go-rmm\ws\big.tar),
+// 分片就落在 <remotePath>.ftpartNNNN,无需也无法走 workspace 自省——
+// 原 Join-Path $partsDir ($base+'.ftpart0000') 遇绝对 base 拼出非法路径
+// (PS 5.1: dir\C:\...),回退 CWD=C:\Windows\system32 后必然 MERGE_FAIL。
+// 绝对分支直接用完整路径字面量(-LiteralPath),不经过任何 PS 路径拼接。
 func buildMergeCommand(remotePath string, totalChunks int) string {
 	base := remotePath
+	if remoteIsAbs(base) {
+		dir := remoteDirName(base)
+		return fmt.Sprintf(`# 绝对路径分片合并(无 workspace 自省)
+$base = %s
+$first = "$($base).ftpart0000"
+if (-not (Test-Path -LiteralPath $first)) {
+    Write-Output "MERGE_FAIL partsdir=%s notfound"
+    exit 1
+}
+$dst = $base
+$parts = @()
+for ($i = 0; $i -lt %d; $i++) {
+    $part = "$($base).ftpart" + $i.ToString('0000')
+    # 兜底:正式名不存在时,尝试 .part 后缀(Agent rename 偶尔未完成的临时文件)
+    if (-not (Test-Path -LiteralPath $part)) { $part = $part + '.part' }
+    if (Test-Path -LiteralPath $part) { $parts += $part }
+}
+if ($parts.Count -lt %d) { Write-Output "MERGE_FAIL parts=$($parts.Count)/%d partsdir=%s"; exit 1 }
+$fs = [System.IO.File]::Create($dst)
+foreach ($p in $parts) {
+    $inStream = [System.IO.File]::OpenRead($p)
+    $inStream.CopyTo($fs)
+    $inStream.Close()
+}
+$fs.Close()
+Remove-Item -Path "$($base).ftpart*" -Force -ErrorAction SilentlyContinue
+$hash = (Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash
+Write-Output "MERGE_OK $($hash.ToLower())"
+`, psQuote(base), dir, totalChunks, totalChunks, totalChunks, dir)
+	}
 	return fmt.Sprintf(`%s
 # 1. 探测 workspace(分片所在目录)
 $partsDir = $ws
