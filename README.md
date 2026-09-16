@@ -202,6 +202,21 @@ CI 三平台(windows/linux/darwin)编译门禁;workflow/playbook 的命令内容
 
 ---
 
+### 内网直连传输(可选,推荐内网部署开启)
+
+Agent 配置 `xfer_listen` 后,同网段 CLI 的文件传输自动走直连(千兆线速),Relay 只做一次性票据授权;不可达自动回落中继,零配置成本:
+
+```json
+{ "xfer_listen": ":7783" }
+```
+
+```bash
+# CLI 无需任何改动:直连优先,--no-direct 可强制走中继
+go-rmm --relay https://relay:7780 --token t file upload -a agent1 big.zip C:\data\big.zip
+```
+
+安全模型与中继一致(路径策略/per-chunk SHA256/断点续传),票据 60s 过期+路径绑定+用后即焚。
+
 ## 配置
 
 Relay 配置优先级:**命令行 flag > 环境变量 > 默认值**。

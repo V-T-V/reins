@@ -181,6 +181,38 @@ paths:
             application/octet-stream:
               schema: { type: string, format: binary }
 
+  /api/transfer/direct:
+    post:
+      summary: 申请内网直连传输票据(Phase1)
+      description: |
+        Agent 开启 xfer_listen 时,CLI 先经此端点换一次性票据(32B 随机 secret,
+        明文只回 CLI,SHA256 hash 经控制 WS 推给 Agent),随后直连 Agent 的
+        /xfer/begin|data|fetch 端点传输字节流;Agent 未开启直连时返回
+        direct=false,CLI 静默回落中继路径。
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent_id: { type: string }
+                path: { type: string }
+                direction: { type: string, enum: [upload, download] }
+      responses:
+        "200":
+          description: 票据或回落信号
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  direct: { type: boolean }
+                  ticket_id: { type: string }
+                  secret: { type: string }
+                  addrs: { type: array, items: { type: string } }
+                  expiry_unix: { type: integer }
+        "404": { description: Agent 不在线 }
+
   /api/tunnel/open:
     post:
       summary: 开启端口转发隧道

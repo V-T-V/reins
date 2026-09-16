@@ -25,7 +25,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 |------|------|------|
 | 诊断 | status / sysinfo / net ping·dns·trace·ports·check / logs tail·read·search | 远端网络诊断 + 日志聚合 |
 | 执行 | task run·batch·list·result·cancel / exec -a/--tag / shell open | 命令执行 + 多 Agent 并行 + 交互式终端 |
-| 传输 | file upload·download / sync push·pull / tunnel -L | 文件传输 + 目录同步 + 端口转发 |
+| 传输 | file upload·download / sync push·pull / tunnel -L | 文件传输(内网直连优先+中继回落) + 目录同步 + 端口转发 |
 | 部署 | deploy run·validate / update upload·push·rollback | 多步编排 + Agent 自更新 |
 | 配置 | config get·set·backup·diff / find name·grep·stat·du | 配置管理 + 文件搜索 |
 | 监控 | monitor top·cpu·disk·net·gpu / snapshot take·diff | 全维度资源监控 + 系统快照 |
@@ -144,7 +144,7 @@ go-rmm/
 | Go 文件 | 231 |
 | 代码行 | 42,000+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 496 |
+| 测试用例 | 522 |
 | 基准测试 | 22 |
 | CLI 命令 | 52 |
 | API 端点 | 45 |
@@ -171,7 +171,7 @@ go-rmm/
 | **relay** 水平扩展 | 70% | TaskStore interface + Redis + Pub/Sub 联邦;多 Relay 故障切换 | 🟡 生产验证待补 |
 | **agent** 执行器 | 90% | 9 类任务(PS/script/file/screenshot/browse/guiclick/update/power/monitor) | ✅ |
 | **agent** 连接管理 | 95% | 反向 WS + 断线重连 + 心跳 + 主从双 Agent + 死连接 watchdog(S1)+ 孤儿分片 sweep(S3) | ✅ |
-| **agent** 文件传输 | 90% | 并发分片 + 断点续传 + path 互斥(R1)+ 已满快路径(R2)+ 流式低内存(R3)+ 能力协商(S4)+ per-chunk SHA256 收完即校验(损坏当场删 .part 拒绝)[2026-09-13] | ✅ |
+| **agent** 文件传输 | 95% | 并发分片 + 断点续传 + path 互斥(R1)+ 已满快路径(R2)+ 流式低内存(R3)+ 能力协商(S4)+ per-chunk SHA256 收完即校验(损坏当场删 .part 拒绝)[2026-09-13] + **内网直连监听**(xfer_listen/自签 TLS/票据一次性+data_token/悬空会话 2min 清扫)[2026-09-16] | ✅ |
 | **agent** Linux | 85% | script lang=sh + monitor /proc + CLI 命令族平台方言化全覆盖(logs/sysinfo/service/proc/net/find/config/diagnose/compare/sync/watch/snapshot/tag,双方言一次直达;workflow/playbook/exec 为用户内容型)+ 三平台编译门禁(P1-4 七步);Linux 实机部署验证待补 | 🟡 |
 | **cmd** CLI | 90% | 51 命令 + 流式 + TUI + 退出码体系 | ✅ |
 | **client** SDK | 85% | 45+ 方法 + 流式 + 工具发现 | ✅ |
@@ -190,19 +190,19 @@ go-rmm/
 
 ## 测试覆盖(v4.6.0)
 
-496 测试 + 22 基准(2026-09-14 webhook/tls_watcher/智能调度负载收口后口径,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
+522 测试 + 22 基准(2026-09-16 Phase1 直连传输+分片绝对路径修复后口径,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
-| **relay** | 229 | 66 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10];transfer upload sha256 透传 E2E(真 WS fake Agent 全链路)[2026-09-13];webhook 收口(5 事件接线+flag/env 配置+通知体结构+真 handler 403/失败 result/证书撤销 E2E)+离线缓存策略绕过回归(P1-7)[2026-09-14];tls_watcher(CheckCertExpiry 正常/过期/三错误路径+CertDaysLeftMetric 双口径+LoadCertForRelay)[2026-09-14];智能调度负载接线(monitor 采样回流评分/TTL 过期无视/真 WS progress E2E)[2026-09-14] |
-| **agent** | 73 | 33 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9];单片 SHA 校验防线(匹配成功 rename/不匹配删 .part 防续传死循环)[2026-09-13] |
+| **relay** | 233 | 66 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10];transfer upload sha256 透传 E2E(真 WS fake Agent 全链路)[2026-09-13];webhook 收口(5 事件接线+flag/env 配置+通知体结构+真 handler 403/失败 result/证书撤销 E2E)+离线缓存策略绕过回归(P1-7)[2026-09-14];tls_watcher(CheckCertExpiry 正常/过期/三错误路径+CertDaysLeftMetric 双口径+LoadCertForRelay)[2026-09-14];智能调度负载接线(monitor 采样回流评分/TTL 过期无视/真 WS progress E2E)[2026-09-14] |
+| **agent** | 78 | 33 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9];单片 SHA 校验防线(匹配成功 rename/不匹配删 .part 防续传死循环)[2026-09-13] |
 | **executors** | 57 | 25 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控;rules 门禁(发现去重/指纹组合/Dispatcher 校验/op=rules/变更失效闭环)[v4.4.0] |
-| **proto** | 44 | 9 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
+| **proto** | 46 | 9 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
 | **internal/wsx** | 5 | 1 | 优先级写引擎(P0 控制帧不被 P1 数据饿死——阻塞 socket 写+积压构造确定性验证/写错误经 Done 回传/ctx 契约两段分层断言(调用方 ctx 已取消=确定性 ctx.Err;writer ctx 取消=只锚定不挂死,nil/err 均合法——原"必须报错"断言与"可能迟到但不会丢"设计语义冲突,调度偏置下稳定翻车,2026-09-14 修订)/Start 幂等)[2026-09-12]
 | **internal/dagflow** | 13 | 1 | 图校验 8 类非法图逐一拒绝+环点名;串行启动序列 50 次重跑逐位一致;并发峰值恰守上限 3;失败级联(health/watch 跳过+alert 软依赖照跑+跳过者从未启动);软依赖仍须等终态;ctx 取消 skipped 收尾;带环图不死锁 [v4.5.0];v4.6.0 relay 端到端:3 节点失败级联剧场(start_order 确定 prep→deploy/verify 零投递)+软依赖照跑+策略拦截 403+提交期校验 |
 | **client** | 18 | 9 | SDK 方法/流式/工具发现 |
 | **console** | 14 | 4 | 反向代理/事件转发 |
-| **cmd** | 26 | 31 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3];rules read E2E/ack 缓存/-s 防呆/deploy 模板[v4.4.0];per-chunk SHA256(computeSectionSHA 段 hash/分片 query 下发/非分片预计算 E2E/Agent 拒绝冒泡)[2026-09-13] |
+| **cmd** | 41 | 31 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3];rules read E2E/ack 缓存/-s 防呆/deploy 模板[v4.4.0];per-chunk SHA256(computeSectionSHA 段 hash/分片 query 下发/非分片预计算 E2E/Agent 拒绝冒泡)[2026-09-13] |
 
 **深度测试(rounds 1-10)**:round 1 修复 `TestMultiAgentRoutingE2E` 永久失败;rounds 2-7 逐层加深(relay 路由 → 执行器 → console → mTLS → 审计 → 多租户);round 8 覆盖批量分发不变量(并发投递/聚合/退避重试/幂等/ctx 取消/进度状态机);rounds 9-10 工作区深度推进——补 SecretStore/ScriptLibrary/buffer_pool/rQueue/Envelope 等弱测模块,修复空闲 Agent 掉线循环(S7 heartbeat_ack)、脚本库路径穿越漏洞、Prom 指标前缀 typo、审计写盘静默丢记录。
 
