@@ -65,6 +65,12 @@ const (
 	TypeFileTransferProgress = "file_xfer_progress" // Agent→Relay→Console：周期进度
 	TypeFileTransferComplete = "file_xfer_complete" // Agent→Relay→Console：终态 + SHA256
 	TypeFileTransferCancel   = "file_xfer_cancel"   // 双向：取消
+	// TypeXferTicket —— Relay→Agent：直连传输票据授权(Phase 1 内网直连)。
+	// CLI 向 Relay 请求 POST /api/transfer/direct 后,Relay 生成一次性票据:
+	// 明文 secret 只回给 CLI(经 Relay 自身的鉴权通道),SHA256 hash 推给 Agent
+	// (经控制 WS 本条消息)。Agent 校验 CLI 直连请求携带的 secret 时比对 hash,
+	// 全程不落盘、60s 过期、用后即焚。
+	TypeXferTicket = "xfer_ticket"
 )
 
 // 任务类型常量，与 TaskRequest.Type 取值对应。
@@ -177,6 +183,11 @@ type Register struct {
 	Version      string            `json:"version"`        // Agent 二进制版本
 	Capabilities []string          `json:"capabilities"`   // 支持的任务类型列表
 	Tags         map[string]string `json:"tags,omitempty"` // 业务自定义标签
+	// XferAddrs 直连传输监听地址列表(Phase 1 内网直连,如 ["192.168.1.5:7783"])。
+	// Agent 配置 xfer_listen 开启直连监听后,枚举本机非回环 IPv4 地址 × 监听端口
+	// 填入此处(xfer_advertise 配置可显式覆盖)。空 = 未开启直连,CLI 走中继路径。
+	// omitempty 兼容:旧 Agent 不填,Relay/CLI 据此回落。
+	XferAddrs []string `json:"xfer_addrs,omitempty"`
 }
 
 // Heartbeat 心跳载荷。Seq 为递增序号，用于检测丢包。
@@ -415,6 +426,25 @@ type FileTransferComplete struct {
 type FileTransferCancel struct {
 	TransferID string `json:"transfer_id"`
 	Reason     string `json:"reason,omitempty"`
+}
+
+// --- Phase 1 内网直连传输票据 ---
+
+// XferTicketGrant Relay→Agent 的一次性直连传输授权(经控制 WS 推送)。
+//
+// 信任模型:CLI 已通过 Relay 鉴权(RBAC/token),Relay 代它向 Agent 授权:
+//   - SecretHash = SHA256(secret) 的 hex。明文 secret 只经 Relay 的 HTTP 响应
+//     回给 CLI,绝不进本消息(Agent 被攻破也造不出合法 secret,只能验证)
+//   - Path/Direction 绑定:票据只能用于该路径 + 该方向(Path 为分片上传的
+//     基路径时,Agent 接受 <Path>.ftpartNNNN 前缀匹配)
+//   - ExpiryUnix 过期即废(默认签发后 60s)
+//   - 一次性:Agent 校验成功即删除,重放第二次拒绝
+type XferTicketGrant struct {
+	TicketID   string `json:"ticket_id"`    // 票据 ID(UUID)
+	SecretHash string `json:"secret_hash"`  // SHA256(secret) hex,Agent 侧比对用
+	Path       string `json:"path"`         // 绑定的目标路径(分片模式为基路径)
+	Direction  string `json:"direction"`    // "upload" / "download"
+	ExpiryUnix int64  `json:"expiry_unix"`  // 过期 Unix 秒
 }
 
 // --- 辅助 ---
