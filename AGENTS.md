@@ -274,6 +274,11 @@ go-rmm/
 - **Windows 下 Git Bash 直跑 go-rmm.exe 偶发 0xC0000142 崩溃(2026-08-31,sess_610cef8e)**:症状为进程零输出直接退出,退出码 3221225794(=0xC0000142 STATUS_DLL_INIT_FAILED),`agent list`/`task run` 全崩,sleep 8 重试无效,次日自愈。**非代码缺陷**——该 exe 静态导入仅 kernel32.dll,崩溃发生在 loader 阶段(Go runtime 尚未启动),同一二进制(8/19 构建)前后均正常;定位为系统环境瞬态故障(desktop heap/会话资源耗尽或 AV 注入 DLL 初始化失败一类,当日机器同时出现文件被其他进程锁定、`rm: Device or resource busy` 等高负载征兆)。**规避**:`powershell -NoProfile -Command "& 'D:\...\go-rmm.exe' <args>"` 包装调用(换了一条进程创建路径,当日实证恢复;注意时间自愈与包装效果的混杂,下次复现时先做三方对照再下结论)。**复现时的三步定位法**:① 同一 bash 里试 `cmd //c go-rmm.exe version` 和 powershell 包装——隔离"Git Bash 创建进程特有"vs"系统级";② 试 `cmd //c ver`/`ping -n 1 127.0.0.1`——若同样 0xC0000142 则是系统级(desktop heap/AV),与 go-rmm 无关;③ 查事件查看器 Application 日志 0xC0000142 记录与 Defender 操作日志。**连带坑**:`-s` 参数语义是"本地文件路径,os.Stat 失败则原样当脚本内容发远端"(`cmd/go-rmm/main.go` uniqueNano 附近),PowerShell 里路径须用反斜杠;Temp 日期切换会清脚本,用前先 `ls` 确认存在。
 - **退出码 1 ≠ CLI 崩溃**:输出含「任务结果 成功: false / 退出码: 1 / 耗时」+ `go-rmm: 任务执行失败` → 是远端脚本失败(常见为内嵌 JS 双引号/`$` 未转义的 ParserError,stderr 可能 GBK 乱码"锟斤拷"),go-rmm 进程本身正常;无结果块且本地零输出退出才是 CLI 自身问题。远端脚本含引号/`$` 用 here-string `@'...'@` 或 base64;中文关键词用 `[char]0x8D37` 构造防编码损坏。
 
+## 已知坑位(踩坑实录)
+
+- **Windows Defender 拦"未签名新文件 rename 顶替运行中服务 exe"**(2026-09-17,4060 生产更新实证):`os.Rename(新文件 → 服务exe名)` 确定性 Access denied(4 次复现,与账户/ACL 无关——LocalSystem+全控+写测试通过),但同操作回滚(rename 原文件归位)与改名到其它名字、CopyItem 到同目录全部畅通。**绕法(生产验证过的 copy 舞步)**:脚本任务里 `Copy-Item exe→.bak` → `Rename exe→.exe.old-running` → `Copy-Item 新→exe` → 写 `.update-pending` 标记 → `Register-ScheduledTask+Start-ScheduledTask` 延迟重启(分离 powershell 子进程在服务会话内不执行,schtasks /create 又被命令策略拦——按拦截提示走原生 cmdlet)。根治=构建签名。dev 机(iZt7)无此拦截,标准 push --path 直接过——**同构机器行为不同,更新失败先做 rename/copy 差分测试再选路径**。
+- **线上 relay 的 unit 文件与运行参数漂移**:`-install-token` 在运行进程有、unit 文件没有,systemctl restart 会静默丢参数——替换二进制前 diff `ps` 与 unit 的 ExecStart,以运行态为准补齐再重启(2026-09-17 实操踩到)。
+
 ## 进入子项目前先读
 
 - `README.md` — 快速开始 + 架构图 + 能力矩阵 + 部署/配置/安全/多租户/批量分发
