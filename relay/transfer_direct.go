@@ -38,8 +38,9 @@ const xferTicketTTL = 60 * time.Second
 //
 // 请求: {"agent_id":"...", "path":"...", "direction":"upload|download"}
 // 响应: {"direct":true, "ticket_id":"...", "secret":"<64 hex>",
-//        "addrs":["ip:port",...], "expiry_unix":<sec>}
-//        或 {"direct":false, "reason":"..."}(Agent 未开启直连,CLI 回落中继)
+//
+//	"addrs":["ip:port",...], "expiry_unix":<sec>}
+//	或 {"direct":false, "reason":"..."}(Agent 未开启直连,CLI 回落中继)
 func (r *Relay) handleTransferDirect(w http.ResponseWriter, req *http.Request) {
 	if err := r.authorize(req); err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))

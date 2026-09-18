@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -225,10 +226,10 @@ func (e *UpdateExecutor) execUpdate(payload []byte) proto.TaskResult {
 		os.Remove(updatePendingMarkerPath())
 		return proto.TaskResult{Success: false, Error: "移走运行中 exe 失败(新旧版本均未受影响): " + err.Error()}
 	}
-	if err := os.Rename(binaryPath, currentExe); err != nil {
+	if _, placeErr := placeBinary(os.Rename, binaryPath, currentExe); placeErr != nil {
 		os.Rename(oldRunning, currentExe) // 回滚:旧 exe 归位
 		os.Remove(updatePendingMarkerPath())
-		return proto.TaskResult{Success: false, Error: "rename .new→exe 失败(已回滚旧版本原位): " + err.Error()}
+		return proto.TaskResult{Success: false, Error: "新二进制落位失败(已回滚旧版本原位): " + placeErr.Error()}
 	}
 
 	// 8. 标记重启(主循环检测后退出,SCM 自动拉新版本)
@@ -239,6 +240,40 @@ func (e *UpdateExecutor) execUpdate(payload []byte) proto.TaskResult {
 		Stdout:  fmt.Sprintf("更新成功: %s → %s (sha256=%s),等待服务重启", version, task.Version, actualSHA[:16]),
 		Data:    []byte(fmt.Sprintf(`{"old_version":%q,"new_version":%q,"sha256":%q}`, version, task.Version, actualSHA)),
 	}
+}
+
+// placeBinary 把新二进制落到 dst(当前 exe 的正位)。
+// 优先 rename(原子);被安全软件拒绝时回退字节级 copy——Windows Defender 等
+// 会确定性拦截"未签名新文件 rename 顶替服务 exe"(2026-09-17 4060 生产 4 次复现,
+// 与账户/ACL 无关;同操作 copy 落名畅通,人工 copy 舞步即此理)。
+// renameFn 参数化便于测试注入;返回是否走了 copy 回退。
+func placeBinary(renameFn func(from, to string) error, src, dst string) (bool, error) {
+	if err := renameFn(src, dst); err == nil {
+		return false, nil
+	}
+	if err := copyBinaryStream(src, dst); err != nil {
+		return true, fmt.Errorf("rename 与 copy 均失败: %w", err)
+	}
+	log.Printf("[update] rename 被拒(疑似安全软件拦截服务 exe 顶替),已回退 copy 落位")
+	return true, nil
+}
+
+// copyBinaryStream 流式复制文件(不在内存全量载入,12MB+ 二进制友好)。
+func copyBinaryStream(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // copyFile 复制文件(U2:更新备份用,保持源文件在原位)。

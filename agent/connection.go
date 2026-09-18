@@ -30,8 +30,8 @@ var currentAgent *Agent
 type Agent struct {
 	cfg   Config
 	disp  *executors.Dispatcher
-	pool  *WorkerPool // C6 并发限流
-	certs *AgentCerts // C8 mTLS 证书（nil=非 mTLS 模式）
+	pool  *WorkerPool       // C6 并发限流
+	certs *AgentCerts       // C8 mTLS 证书（nil=非 mTLS 模式）
 	xfer  *xferDirectServer // Phase1 直连监听(nil=未开启)
 }
 

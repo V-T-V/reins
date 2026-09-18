@@ -310,7 +310,9 @@ func (r *Relay) handleUpdateDownload(w http.ResponseWriter, req *http.Request) {
 
 // handleUpdateApply POST /api/updates/apply —— 触发 Agent 更新。
 // 请求体: {"agent_id":"...", "version":"v1.2.0", "force":false,
-//          "binary_path":"可选", "mode":"download(默认)|path|inline"}
+//
+//	"binary_path":"可选", "mode":"download(默认)|path|inline"}
+//
 // 二进制来源三种模式:
 //   - download(默认,推荐): 任务只带 DownloadURL(Aelay 自身 /api/updates/download),
 //     Agent 用自己的 token/mTLS 经 HTTP 流式拉取——不内联进内存不占 WS 帧,

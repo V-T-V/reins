@@ -81,7 +81,7 @@ func TestUpdateLatestEmptyRepo(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var out struct {
-		Latest  any `json:"latest"`
+		Latest  any  `json:"latest"`
 		Enabled bool `json:"enabled"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)

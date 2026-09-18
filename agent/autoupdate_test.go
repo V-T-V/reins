@@ -37,14 +37,14 @@ func TestShouldAutoUpdate(t *testing.T) {
 		current, latest string
 		want            bool
 	}{
-		{"v4.7.0", "v4.7.1", true},   // 升级
-		{"v4.7.0", "v4.7.0", false},  // 相同
-		{"v4.7.0", "v4.6.9", false},  // 降级
-		{"v2.0.0", "v10.0.0", true},  // 数值感知(字典序陷阱)
-		{"dev", "v4.5.7", true},      // dev 当前版本按 0.0.0 → 拉正线上 dev 构建
-		{"v4.7.0", "", false},        // 空最新
+		{"v4.7.0", "v4.7.1", true},                // 升级
+		{"v4.7.0", "v4.7.0", false},               // 相同
+		{"v4.7.0", "v4.6.9", false},               // 降级
+		{"v2.0.0", "v10.0.0", true},               // 数值感知(字典序陷阱)
+		{"dev", "v4.5.7", true},                   // dev 当前版本按 0.0.0 → 拉正线上 dev 构建
+		{"v4.7.0", "", false},                     // 空最新
 		{"v4.7.0-abc123", "v4.7.0-abc123", false}, // 同构建号
-		{"v4.7.0", "v4.10.0", true},  // 两位数次版本
+		{"v4.7.0", "v4.10.0", true},               // 两位数次版本
 	}
 	for _, c := range cases {
 		if got := shouldAutoUpdate(c.current, c.latest); got != c.want {

@@ -15,6 +15,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -62,18 +63,21 @@ func applyDirectFlag(args []string) []string {
 	return out
 }
 
-// directHTTPClient 直连专用 client:自签 TLS 跳过证书校验
-// (身份真实性由一次性票据保证,TLS 只提供加密)。
-func directHTTPClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // 票据即身份,见文件头注释
-			MaxIdleConns:        8,
-			IdleConnTimeout:     90 * time.Second,
-			TLSHandshakeTimeout: 5 * time.Second,
-		},
-	}
+// directSharedClient 直连专用共享 client(连接复用:分片传输每片 ticket/probe/
+// begin/data 四次调用复用同一条 TLS 连接,不再每次握手)。
+// 自签 TLS 跳过证书校验——身份真实性由一次性票据保证,TLS 只提供加密。
+var directSharedClient = &http.Client{
+	Transport: &http.Transport{
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // 票据即身份,见文件头注释
+		MaxIdleConns:        8,
+		MaxIdleConnsPerHost: 8,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 5 * time.Second,
+	},
 }
+
+// directHTTPClient 返回直连共享 client。
+func directHTTPClient() *http.Client { return directSharedClient }
 
 // directSession 一次直连会话的票据与已选定的可达地址。
 type directSession struct {
@@ -95,7 +99,9 @@ func requestDirectTicket(cfg config, agentID, path, direction string) (*directSe
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := directHTTPClient().Do(req)
+	// 走 controlClient:与其它 relay API 同源 TLS 策略(--insecure/--cacert),
+	// 不对持有效证书的 relay 无条件降级校验
+	resp, err := controlClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("票据请求失败: %w", err)
 	}
@@ -118,33 +124,23 @@ func requestDirectTicket(cfg config, agentID, path, direction string) (*directSe
 	return &directSession{ticketID: out.TicketID, secret: out.Secret, addrs: out.Addrs}, nil
 }
 
-// probe 逐地址探活,选定首个可达者(1.5s 超时/地址)。
+// probe 逐地址探活,选定首个可达者(1.5s 请求级超时/地址)。
+// 超时经请求 ctx 中断:无游离 goroutine、无未关闭连接(原手动 goroutine+select
+// 的超时路径会泄漏等待中的请求与响应体)。
 func (ds *directSession) probe(path, direction string) error {
 	for _, addr := range ds.addrs {
 		base := "https://" + addr
-		ctxTimeout := 1500 * time.Millisecond
 		body, _ := json.Marshal(map[string]string{"path": path, "direction": direction})
-		req, err := http.NewRequest("POST", base+"/xfer/probe", bytes.NewReader(body))
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/xfer/probe", bytes.NewReader(body))
 		if err != nil {
+			cancel()
 			continue
 		}
 		req.Header.Set("X-Go-RMM-Ticket", ds.ticketID+":"+ds.secret)
-		done := make(chan struct{})
-		var resp *http.Response
-		var rerr error
-		go func() {
-			resp, rerr = directHTTPClient().Do(req)
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(ctxTimeout):
-			continue
-		}
-		if rerr != nil || resp == nil {
-			if resp != nil {
-				resp.Body.Close()
-			}
+		resp, err := directHTTPClient().Do(req)
+		cancel()
+		if err != nil {
 			continue
 		}
 		ok := resp.StatusCode == http.StatusOK

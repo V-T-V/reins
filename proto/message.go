@@ -440,11 +440,11 @@ type FileTransferCancel struct {
 //   - ExpiryUnix 过期即废(默认签发后 60s)
 //   - 一次性:Agent 校验成功即删除,重放第二次拒绝
 type XferTicketGrant struct {
-	TicketID   string `json:"ticket_id"`    // 票据 ID(UUID)
-	SecretHash string `json:"secret_hash"`  // SHA256(secret) hex,Agent 侧比对用
-	Path       string `json:"path"`         // 绑定的目标路径(分片模式为基路径)
-	Direction  string `json:"direction"`    // "upload" / "download"
-	ExpiryUnix int64  `json:"expiry_unix"`  // 过期 Unix 秒
+	TicketID   string `json:"ticket_id"`   // 票据 ID(UUID)
+	SecretHash string `json:"secret_hash"` // SHA256(secret) hex,Agent 侧比对用
+	Path       string `json:"path"`        // 绑定的目标路径(分片模式为基路径)
+	Direction  string `json:"direction"`   // "upload" / "download"
+	ExpiryUnix int64  `json:"expiry_unix"` // 过期 Unix 秒
 }
 
 // --- 辅助 ---

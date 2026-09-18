@@ -227,4 +227,3 @@ func TestTransferDirectBadDirection(t *testing.T) {
 		t.Fatalf("非法 direction 应 400,实际 %d", resp.StatusCode)
 	}
 }
-

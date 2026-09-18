@@ -284,8 +284,8 @@ func (s *xferDirectServer) handleProbe(w http.ResponseWriter, r *http.Request) {
 // → 返回 ready 镜像 + data_token。
 func (s *xferDirectServer) handleBegin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path      string `json:"path"`
-		Direction string `json:"direction"`
+		Path       string `json:"path"`
+		Direction  string `json:"direction"`
 		TransferID string `json:"transfer_id"`
 		Size       int64  `json:"size,omitempty"`
 		SHA256     string `json:"sha256,omitempty"`

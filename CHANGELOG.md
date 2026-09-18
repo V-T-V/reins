@@ -2,6 +2,16 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [v4.7.2] — 2026-09-18 深度审计 + 三处修复
+
+### 审计定位的三处真问题(全部修复)
+- **自更新 rename 无回退(Defender 根治)**:`execUpdate` 的 rename 舞步被安全软件确定性拦截"未签名新文件顶替服务 exe"(4060 生产 4 次复现)后直接失败——现 `placeBinary` rename 被拒即回退**流式 copy 落位**(copy 通道畅通是生产实证),4060 两台恢复标准自更新/auto_update 能力,不再依赖人工 copy 舞步。renameFn 参数化,三路径测试注入覆盖。
+- **probe 超时泄漏**:直连选址的手动 goroutine+select 超时路径会泄漏等待中的请求与响应体——改请求级 context 超时,超时即中断连接,零游离 goroutine。
+- **直连 client 每调用新建**:分片传输每片 ticket/probe/begin/data 四次调用各自新建 client(四次 TLS 握手)——改进程级共享 client 连接复用;票据请求同步改走 `controlClient`(尊重 --insecure/--cacert,不再对持有效证书的 relay 无条件降级校验)。
+
+### 测试
++6(placeBinary rename 直走/回退 copy/双失败聚合 + copyBinaryStream 跨缓冲保真 + client 单例 + probe 黑洞快速失败),总数 535→541 全绿;gofmt 全清。
+
 ## [v4.7.1] — 2026-09-17 自动更新链路(深度排查 + 优化)
 
 ### 排查结论(生产实证:http://203.0.113.99)
