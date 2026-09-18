@@ -1216,11 +1216,19 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 	defer Put256K(buf)
 	totalSent := int64(0)
 	aborted := false
+	// Phase2:帧写入走数据面连接池轮转(池空回落主连接)——单 TCP 吞吐天花板
+	// 与"传输挤死心跳"一并解决;isLast/cancel 等控制帧仍走主连接。
+	writeFrame := func(frame []byte) error {
+		if dc := r.agents.DataConnFor(agentID, transferID); dc != nil {
+			return dc.writeBinaryData(ctx, frame)
+		}
+		return conn.writeBinaryData(ctx, frame)
+	}
 	for {
 		n, readErr := req.Body.Read(buf)
 		if n > 0 {
 			frame := proto.BuildBinaryFrame(transferID, false, buf[:n])
-			if err := conn.writeBinaryData(ctx, frame); err != nil {
+			if err := writeFrame(frame); err != nil {
 				writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("WS写失败: %w", err)))
 				return
 			}

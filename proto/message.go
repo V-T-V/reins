@@ -71,6 +71,14 @@ const (
 	// (经控制 WS 本条消息)。Agent 校验 CLI 直连请求携带的 secret 时比对 hash,
 	// 全程不落盘、60s 过期、用后即焚。
 	TypeXferTicket = "xfer_ticket"
+	// TypeDataConnJoin —— Agent→Relay:数据面连接加入(Phase 2 数据面分离)。
+	// Agent 按配置额外建立 N 条 WS 数据连接(与控制连接同端点,?data=<i> 区分),
+	// 首条消息发送本类型绑定 AgentID;Relay 回 data_join_ack 后连接进入数据面
+	// (只承载文件传输二进制帧,心跳/任务留在控制连接)。旧 Relay 不认识本类型
+	// 不回 ack,Agent 超时回落单连接模式——滚动升级零风险。
+	TypeDataConnJoin = "data_join"
+	// TypeDataConnAck —— Relay→Agent:数据面连接加入确认。
+	TypeDataConnAck = "data_join_ack"
 )
 
 // 任务类型常量，与 TaskRequest.Type 取值对应。
@@ -445,6 +453,20 @@ type XferTicketGrant struct {
 	Path       string `json:"path"`        // 绑定的目标路径(分片模式为基路径)
 	Direction  string `json:"direction"`   // "upload" / "download"
 	ExpiryUnix int64  `json:"expiry_unix"` // 过期 Unix 秒
+}
+
+// --- Phase 2 数据面分离 ---
+
+// DataConnJoin Agent→Relay:数据面连接绑定请求(连接首条消息)。
+type DataConnJoin struct {
+	AgentID string `json:"agent_id"` // 绑定的 Agent 身份(须与已注册的主连接一致)
+	Index   int    `json:"index"`    // 连接序号(0..N-1,仅诊断用)
+}
+
+// DataConnAck Relay→Agent:数据面连接绑定确认。
+type DataConnAck struct {
+	AgentID string `json:"agent_id"`
+	Index   int    `json:"index"`
 }
 
 // --- 辅助 ---

@@ -71,6 +71,11 @@ type Config struct {
 	// XferAdvertise 直连广播地址显式覆盖(多网卡/NAT 映射场景,如 ["10.1.2.3:7783"])。
 	// 留空 = 自动枚举本机非回环 IPv4 地址。
 	XferAdvertise []string `json:"xfer_advertise,omitempty"`
+	// DataConns 数据面连接数(Phase 2,默认 0=关闭,建议 2~4,上限 8)。
+	// 开启后 Agent 额外建立 N 条数据 WS 承载文件传输二进制帧——心跳/任务留在
+	// 控制连接(根治传输挤死心跳),N 条 TCP 并行突破单流吞吐天花板。旧 Relay
+	// 不支持时自动回落单连接,零风险。
+	DataConns int `json:"data_conns,omitempty"`
 	// MinVersion 允许的最低版本(防降级)。
 	// 自更新时若新版本 < MinVersion 则拒绝。留空则不强制。
 	MinVersion string `json:"min_version,omitempty"`
@@ -175,6 +180,9 @@ func (c Config) Validate() error {
 	// 自动更新间隔下限(过短会连环更新+回滚抖动)
 	if c.AutoUpdateInterval != 0 && c.AutoUpdateInterval < time.Minute {
 		return fmt.Errorf("auto_update 间隔过短(最小 1m,建议 30m~24h): %v", c.AutoUpdateInterval)
+	}
+	if c.DataConns < 0 || c.DataConns > 8 {
+		return fmt.Errorf("data_conns 须在 0~8(0=关闭,建议 2~4),得到 %d", c.DataConns)
 	}
 	// 主从角色校验
 	if c.Role != "" && c.Role != "master" && c.Role != "slave" {

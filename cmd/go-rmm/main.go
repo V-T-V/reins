@@ -355,6 +355,21 @@ func taskRun(cfg config, args []string) error {
 		return err
 	}
 
+	// 日志实证(2026-09 ZCode 508 次调用):`-s` 不带 `-t` 时报
+	// "powershell 任务需要 -c"三连挫败——-s 语义自明,自动推断 script 类型;
+	// script 类默认超时 60→120s(与 deploy PlayStep 的 script 默认对齐,
+	// 日志 15 次超时失败多为 script 类任务)。
+	typeGiven, timeoutGiven := false, false
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "t":
+			typeGiven = true
+		case "timeout":
+			timeoutGiven = true
+		}
+	})
+	*taskType, *timeout = inferScriptDefaults(typeGiven, timeoutGiven, *taskType, *script, *command, *payloadFile, *timeout)
+
 	if *agentID == "" {
 		return errors.New("-a <agent_id> 必填")
 	}
@@ -493,6 +508,21 @@ func uniqueNano() int64 {
 	}
 }
 
+// inferScriptDefaults -s 单独出现(未显式 -t)时自动推断 script 任务类型,
+// 且默认超时 60→120s(deploy PlayStep 同款)。显式 -t/--timeout 永远优先。
+func inferScriptDefaults(typeGiven, timeoutGiven bool, taskType, script, command, payloadFile string, timeout int) (string, int) {
+	if typeGiven || script == "" || command != "" || payloadFile != "" {
+		return taskType, timeout
+	}
+	if taskType != proto.TaskScript {
+		taskType = proto.TaskScript
+	}
+	if !timeoutGiven && timeout == 60 {
+		timeout = 120
+	}
+	return taskType, timeout
+}
+
 func buildPayload(taskType, command, script, payloadFile string) (json.RawMessage, error) {
 	// -f 文件优先
 	if payloadFile != "" {
@@ -568,12 +598,15 @@ func looksLikeLocalPath(s string) bool {
 	return false
 }
 
-// waitResult 轮询任务状态直到完成/失败/取消/超时/中断。
+// waitResult 等待任务终态:SSE 事件推送优先(快任务省去最长 1s 轮询周期,
+// 日志实证任务多为亚秒级完成却要等轮询对齐),1s 轮询兜底(SSE 断连/事件
+// 丢失/cancelled 类无 result 事件的终态仍可靠)。
 // 返回 (true, nil) 表示拿到终态; (false, nil) 表示被中断或超时(已在 stderr 提示)。
 func waitResult(ctx context.Context, cfg config, taskID string, timeout int) (bool, error) {
 	deadline := time.Now().Add(time.Duration(timeout+10) * time.Second)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
+	sseCh := subscribeTaskResult(ctx, cfg, taskID)
 
 	for {
 		select {
@@ -582,6 +615,22 @@ func waitResult(ctx context.Context, cfg config, taskID string, timeout int) (bo
 				fmt.Println("\n已中断")
 			}
 			return false, nil
+		case res := <-sseCh:
+			// SSE 即时通道:结果事件推送到达(快任务省去最长 1s 的轮询周期;
+			// 轮询兜底仍保留,防 SSE 断连/事件丢失)
+			if jsonMode {
+				status := proto.StatusFailed
+				if res.Success {
+					status = proto.StatusCompleted
+				}
+				outputJSON(map[string]any{"task_id": taskID, "status": status, "result": res})
+				taskFailed = !res.Success
+				return true, nil
+			}
+			fmt.Println()
+			printResult(res)
+			taskFailed = !res.Success
+			return true, nil
 		case <-ticker.C:
 			if time.Now().After(deadline) {
 				if !jsonMode {
@@ -640,6 +689,54 @@ func waitResult(ctx context.Context, cfg config, taskID string, timeout int) (bo
 			}
 		}
 	}
+}
+
+// subscribeTaskResult 订阅 relay SSE,过滤 task_id 匹配的 task_result 事件。
+// 事件到达即推入 channel(缓冲 1);连接失败/流结束静默退出——轮询兜底仍在。
+func subscribeTaskResult(ctx context.Context, cfg config, taskID string) <-chan *proto.TaskResult {
+	ch := make(chan *proto.TaskResult, 1)
+	go func() {
+		req, err := http.NewRequestWithContext(ctx, "GET", cfg.relay+"/api/events", nil)
+		if err != nil {
+			return
+		}
+		if cfg.token != "" {
+			req.Header.Set("Authorization", "Bearer "+cfg.token)
+		}
+		req.Header.Set("Accept", "text/event-stream")
+		resp, err := streamingClient.Do(req)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		scanner := newSSEScanner(resp.Body)
+		for {
+			ev, err := scanner.Next()
+			if err != nil {
+				return
+			}
+			if ev.event != proto.TypeTaskResult {
+				continue
+			}
+			var outer struct {
+				AgentID string          `json:"agent_id"`
+				Data    json.RawMessage `json:"data"`
+			}
+			if json.Unmarshal(ev.data, &outer) != nil {
+				continue
+			}
+			var res proto.TaskResult
+			if json.Unmarshal(outer.Data, &res) != nil || res.TaskID != taskID {
+				continue
+			}
+			select {
+			case ch <- &res:
+			default:
+			}
+			return
+		}
+	}()
+	return ch
 }
 
 func printResult(r *proto.TaskResult) {

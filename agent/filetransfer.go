@@ -457,19 +457,20 @@ func (te *TransferEngine) completeUpload(id string, success bool, bytes int64, h
 }
 
 // SendDownloadData 发送下载的二进制数据帧（Agent→Relay）。
-// 用 websocket.Writer 流式发送，不全载入内存。
-func (te *TransferEngine) SendDownloadData(ctx context.Context, wc *wsConn, transferID string, progressCb func(proto.FileTransferProgress), completeCb func(proto.FileTransferComplete)) {
+// writeFrame 由调用方注入:主连接直写(Phase2 前)或数据面池轮转(Phase2),
+// 携带完整二进制帧(含 BuildBinaryFrame 包装),流式不全载入内存。
+func (te *TransferEngine) SendDownloadData(ctx context.Context, writeFrame func(context.Context, []byte) error, transferID string, progressCb func(proto.FileTransferProgress), completeCb func(proto.FileTransferComplete)) {
 	writeChunk := func(data []byte) error {
 		writeCtx, writeCancel := context.WithTimeout(ctx, 15*time.Second) // 弱网:下载写 deadline
 		defer writeCancel()
 		// 构造二进制帧：[transferID_len u8][transferID][isLast u8][data]
 		frame := proto.BuildBinaryFrame(transferID, false, data)
-		return wc.writeBinaryData(writeCtx, frame)
+		return writeFrame(writeCtx, frame)
 	}
 	finalize := func() error {
 		// H-5:isLast 写错检查(WS 半坏时原 ignoring 让对端悬挂至 30 分钟 ctx 超时)
 		frame := proto.BuildBinaryFrame(transferID, true, nil)
-		return wc.writeBinaryData(ctx, frame)
+		return writeFrame(ctx, frame)
 	}
 	te.streamDownload(ctx, transferID, writeChunk, finalize, progressCb, completeCb)
 }

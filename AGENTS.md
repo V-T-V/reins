@@ -144,7 +144,7 @@ go-rmm/
 | Go 文件 | 231 |
 | 代码行 | 42,000+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 544 |
+| 测试用例 | 548 |
 | 基准测试 | 22 |
 | CLI 命令 | 52 |
 | API 端点 | 45 |
@@ -190,11 +190,11 @@ go-rmm/
 
 ## 测试覆盖(v4.6.0)
 
-544 测试 + 22 基准(2026-09-18 使用日志驱动优化后口径,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
+548 测试 + 22 基准(2026-09-18 Phase2 数据面分离后口径,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
-| **relay** | 240 | 66 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10];transfer upload sha256 透传 E2E(真 WS fake Agent 全链路)[2026-09-13];webhook 收口(5 事件接线+flag/env 配置+通知体结构+真 handler 403/失败 result/证书撤销 E2E)+离线缓存策略绕过回归(P1-7)[2026-09-14];tls_watcher(CheckCertExpiry 正常/过期/三错误路径+CertDaysLeftMetric 双口径+LoadCertForRelay)[2026-09-14];智能调度负载接线(monitor 采样回流评分/TTL 过期无视/真 WS progress E2E)[2026-09-14] |
+| **relay** | 243 | 66 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10];transfer upload sha256 透传 E2E(真 WS fake Agent 全链路)[2026-09-13];webhook 收口(5 事件接线+flag/env 配置+通知体结构+真 handler 403/失败 result/证书撤销 E2E)+离线缓存策略绕过回归(P1-7)[2026-09-14];tls_watcher(CheckCertExpiry 正常/过期/三错误路径+CertDaysLeftMetric 双口径+LoadCertForRelay)[2026-09-14];智能调度负载接线(monitor 采样回流评分/TTL 过期无视/真 WS progress E2E)[2026-09-14] |
 | **agent** | 86 | 33 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9];单片 SHA 校验防线(匹配成功 rename/不匹配删 .part 防续传死循环)[2026-09-13] |
 | **executors** | 57 | 25 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控;rules 门禁(发现去重/指纹组合/Dispatcher 校验/op=rules/变更失效闭环)[v4.4.0] |
 | **proto** | 46 | 9 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
@@ -202,7 +202,7 @@ go-rmm/
 | **internal/dagflow** | 13 | 1 | 图校验 8 类非法图逐一拒绝+环点名;串行启动序列 50 次重跑逐位一致;并发峰值恰守上限 3;失败级联(health/watch 跳过+alert 软依赖照跑+跳过者从未启动);软依赖仍须等终态;ctx 取消 skipped 收尾;带环图不死锁 [v4.5.0];v4.6.0 relay 端到端:3 节点失败级联剧场(start_order 确定 prep→deploy/verify 零投递)+软依赖照跑+策略拦截 403+提交期校验 |
 | **client** | 18 | 9 | SDK 方法/流式/工具发现 |
 | **console** | 14 | 4 | 反向代理/事件转发 |
-| **cmd** | 48 | 31 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3];rules read E2E/ack 缓存/-s 防呆/deploy 模板[v4.4.0];per-chunk SHA256(computeSectionSHA 段 hash/分片 query 下发/非分片预计算 E2E/Agent 拒绝冒泡)[2026-09-13] |
+| **cmd** | 49 | 31 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3];rules read E2E/ack 缓存/-s 防呆/deploy 模板[v4.4.0];per-chunk SHA256(computeSectionSHA 段 hash/分片 query 下发/非分片预计算 E2E/Agent 拒绝冒泡)[2026-09-13] |
 
 **深度测试(rounds 1-10)**:round 1 修复 `TestMultiAgentRoutingE2E` 永久失败;rounds 2-7 逐层加深(relay 路由 → 执行器 → console → mTLS → 审计 → 多租户);round 8 覆盖批量分发不变量(并发投递/聚合/退避重试/幂等/ctx 取消/进度状态机);rounds 9-10 工作区深度推进——补 SecretStore/ScriptLibrary/buffer_pool/rQueue/Envelope 等弱测模块,修复空闲 Agent 掉线循环(S7 heartbeat_ack)、脚本库路径穿越漏洞、Prom 指标前缀 typo、审计写盘静默丢记录。
 

@@ -33,6 +33,10 @@ type Agent struct {
 	pool  *WorkerPool       // C6 并发限流
 	certs *AgentCerts       // C8 mTLS 证书（nil=非 mTLS 模式）
 	xfer  *xferDirectServer // Phase1 直连监听(nil=未开启)
+	// Phase2 数据面连接池(与主连接同生命周期:主断全灭,重连重铸)
+	dataMu    sync.Mutex
+	dataConns []*wsConn
+	dataNext  int
 }
 
 func NewAgent(cfg Config, disp *executors.Dispatcher) *Agent {
@@ -245,6 +249,10 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	}
 	// 3. 启动心跳 goroutine
 	go a.heartbeatLoop(connCtx, wc)
+	// Phase2:数据面连接池(注册成功后才有绑定资格;connCtx 断则全灭重铸)
+	for i := 0; i < a.cfg.DataConns; i++ {
+		go a.dataConnLoop(connCtx, wc, i)
+	}
 	// S1:启动死连接检测 watchdog。半开连接(NAT 超时/防火墙变更)时 recvLoop 永久阻塞,
 	// 心跳写在 TCP 缓冲未满时可能"成功",要等 TCP 重传超时(~15 分钟)才报错。
 	// watchdog 检查 lastRecv:2×Heartbeat 无收包则 closeNow 强制断开重连。
@@ -677,7 +685,10 @@ func (a *Agent) handleTransferInit(ctx context.Context, wc *wsConn, env proto.En
 			completeCb := func(c proto.FileTransferComplete) {
 				sendCompleteReliably(wc, c)
 			}
-			transfers.SendDownloadData(ctx, wc, init.TransferID, progressCb, completeCb)
+			frameW := func(c context.Context, frame []byte) error {
+				return a.writeFramePooled(c, wc, frame)
+			}
+			transfers.SendDownloadData(ctx, frameW, init.TransferID, progressCb, completeCb)
 		}()
 	}
 }

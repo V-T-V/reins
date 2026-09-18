@@ -13,7 +13,7 @@ import (
 // agentEntry 一个在线 Agent 的全部状态。
 type agentEntry struct {
 	info         proto.Register  // 注册信息
-	conn         *wsConn         // WS 连接
+	conn         *wsConn         // 主(控制)WS 连接
 	lastBeat     time.Time       // 最近一次心跳时间
 	lastSeq      int64           // 最近心跳序号
 	registeredAt time.Time       // 注册时间
@@ -22,6 +22,11 @@ type agentEntry struct {
 	loadCPU      float64         // XL6:最近 monitor 采样的 CPU 使用率(%)
 	loadMem      float64         // XL6:最近 monitor 采样的内存使用率(%)
 	loadSeen     time.Time       // XL6:负载采样时刻(SelectBestAgent 按 TTL 判新鲜)
+	// Phase2 数据面分离:额外 N 条数据 WS 连接(只跑文件传输二进制帧,
+	// 心跳/任务留主连接——根治传输挤死心跳 + 单 TCP 吞吐天花板)。
+	dataMu    sync.Mutex
+	dataConns []*wsConn
+	dataNext  atomic.Int64 // 轮转游标
 }
 
 // Registry 维护在线 Agent 注册表。
@@ -74,7 +79,87 @@ func (r *Registry) Unregister(agentID string, conn *wsConn) bool {
 	}
 	delete(r.agents, agentID)
 	delete(r.capabilityCache, agentID) // D1:清理缓存
+	e.dataMu.Lock()
+	e.dataConns = nil // Phase2:主连接断开,数据面一并作废
+	e.dataMu.Unlock()
 	return true
+}
+
+// --- Phase2 数据面连接池 ---
+
+// BindDataConn 绑定一条数据面连接(Agent 主连接须在线)。index 仅诊断。
+func (r *Registry) BindDataConn(agentID string, index int, wc *wsConn) bool {
+	r.mu.Lock()
+	e, ok := r.agents[agentID]
+	r.mu.Unlock()
+	if !ok {
+		return false
+	}
+	e.dataMu.Lock()
+	defer e.dataMu.Unlock()
+	e.dataConns = append(e.dataConns, wc)
+	return true
+}
+
+// UnbindDataConn 按连接指针移除一条数据面连接(该连接断开时调用)。
+func (r *Registry) UnbindDataConn(agentID string, wc *wsConn) {
+	r.mu.RLock()
+	e, ok := r.agents[agentID]
+	r.mu.RUnlock()
+	if !ok {
+		return
+	}
+	e.dataMu.Lock()
+	defer e.dataMu.Unlock()
+	for i, c := range e.dataConns {
+		if c == wc {
+			e.dataConns = append(e.dataConns[:i], e.dataConns[i+1:]...)
+			return
+		}
+	}
+}
+
+// DataConnFor 按 key(transferID)稳定取一条数据面连接。
+// 同一传输的帧恒落同一条连接——单传输独占一条 TCP 保证字节流顺序
+// (逐帧轮转会乱序落盘,E2E SHA 对拍逮住);跨传输天然分散,分片并发
+// (N 个 transferID)即 N 条 TCP 并行。池空返回 nil(回落主连接)。
+func (r *Registry) DataConnFor(agentID, key string) *wsConn {
+	r.mu.RLock()
+	e, ok := r.agents[agentID]
+	r.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	e.dataMu.Lock()
+	defer e.dataMu.Unlock()
+	n := len(e.dataConns)
+	if n == 0 {
+		return nil
+	}
+	return e.dataConns[int(fnv32(key))%n]
+}
+
+// fnv32 FNV-1a 32 位(稳定散列,跨进程一致——双侧同款绑定)。
+func fnv32(s string) uint32 {
+	var h uint32 = 2166136261
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= 16777619
+	}
+	return h
+}
+
+// DataConnCount 数据面连接数(诊断/测试用)。
+func (r *Registry) DataConnCount(agentID string) int {
+	r.mu.RLock()
+	e, ok := r.agents[agentID]
+	r.mu.RUnlock()
+	if !ok {
+		return 0
+	}
+	e.dataMu.Lock()
+	defer e.dataMu.Unlock()
+	return len(e.dataConns)
 }
 
 // Touch 更新心跳时间与序号。

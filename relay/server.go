@@ -426,7 +426,90 @@ func (r *Relay) handleAgentWS(w http.ResponseWriter, req *http.Request) {
 		wc.certCN = req.TLS.PeerCertificates[0].Subject.CommonName
 		wc.certDNS = req.TLS.PeerCertificates[0].DNSNames
 	}
+	// Phase2 数据面分离:?data= 的连接走数据面分支(只承载传输二进制帧)
+	if req.URL.Query().Get("data") != "" {
+		r.serveAgentData(req.Context(), wc)
+		return
+	}
 	r.serveAgent(req.Context(), wc)
+}
+
+// serveAgentData 处理一条数据面连接(Phase 2 数据面分离)。
+//
+// 握手:首条消息须为 data_join(绑定 AgentID);Relay 校验该 Agent 主连接在线
+// 后回 data_join_ack。此后连接只承载文件传输二进制帧——路由到主连接注册的
+// transferID 通道(HTTP download handler 消费)。心跳/任务/隧道帧不经此连接,
+// 传输再重也饿不死控制面(单 TCP 时代的生产实证:P2-12 被迫加发送限速)。
+func (r *Relay) serveAgentData(ctx context.Context, wc *wsConn) {
+	defer wc.close(websocket.StatusNormalClosure, "bye")
+
+	// 1. 握手:等 data_join(10s 内)
+	joinCtx, joinCancel := context.WithTimeout(ctx, 10*time.Second)
+	msgType, data, err := wc.Conn().Read(joinCtx)
+	joinCancel()
+	if err != nil {
+		log.Printf("[agent-data] %s 握手读失败: %v", wc.id, err)
+		return
+	}
+	if msgType != websocket.MessageText {
+		log.Printf("[agent-data] %s 首条消息须为 data_join(JSON),收到二进制帧", wc.id)
+		return
+	}
+	var env proto.Envelope
+	if err := json.Unmarshal(data, &env); err != nil || env.Type != proto.TypeDataConnJoin {
+		log.Printf("[agent-data] %s 首条消息须为 data_join,实际 type=%q", wc.id, env.Type)
+		return
+	}
+	var join proto.DataConnJoin
+	if err := env.Decode(&join); err != nil || join.AgentID == "" {
+		log.Printf("[agent-data] %s data_join 解析失败: %v", wc.id, err)
+		return
+	}
+	// 绑定前校验主连接在线 + 身份一致(mTLS 模式下证书 CN 须匹配)
+	if r.agents.Conn(join.AgentID) == nil {
+		log.Printf("[agent-data] 拒绝绑定:agent %s 主连接不在线", join.AgentID)
+		return
+	}
+	if r.cfg.MTLS && wc.certCN != "" {
+		if !certMatchesAgent(join.AgentID, wc.certCN, wc.certDNS) {
+			log.Printf("[agent-data] 拒绝绑定:AgentID=%s 与证书身份(CN=%s)不匹配", join.AgentID, wc.certCN)
+			return
+		}
+	}
+	wc.startWriter(ctx)
+	wc.biz = join.AgentID
+	if !r.agents.BindDataConn(join.AgentID, join.Index, wc) {
+		return
+	}
+	defer r.agents.UnbindDataConn(join.AgentID, wc)
+	ackEnv, _ := proto.NewEnvelope(proto.TypeDataConnAck, "relay", join.AgentID,
+		proto.DataConnAck{AgentID: join.AgentID, Index: join.Index})
+	if err := wc.writeControlJSON(ctx, ackEnv); err != nil {
+		log.Printf("[agent-data] %s ack 写失败: %v", wc.id, err)
+		return
+	}
+	log.Printf("[agent-data] agent=%s 数据面连接加入(index=%d,池=%d)",
+		join.AgentID, join.Index, r.agents.DataConnCount(join.AgentID))
+
+	// 2. 读循环:二进制帧 → 主连接的 transferID 通道路由(主连接可能重连换对象,逐帧取)
+	for {
+		msgType, data, err := wc.Conn().Read(ctx)
+		if err != nil {
+			log.Printf("[agent-data] agent=%s 数据连接断开: %v", join.AgentID, err)
+			return
+		}
+		if msgType != websocket.MessageText {
+			transferID, isLast, payload, parseErr := proto.ParseBinaryFrame(data)
+			if parseErr != nil {
+				continue
+			}
+			if main := r.agents.Conn(join.AgentID); main != nil {
+				main.routeXferData(transferID, payload, isLast)
+			}
+			continue
+		}
+		// JSON 帧:数据面不承载控制信令,忽略(容忍优先,防协议误用炸连接)
+	}
 }
 
 // serveAgent 处理一条 Agent 连接的完整生命周期。
