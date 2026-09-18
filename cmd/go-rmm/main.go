@@ -36,6 +36,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -88,8 +89,10 @@ func run(args []string) error {
 	global.StringVar(&cfg.token, "token", cfg.token, "鉴权 token")
 	global.StringVar(&cfg.output, "output", getEnv("GO_RMM_OUTPUT", "text"), "输出格式: text/json")
 	global.StringVar(&cfg.output, "o", getEnv("GO_RMM_OUTPUT", "text"), "输出格式简写: text/json")
-	global.BoolVar(&cfg.insecure, "insecure", false, "跳过 TLS 证书校验(自签证书)")
-	global.StringVar(&cfg.cacert, "cacert", "", "自定义 CA 证书路径(自签 mTLS)")
+	// 日志实证(2026-09 ZCode 508 次调用):500 条手敲 --relay/--token/--insecure 前缀
+	// (累计 3.6 万字符)——env 一次 export 终身有效,insecure/cacert 补齐 env 支持
+	global.BoolVar(&cfg.insecure, "insecure", envBoolDefault("GO_RMM_INSECURE"), "跳过 TLS 证书校验(自签证书;env GO_RMM_INSECURE)")
+	global.StringVar(&cfg.cacert, "cacert", getEnv("GO_RMM_CACERT", ""), "自定义 CA 证书路径(自签 mTLS;env GO_RMM_CACERT)")
 	global.SetOutput(os.Stderr)
 	global.Usage = func() { printUsage() }
 	if err := global.Parse(args); err != nil {
@@ -361,6 +364,17 @@ func taskRun(cfg config, args []string) error {
 			return fmt.Errorf("未知任务类型: %s —— -t 是任务类型,设置超时请用 -timeout <秒> (可用类型: powershell script file screenshot browse guiclick)", *taskType)
 		}
 		return fmt.Errorf("未知任务类型: %s (可用: powershell script file screenshot browse guiclick)", *taskType)
+	}
+
+	// 反模式实时引导(不阻断,只提示):见 detectFileAntiPattern 注释
+	if path, local := detectFileAntiPattern(*taskType, *command); path != "" {
+		if local {
+			fmt.Fprintf(os.Stderr, "⚠️  检测到 -File 反模式且 %s 是本地文件:改用 `task run -a %s -t script -s %s --timeout N`\n", path, *agentID, path)
+			fmt.Fprintf(os.Stderr, "   script 通道自动处理 BOM/编码/上传/执行,免四层引号转义(内联模式的 ParserError 主因)\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "⚠️  检测到 -File 反模式(%s 为远端路径):请确认已上传到 Agent 允许根目录;\n", path)
+			fmt.Fprintf(os.Stderr, "   本地脚本建议直接 `-t script -s <本地路径>` 一步完成上传+执行\n")
+		}
 	}
 
 	payload, err := buildPayload(*taskType, *command, *script, *payloadFile)
@@ -652,6 +666,48 @@ func printResult(r *proto.TaskResult) {
 	if len(r.Data) > 0 && string(r.Data) != "null" {
 		fmt.Printf("数据:      %s\n", string(r.Data))
 	}
+	if h := resultFailureHint(stdout, stderr, r.Error); h != "" {
+		fmt.Printf("--- 建议 ---\n%s\n", h)
+	}
+}
+
+// envBoolDefault 环境变量布尔默认值(非空即 true,与 GO_RMM_NO_DIRECT 同语义)。
+func envBoolDefault(key string) bool { return os.Getenv(key) != "" }
+
+// detectFileAntiPattern 检测 "-c ... -File xxx.ps1" 反模式。
+// 日志实证(2026-09 ZCode 508 次调用,12% 失败率的最大来源):高频写法
+// task run -t powershell -c "powershell -File 远端.ps1" ——四层引号转义在
+// PS 5.1 下 ParserError + 路径策略 403 + 60s 默认超时三连坑,而 -t script -s
+// 本地文件一步到位(自动 BOM/上传/执行,免转义)。返回 (脚本路径, 是否本地文件)。
+func detectFileAntiPattern(taskType, command string) (string, bool) {
+	if taskType != proto.TaskPowerShell || command == "" {
+		return "", false
+	}
+	m := regexp.MustCompile(`(?i)-file\s+"?([^"\s]+\.ps1)"?`).FindStringSubmatch(command)
+	if m == nil {
+		return "", false
+	}
+	path := strings.ReplaceAll(m[1], `\\`, `\`)
+	if _, err := os.Stat(path); err == nil {
+		return path, true
+	}
+	return path, false
+}
+
+// resultFailureHint 按失败特征给出可执行建议(高频坑位,日志实证)。
+func resultFailureHint(stdout, stderr, errMsg string) string {
+	all := stdout + "\n" + stderr + "\n" + errMsg
+	switch {
+	case strings.Contains(all, "ParserError") || strings.Contains(all, "表达式或语句中"):
+		return "脚本在远端 PS 5.1 报语法错误(最常见:嵌套引号被吃)。\n把命令写进本地 .ps1 后用 `-t script -s <文件>` 执行:自动 BOM/UTF-8,免转义。"
+	case strings.Contains(all, "路径策略拒绝"):
+		return "目标路径不在 Agent 允许根目录内。上传/写文件请用 workspace 路径,或在 Agent 配置 allowed_roots 追加目标根。"
+	case strings.Contains(all, "被另一个传输占用"):
+		return "同路径有未完结传输会话(约 2 分钟自动清扫)。稍等重试,或换临时文件名。"
+	case strings.Contains(errMsg, "超时") || strings.Contains(all, "等待被中断或超时"):
+		return "任务超过时限被杀。长任务(安装/构建/扫描)请加 `--timeout <秒>`(默认 60)。"
+	}
+	return ""
 }
 
 // P2-#9:task list 直接 decode 到结构化类型,去除 marshal/unmarshal 往返
@@ -1747,8 +1803,12 @@ func printUsage() {
   --relay <URL>    Relay 地址(默认 http://127.0.0.1:7780,环境变量 GO_RMM_RELAY)
   --token <TOKEN>  鉴权 token(环境变量 GO_RMM_TOKEN)
   -o json          JSON 输出模式(脚本可解析)
-  --insecure       跳过 TLS 校验(自签证书)
-  --cacert <path>  自定义 CA 证书
+  --insecure       跳过 TLS 校验(自签证书;环境变量 GO_RMM_INSECURE)
+  --cacert <path>  自定义 CA 证书(环境变量 GO_RMM_CACERT)
+
+环境变量(一次 export 终身有效,免每条命令敲 --relay/--token 前缀):
+  GO_RMM_RELAY / GO_RMM_TOKEN / GO_RMM_INSECURE / GO_RMM_CACERT / GO_RMM_OUTPUT / GO_RMM_NO_DIRECT
+  例: export GO_RMM_RELAY=https://relay:7780 GO_RMM_TOKEN=xxx GO_RMM_INSECURE=1
 
 退出码: 0=成功 | 1=错误 | 2=任务失败 | 3=超时 | 4=未找到 | 5=策略拦截
 
