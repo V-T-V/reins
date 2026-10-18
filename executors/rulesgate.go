@@ -94,7 +94,7 @@ func RulesAckCombined(entries []RuleFileEntry) string {
 	}
 	sorted := make([]RuleFileEntry, len(entries))
 	copy(sorted, entries)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
 	var b strings.Builder
 	for _, e := range sorted {
 		b.WriteString(e.Path)

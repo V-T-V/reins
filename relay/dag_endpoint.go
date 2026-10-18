@@ -182,7 +182,7 @@ func (r *Relay) handleDAGSubmit(w http.ResponseWriter, req *http.Request) {
 		statuses[sn.ID] = st
 		td.nodes = append(td.nodes, *st)
 	}
-	sort.Slice(td.nodes, func(i, j int) bool { return td.nodes[i].ID < td.nodes[j].ID })
+	sort.SliceStable(td.nodes, func(i, j int) bool { return td.nodes[i].ID < td.nodes[j].ID })
 	// 修正共享指针:sort 拷贝后 statuses 里的指针须指向 td.nodes 的元素,
 	// 否则闭包更新的是切片外的副本。重新指向排序后的槽位。
 	for i := range td.nodes {
@@ -370,7 +370,7 @@ func (r *Relay) handleDAGList(w http.ResponseWriter, req *http.Request) {
 		list = append(list, entry{ID: td.id, Name: td.name, State: state})
 		return true
 	})
-	sort.Slice(list, func(i, j int) bool { return list[i].ID > list[j].ID })
+	sort.SliceStable(list, func(i, j int) bool { return list[i].ID > list[j].ID })
 	if len(list) > 50 {
 		list = list[:50]
 	}

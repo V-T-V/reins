@@ -92,7 +92,7 @@ func (r *Relay) SelectBestAgent(tag, taskType string) (string, error) {
 	}
 
 	// 按 score 升序(最低负载优先)
-	sort.Slice(pool, func(i, j int) bool {
+	sort.SliceStable(pool, func(i, j int) bool {
 		return pool[i].score < pool[j].score
 	})
 	return pool[0].agent.AgentID, nil

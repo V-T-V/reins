@@ -74,7 +74,7 @@ func (r *UpdateRepo) List() []VersionInfo {
 	}
 	// 按版本降序(最新在前)——数值感知:v10.0.0 > v2.0.0。
 	// 纯字典序会把 v10 排在 v2 之前(测试 TestUpdateRepoList 逮住)。
-	sort.Slice(infos, func(i, j int) bool {
+	sort.SliceStable(infos, func(i, j int) bool {
 		return compareVersions(infos[i].Version, infos[j].Version) > 0
 	})
 	return infos

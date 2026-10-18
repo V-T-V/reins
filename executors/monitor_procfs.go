@@ -282,7 +282,7 @@ func readTopProcs(topN int) []proto.ProcInfo {
 			PID: int32(pid), Name: name, CPU: cpuPct, MemMB: rssMB, Threads: threads,
 		})
 	}
-	sort.Slice(procs, func(i, j int) bool {
+	sort.SliceStable(procs, func(i, j int) bool {
 		if procs[i].CPU != procs[j].CPU {
 			return procs[i].CPU > procs[j].CPU
 		}
