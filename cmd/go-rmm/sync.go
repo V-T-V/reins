@@ -189,31 +189,75 @@ func syncPull(cfg config, args []string) error {
 		return fmt.Errorf("创建本地目录失败: %w", err)
 	}
 
-	success := 0
-	failed := 0
-	for i, remoteAbs := range remoteFiles {
-		// 计算相对路径(去掉 srcDir 前缀)
-		relPath := strings.TrimPrefix(strings.ReplaceAll(remoteAbs, "\\", "/"), filepath.ToSlash(srcDir))
-		relPath = strings.TrimPrefix(relPath, "/")
-		localPath := filepath.Join(dstDir, relPath)
-
-		fmt.Printf("\r[%d/%d] %s", i+1, len(remoteFiles), relPath)
-
-		// 确保本地子目录存在
-		if dir := filepath.Dir(localPath); dir != "." {
-			os.MkdirAll(dir, 0755)
+	// 并行下载(worker 池,-j 与 push 同语义;>1 时静默 fileDownload 进度)
+	jobs := 1
+	filtered := make([]string, 0, len(args))
+	for i, a := range args {
+		if a == "-j" || strings.HasPrefix(a, "-j=") {
+			continue
 		}
-
-		// 下载单个文件
-		if err := runFileDownload(cfg, agentID, strings.TrimSpace(remoteAbs), localPath); err != nil {
-			failed++
-			fmt.Printf(" ✗\n")
-		} else {
-			success++
+		if i > 0 && args[i-1] == "-j" && isAllDigit(a) {
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+	if j := extractArg(args, "-j"); j != "" {
+		if n, err := strconv.Atoi(j); err == nil && n > 0 {
+			jobs = n
 		}
 	}
+	_ = filtered // pull 的位置参数已在上层提取,filtered 仅作剥离记录
 
-	fmt.Printf("\n✅ 同步完成: %d 成功, %d 失败\n", success, failed)
+	quiet := jobs > 1
+	var (
+		mu      sync.Mutex
+		success int
+		failed  int
+		errs    []string
+	)
+	work := make(chan string)
+	var wg sync.WaitGroup
+	for w := 0; w < jobs; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Add(-1)
+			for remoteAbs := range work {
+				remoteAbs = strings.TrimSpace(remoteAbs)
+				relPath := strings.TrimPrefix(strings.ReplaceAll(remoteAbs, "\\", "/"), filepath.ToSlash(srcDir))
+				relPath = strings.TrimPrefix(relPath, "/")
+				localPath := filepath.Join(dstDir, relPath)
+				if dir := filepath.Dir(localPath); dir != "." {
+					os.MkdirAll(dir, 0755)
+				}
+				if quiet {
+					syncQuiet.Store(true)
+				}
+				err := runFileDownload(cfg, agentID, remoteAbs, localPath)
+				syncQuiet.Store(false)
+				mu.Lock()
+				if err != nil {
+					failed++
+					errs = append(errs, fmt.Sprintf("%s: %v", relPath, err))
+				} else {
+					success++
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for i, remoteAbs := range remoteFiles {
+		if !quiet {
+			fmt.Printf("\r[%d/%d] %s", i+1, len(remoteFiles), strings.TrimSpace(remoteAbs))
+		}
+		work <- remoteAbs
+	}
+	close(work)
+	wg.Wait()
+
+	fmt.Printf("\n✅ 同步完成: %d 成功, %d 失败 (%d 路并行)\n", success, failed, jobs)
+	for _, e := range errs {
+		fmt.Printf("   ✗ %s\n", e)
+	}
 	return nil
 }
 

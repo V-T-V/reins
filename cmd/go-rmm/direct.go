@@ -391,7 +391,9 @@ func tryDirectDownloadFile(cfg config, agentID, remotePath, localPath string) er
 		os.Remove(partPath)
 		return err
 	}
-	fmt.Printf("✅ 直连下载完成: %s\n", localPath)
+	if !syncQuiet.Load() {
+		fmt.Printf("✅ 直连下载完成: %s\n", localPath)
+	}
 	return nil
 }
 

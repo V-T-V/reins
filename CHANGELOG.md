@@ -2,6 +2,13 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [v4.7.8] — 2026-10-24 sync pull 并行化
+
+### sync pull 并行下载(-j,与 push 同语义)
+- worker 池并行下载远端目录:直连/数据面下多文件天然多流;`-j` flag 剥离与 push 共用代码路径。
+- 下载侧 syncQuiet 守卫补齐(progressWriter.maybePrint/直连下载完成/中继下载完成三组打印点),并行时静默逐文件输出只留汇总+失败清单。
+- E2E:32 文件×1MB push(-j=4)+pull(-j=4)全 32/32,逐文件字节对拍 ALL_IDENTICAL。
+
 ## [v4.7.7] — 2026-10-23 sync 并行化 + 数据面 isLast 赛跑修复
 
 ### sync push 并行化(-j,默认 1=串行不变)

@@ -1273,11 +1273,13 @@ func fileDownload(cfg config, args []string) error {
 	if err != nil {
 		return fmt.Errorf("写入文件失败: %w", err)
 	}
-	pw.finish()
-	fmt.Println()
-	// 成功提示打 stdout(与 upload 路径一致);写文件模式 stdout 无数据流,不会互相污染。
-	// 使用会话实证(2026-08):成功信息打 stderr 会被 PS 5.1 $ErrorActionPreference='Stop' 误判为错误。
-	fmt.Printf("✅ 下载完成: %s\n", formatSize(written))
+	if !syncQuiet.Load() {
+		pw.finish()
+		fmt.Println()
+		// 成功提示打 stdout(与 upload 路径一致);写文件模式 stdout 无数据流,不会互相污染。
+		// 使用会话实证(2026-08):成功信息打 stderr 会被 PS 5.1 $ErrorActionPreference='Stop' 误判为错误。
+		fmt.Printf("✅ 下载完成: %s\n", formatSize(written))
+	}
 	return nil
 }
 
@@ -1795,6 +1797,9 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 }
 
 func (pw *progressWriter) maybePrint() {
+	if syncQuiet.Load() {
+		return // sync 并行模式:逐文件进度必交错,静默
+	}
 	now := time.Now()
 	if now.Sub(pw.lastTime) < 200*time.Millisecond && pw.total > 0 && pw.written < pw.total {
 		return
