@@ -181,6 +181,56 @@ paths:
             application/octet-stream:
               schema: { type: string, format: binary }
 
+  /api/updates/latest:
+    get:
+      summary: 最新 Agent 版本(Agent auto_update 轮询用)
+      responses:
+        "200":
+          description: 最新版本或空仓库
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+                  latest:
+                    type: object
+                    properties:
+                      version: { type: string }
+                      sha256: { type: string }
+                      size: { type: integer }
+
+  /api/updates/download:
+    get:
+      summary: 流式下载指定版本 Agent 二进制
+      parameters:
+        - name: version
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 二进制流(带 X-Xfer-SHA256 头)
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "404": { description: 版本不在仓库 }
+
+  /api/version:
+    get:
+      summary: Relay 版本(部署漂移一眼可辨)
+      responses:
+        "200":
+          description: 版本信息
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  protocol: { type: integer }
+                  component: { type: string }
+
   /api/transfer/direct:
     post:
       summary: 申请内网直连传输票据(Phase1)

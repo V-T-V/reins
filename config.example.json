@@ -17,6 +17,9 @@
   "xfer_listen": "",
   "xfer_advertise": [],
 
+  "_data_conns_comment": "Phase2 数据面分离(默认 0=关闭,建议 2~4):额外 N 条数据 WS 只承载文件传输二进制帧,心跳/任务留控制连接——根治传输挤死心跳 + 多 TCP 并行破单流吞吐天花板。同传输恒走同一条连接(保序),跨传输分散(分片并发=N TCP 并行)。旧 Relay 不支持时自动回落单连接。",
+  "data_conns": 0,
+
   "mtls": false,
   "allow_all_roots": true,
   "allowed_roots": [],
