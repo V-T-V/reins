@@ -15,8 +15,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
+
+// syncQuiet sync 并行模式下的 fileUpload 输出静默开关(多 worker 下逐文件
+// 进度必然交错,静默后只保留汇总与失败清单;fileUpload 各打印点查询)。
+var syncQuiet atomic.Bool
 
 // cmdSync sync 子命令入口。
 func cmdSync(cfg config, args []string) error {
@@ -65,30 +72,86 @@ func syncPush(cfg config, args []string) error {
 	}
 	mkdir(dstDir)
 
-	// 逐文件上传
-	success := 0
-	failed := 0
-	for i, relPath := range files {
-		localPath := filepath.Join(srcDir, relPath)
-		remotePath := filepath.ToSlash(filepath.Join(dstDir, relPath))
-
-		fmt.Printf("\r[%d/%d] %s", i+1, len(files), relPath)
-		// 确保远端子目录存在
-		remoteDir := filepath.ToSlash(filepath.Dir(remotePath))
-		if remoteDir != filepath.ToSlash(dstDir) {
-			mkdir(remoteDir)
+	// 并行上传(worker 池,-j 默认 1=串行保持原行为;>1 时逐文件进度必交错,
+	// 静默 fileUpload 输出只留汇总+失败清单)。直连/数据面下多文件天然多流。
+	// -j 剥离(posArg 不认识它,"4"会被当位置参数吃掉目录)
+	jobs := 1
+	filtered := make([]string, 0, len(args))
+	for i, a := range args {
+		if a == "-j" || strings.HasPrefix(a, "-j=") {
+			continue // "-j N"形态的 N 由下一分支跳过
 		}
+		if i > 0 && args[i-1] == "-j" && isAllDigit(a) {
+			continue
+		}
+		filtered = append(filtered, a)
+	}
+	if j := extractArg(args, "-j"); j != "" {
+		if n, err := strconv.Atoi(j); err == nil && n > 0 {
+			jobs = n
+		}
+	}
+	args = filtered
+	quiet := jobs > 1
 
-		// 上传单个文件
-		if err := runFileUpload(cfg, agentID, localPath, remotePath); err != nil {
-			failed++
-			fmt.Printf(" ✗ (%v)\n", err)
-		} else {
-			success++
+	// 先建全部子目录(串行,幂等,免 worker 间竞争 mkdir 任务)
+	dirSet := map[string]bool{filepath.ToSlash(dstDir): true}
+	for _, relPath := range files {
+		remotePath := filepath.ToSlash(filepath.Join(dstDir, relPath))
+		dirSet[filepath.ToSlash(filepath.Dir(remotePath))] = true
+	}
+	for d := range dirSet {
+		if d != filepath.ToSlash(dstDir) {
+			mkdir(d)
 		}
 	}
 
-	fmt.Printf("\n✅ 同步完成: %d 成功, %d 失败\n", success, failed)
+	var (
+		mu      sync.Mutex
+		success int
+		failed  int
+		done    int
+		errs    []string
+	)
+	work := make(chan string)
+	var wg sync.WaitGroup
+	for w := 0; w < jobs; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Add(-1)
+			for relPath := range work {
+				localPath := filepath.Join(srcDir, relPath)
+				remotePath := filepath.ToSlash(filepath.Join(dstDir, relPath))
+				if quiet {
+					syncQuiet.Store(true)
+				}
+				err := runFileUpload(cfg, agentID, localPath, remotePath)
+				syncQuiet.Store(false)
+				mu.Lock()
+				done++
+				if err != nil {
+					failed++
+					errs = append(errs, fmt.Sprintf("%s: %v", relPath, err))
+				} else {
+					success++
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for i, relPath := range files {
+		if !quiet {
+			fmt.Printf("\r[%d/%d] %s", i+1, len(files), relPath)
+		}
+		work <- relPath
+	}
+	close(work)
+	wg.Wait()
+
+	fmt.Printf("\n✅ 同步完成: %d 成功, %d 失败 (%d 路并行)\n", success, failed, jobs)
+	for _, e := range errs {
+		fmt.Printf("   ✗ %s\n", e)
+	}
 	return nil
 }
 

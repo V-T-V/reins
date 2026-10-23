@@ -2,6 +2,17 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [v4.7.7] — 2026-10-23 sync 并行化 + 数据面 isLast 赛跑修复
+
+### sync push 并行化(-j,默认 1=串行不变)
+- worker 池并行上传部署目录:直连/数据面下多文件天然多流;`-j N` flag(与 --concurrency 同风格,-j=N/-j N 双形态,剥离防位置参数误吞)。
+- 并行时静默 fileUpload 逐文件输出(syncQuiet 全局,progressReader/直连/中继三组打印点守卫),只留汇总+失败清单;子目录预建(串行幂等,免 worker 竞争 mkdir 任务)。
+- E2E:32 文件×1MB,-j=4 直连/中继各 3 轮全绿(2.5s vs 2.0s 串行,公网多流收益更大)。
+
+### 真 bug:数据面 isLast 帧赛跑(E2E 并行上传逮住)
+- `handleTransferUpload` 数据帧走 writeFrame(按 transferID 绑数据连接),但 isLast 帧仍走主连接——主连接 recvLoop 比数据连接队列快时 isLast 先到,Agent 对不完整数据算 hash → SHA 不匹配(data_conns=2 下 32 文件并行,直连/中继两路均 2~5 个失败,nondeterministic)。
+- 修复:isLast 帧走同一 writeFrame(同 transferID 恒绑同一条连接,端到端保序)。修复后 data_conns=2 + -j=4 六轮压力(直连×3+中继×3)全 32/32。
+
 ## [v4.7.6] — 2026-10-23 SDK Update 服务 + 文档同步
 
 ### SDK 补齐(第三方消费者可驱动自动更新链路)

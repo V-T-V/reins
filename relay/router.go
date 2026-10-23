@@ -1248,10 +1248,12 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 	if !aborted {
-		// 正常结束:发 isLast 帧
+		// 正常结束:发 isLast 帧——必须与数据帧同路(writeFrame 同 transferID
+		// 恒绑同一条连接):走主连接会与数据连接上的尾帧赛跑,isLast 先到
+		// 致 Agent 对不完整数据算 hash(SHA 不匹配,E2E 并行上传逮住)
 		frame := proto.BuildBinaryFrame(transferID, true, nil)
 		// H-5:isLast 写错检查(原 ignoring 让 Agent 悬挂→Relay 卡 completeCh 至 30 分钟)
-		if wErr := conn.writeBinaryData(ctx, frame); wErr != nil {
+		if wErr := writeFrame(frame); wErr != nil {
 			writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("isLast 帧写失败: %w", wErr)))
 			return
 		}

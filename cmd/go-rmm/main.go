@@ -1103,7 +1103,9 @@ func fileUpload(cfg config, args []string) error {
 	}
 	u := cfg.relay + "/api/transfer/upload?" + q.Encode()
 
-	fmt.Printf("上传 %s → %s:%s\n", localPath, agentID, remotePath)
+	if !syncQuiet.Load() {
+		fmt.Printf("上传 %s → %s:%s\n", localPath, agentID, remotePath)
+	}
 
 	req, err := http.NewRequest("POST", u, tee)
 	if err != nil {
@@ -1146,15 +1148,17 @@ func fileUpload(cfg config, args []string) error {
 
 	// P0-#1:本地 hasher 此时已完成,与 Agent 回传的 sha256 比对
 	localSHA := fmt.Sprintf("%x", hasher.Sum(nil))
-	fmt.Println()
-	fmt.Printf("✅ 上传完成: %s\n", formatSize(result.Bytes))
-	fmt.Printf("   Agent SHA256: %s\n", result.SHA256)
+	if !syncQuiet.Load() {
+		fmt.Println()
+		fmt.Printf("✅ 上传完成: %s\n", formatSize(result.Bytes))
+		fmt.Printf("   Agent SHA256: %s\n", result.SHA256)
+		if result.SHA256 == localSHA {
+			fmt.Printf("   ✅ 本地 SHA256 一致\n")
+		}
+	}
 	if result.SHA256 != "" && localSHA != result.SHA256 {
 		fmt.Fprintf(os.Stderr, "   ⚠️  校验不一致!本地=%s\n", localSHA)
 		return errors.New("SHA256 校验失败,文件可能损坏")
-	}
-	if result.SHA256 == localSHA {
-		fmt.Printf("   ✅ 本地 SHA256 一致\n")
 	}
 	return nil
 }
@@ -1754,6 +1758,9 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 }
 
 func (pr *progressReader) maybePrint() {
+	if syncQuiet.Load() {
+		return // sync 并行模式:逐文件进度必交错,静默
+	}
 	now := time.Now()
 	if now.Sub(pr.lastTime) < 200*time.Millisecond && pr.total > 0 && pr.read < pr.total {
 		return // 百分比模式 200ms 限流

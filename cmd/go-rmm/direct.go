@@ -280,8 +280,10 @@ func tryDirectUploadFile(cfg config, agentID, localPath, remotePath string) erro
 		return err
 	}
 	if begin.AlreadyComplete {
-		fmt.Printf("✅ 直连上传完成(远端已完整): %s\n", remotePath)
-		fmt.Printf("   SHA256: %s\n", begin.SHA256)
+		if !syncQuiet.Load() {
+			fmt.Printf("✅ 直连上传完成(远端已完整): %s\n", remotePath)
+			fmt.Printf("   SHA256: %s\n", begin.SHA256)
+		}
 		return nil
 	}
 	f, err := os.Open(localPath)
@@ -293,25 +295,31 @@ func tryDirectUploadFile(cfg config, agentID, localPath, remotePath string) erro
 		if _, err := f.Seek(begin.ResumeOffset, io.SeekStart); err != nil {
 			return err
 		}
-		fmt.Printf("   直连续传: 跳过本地前 %s\n", formatSize(begin.ResumeOffset))
+		if !syncQuiet.Load() {
+			fmt.Printf("   直连续传: 跳过本地前 %s\n", formatSize(begin.ResumeOffset))
+		}
 	}
 	var body io.Reader = f
 	if fi.Size() > 0 {
 		body = &progressReader{r: f, total: fi.Size(), label: "直连上传"}
 	}
-	fmt.Printf("⚡ 直连上传 %s → %s:%s\n", localPath, agentID, remotePath)
+	if !syncQuiet.Load() {
+		fmt.Printf("⚡ 直连上传 %s → %s:%s\n", localPath, agentID, remotePath)
+	}
 	bytes, gotSHA, err := ds.uploadData(begin.TransferID, begin.DataToken, body, fi.Size()-begin.ResumeOffset)
 	if err != nil {
 		return err
 	}
-	fmt.Println()
-	fmt.Printf("✅ 直连上传完成: %s\n", formatSize(bytes))
-	fmt.Printf("   Agent SHA256: %s\n", gotSHA)
+	if !syncQuiet.Load() {
+		fmt.Println()
+		fmt.Printf("✅ 直连上传完成: %s\n", formatSize(bytes))
+		fmt.Printf("   Agent SHA256: %s\n", gotSHA)
+		if gotSHA == sha {
+			fmt.Printf("   ✅ 本地 SHA256 一致\n")
+		}
+	}
 	if gotSHA != "" && gotSHA != sha {
 		return fmt.Errorf("SHA256 校验失败: 本地=%s 远端=%s", sha[:16], gotSHA[:16])
-	}
-	if gotSHA == sha {
-		fmt.Printf("   ✅ 本地 SHA256 一致\n")
 	}
 	return nil
 }
