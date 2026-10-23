@@ -144,7 +144,7 @@ go-rmm/
 | Go 文件 | 231 |
 | 代码行 | 42,000+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 551 |
+| 测试用例 | 555 |
 | 基准测试 | 26 |
 | CLI 命令 | 52 |
 | API 端点 | 45 |
@@ -174,7 +174,7 @@ go-rmm/
 | **agent** 文件传输 | 95% | 并发分片 + 断点续传 + path 互斥(R1)+ 已满快路径(R2)+ 流式低内存(R3)+ 能力协商(S4)+ per-chunk SHA256 收完即校验(损坏当场删 .part 拒绝)[2026-09-13] + **内网直连监听**(xfer_listen/自签 TLS/票据一次性+data_token/悬空会话 2min 清扫)[2026-09-16] | ✅ |
 | **agent** Linux | 85% | script lang=sh + monitor /proc + CLI 命令族平台方言化全覆盖(logs/sysinfo/service/proc/net/find/config/diagnose/compare/sync/watch/snapshot/tag,双方言一次直达;workflow/playbook/exec 为用户内容型)+ 三平台编译门禁(P1-4 七步);Linux 实机部署验证待补 | 🟡 |
 | **cmd** CLI | 90% | 51 命令 + 流式 + TUI + 退出码体系 | ✅ |
-| **client** SDK | 85% | 45+ 方法 + 流式 + 工具发现 | ✅ |
+| **client** SDK | 88% | 45+ 方法 + Update 服务(List/Latest/Push/DownloadStream)+Version() [2026-10-23] + 流式 + 工具发现 | ✅ |
 | **proto** 协议 | 95% | Envelope + 30 消息 + 二进制帧 + tunnel | ✅ |
 | **console** Web | 80% | 反向代理 + 内嵌前端 + 实时事件 | 🟡 |
 | **executors** | 90% | 8 执行器实现 + 跨平台 | ✅ |
@@ -190,7 +190,7 @@ go-rmm/
 
 ## 测试覆盖(v4.6.0)
 
-551 测试 + 26 基准(2026-09-18 正确性加固+实测调优后口径,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
+555 测试 + 26 基准(2026-10-23 SDK Update 服务后口径,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
 
 | 包 | 测试数 | 文件数 | 重点场景 |
 |----|--------|--------|----------|
@@ -200,7 +200,7 @@ go-rmm/
 | **proto** | 46 | 9 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
 | **internal/wsx** | 5 | 1 | 优先级写引擎(P0 控制帧不被 P1 数据饿死——阻塞 socket 写+积压构造确定性验证/写错误经 Done 回传/ctx 契约两段分层断言(调用方 ctx 已取消=确定性 ctx.Err;writer ctx 取消=只锚定不挂死,nil/err 均合法——原"必须报错"断言与"可能迟到但不会丢"设计语义冲突,调度偏置下稳定翻车,2026-09-14 修订)/Start 幂等)[2026-09-12]
 | **internal/dagflow** | 13 | 1 | 图校验 8 类非法图逐一拒绝+环点名;串行启动序列 50 次重跑逐位一致;并发峰值恰守上限 3;失败级联(health/watch 跳过+alert 软依赖照跑+跳过者从未启动);软依赖仍须等终态;ctx 取消 skipped 收尾;带环图不死锁 [v4.5.0];v4.6.0 relay 端到端:3 节点失败级联剧场(start_order 确定 prep→deploy/verify 零投递)+软依赖照跑+策略拦截 403+提交期校验 |
-| **client** | 18 | 9 | SDK 方法/流式/工具发现 |
+| **client** | 22 | 9 | SDK 方法/流式/工具发现 |
 | **console** | 14 | 4 | 反向代理/事件转发 |
 | **cmd** | 49 | 31 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3];rules read E2E/ack 缓存/-s 防呆/deploy 模板[v4.4.0];per-chunk SHA256(computeSectionSHA 段 hash/分片 query 下发/非分片预计算 E2E/Agent 拒绝冒泡)[2026-09-13] |
 

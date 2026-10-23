@@ -2,6 +2,18 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [v4.7.6] — 2026-10-23 SDK Update 服务 + 文档同步
+
+### SDK 补齐(第三方消费者可驱动自动更新链路)
+- 新增 `UpdateService`:List(仓库列表)/Latest(auto_update 同款轮询)/Push(默认 download 模式,binaryPath 非空自动切 path 引用模式)/DownloadStream(流式下载+X-Xfer-SHA256 头返回)。
+- 新增 `Client.Version()`(/api/version,部署漂移观测)。SDK 此前有 Batch/Shell/Power/Cron/Secrets 五服务,唯独缺 Update。
+- +4 测(httptest 假 relay:Version/List+Latest/Push 双模式/DownloadStream 含 404)。
+
+### 文档同步
+- openapi.yaml 补 v4.7.1 三端点(/api/updates/latest、/api/updates/download、/api/version)。
+- config.example.json 补 data_conns 示例与语义说明。
+- fuzz 种子语料经 Go 1.18+ 语义已被 CI 的 go test -race 自动覆盖(核实,无需新增任务)。
+
 ## [v4.7.5] — 2026-09-18 正确性加固 + 实测调优
 
 ### Race 检测(本机 mingw64 编译器首次启用)
