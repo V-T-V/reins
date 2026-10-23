@@ -25,9 +25,29 @@ import (
 	"github.com/QiuShichang/go-rmm/proto"
 )
 
-// startDirectFakeAgent 起 relay + fake Agent WS,票据推送写入调用方持有的
-// gotGrant/gotType(经指针返回),返回 server URL。
-func startDirectFakeAgent(t *testing.T, xferAddrs []string, gotGrant *proto.XferTicketGrant, gotType *string) string {
+// directGrantSink 线程安全收集 fake Agent 收到的票据推送(race 检测合规:
+// 原指针直写+测试裸读在 -race 下 6 处竞争报警)。
+type directGrantSink struct {
+	mu    sync.Mutex
+	grant proto.XferTicketGrant
+	typ   string
+}
+
+func (s *directGrantSink) set(g proto.XferTicketGrant, typ string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.grant = g
+	s.typ = typ
+}
+
+func (s *directGrantSink) get() (proto.XferTicketGrant, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.grant, s.typ
+}
+
+// startDirectFakeAgent 起 relay + fake Agent WS,票据推送写入 sink,返回 server URL。
+func startDirectFakeAgent(t *testing.T, xferAddrs []string, sink *directGrantSink) string {
 	t.Helper()
 	relay := NewRelay(Config{Dev: true, Addr: ":0"})
 	mux := http.NewServeMux()
@@ -64,7 +84,6 @@ func startDirectFakeAgent(t *testing.T, xferAddrs []string, gotGrant *proto.Xfer
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	var mu sync.Mutex
 	go func() {
 		for {
 			mt, data, rerr := conn.Read(ctx)
@@ -82,21 +101,15 @@ func startDirectFakeAgent(t *testing.T, xferAddrs []string, gotGrant *proto.Xfer
 			if env.Decode(&g) != nil {
 				continue
 			}
-			mu.Lock()
-			*gotGrant = g
-			*gotType = env.Type
-			mu.Unlock()
+			sink.set(g, env.Type)
 		}
 	}()
 	return srv.URL
 }
 
 func TestTransferDirectTicketE2E(t *testing.T) {
-	var (
-		gotGrant proto.XferTicketGrant
-		gotType  string
-	)
-	srvURL := startDirectFakeAgent(t, []string{"192.168.1.5:7783", "10.0.0.7:7783"}, &gotGrant, &gotType)
+	sink := &directGrantSink{}
+	srvURL := startDirectFakeAgent(t, []string{"192.168.1.5:7783", "10.0.0.7:7783"}, sink)
 
 	resp, err := http.Post(srvURL+"/api/transfer/direct", "application/json",
 		strings.NewReader(`{"agent_id":"direct-agent","path":"C:\\go-rmm\\ws\\big.tar","direction":"upload"}`))
@@ -133,8 +146,10 @@ func TestTransferDirectTicketE2E(t *testing.T) {
 
 	// fake Agent 必须已收到票据推送,且 hash 与响应明文 secret 对拍
 	deadline := time.Now().Add(3 * time.Second)
+	gotGrant, gotType := sink.get()
 	for gotGrant.TicketID == "" && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
+		gotGrant, gotType = sink.get()
 	}
 	if gotGrant.TicketID == "" {
 		t.Fatal("Agent 未收到票据推送")
@@ -160,9 +175,8 @@ func TestTransferDirectTicketE2E(t *testing.T) {
 }
 
 func TestTransferDirectNoAddrsFallback(t *testing.T) {
-	var gotGrant proto.XferTicketGrant
-	var gotType string
-	srvURL := startDirectFakeAgent(t, nil, &gotGrant, &gotType)
+	sink := &directGrantSink{}
+	srvURL := startDirectFakeAgent(t, nil, sink)
 
 	resp, err := http.Post(srvURL+"/api/transfer/direct", "application/json",
 		strings.NewReader(`{"agent_id":"direct-agent","path":"foo.bin","direction":"download"}`))
@@ -187,7 +201,7 @@ func TestTransferDirectNoAddrsFallback(t *testing.T) {
 	if result.Reason == "" {
 		t.Errorf("应带回落原因: %s", body)
 	}
-	if gotGrant.TicketID != "" || gotType != "" {
+	if g, typ := sink.get(); g.TicketID != "" || typ != "" {
 		t.Errorf("未开启直连时不应推送票据")
 	}
 }

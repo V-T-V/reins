@@ -1220,6 +1220,7 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 	// 与"传输挤死心跳"一并解决;isLast/cancel 等控制帧仍走主连接。
 	writeFrame := func(frame []byte) error {
 		if dc := r.agents.DataConnFor(agentID, transferID); dc != nil {
+			metrics.IncXfer("dataconn_frames", 1) // D:数据面分流量观测
 			return dc.writeBinaryData(ctx, frame)
 		}
 		return conn.writeBinaryData(ctx, frame)

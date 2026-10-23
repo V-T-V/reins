@@ -30,10 +30,13 @@ const (
 const newFrameMarker = 0x80
 
 // BuildBinaryFrame 构造文件传输二进制 WS 帧(旧格式,向后兼容)。
+// ID 上限 127(而非 255):首字节 ≥ 0x80 是新格式(隧道)标记命名空间,
+// 旧格式 id_len 不得越界,否则帧会被误判为隧道帧(fuzz 逮住的往返失真根源)。
+// 超长 ID 截断(内部 transferID 均 < 128,截断仅为防御性兜底)。
 func BuildBinaryFrame(transferID string, isLast bool, data []byte) []byte {
 	idBytes := []byte(transferID)
-	if len(idBytes) > 255 {
-		idBytes = idBytes[:255]
+	if len(idBytes) > 127 {
+		idBytes = idBytes[:127]
 	}
 	frame := make([]byte, 0, 1+len(idBytes)+1+len(data))
 	frame = append(frame, byte(len(idBytes)))
@@ -62,6 +65,11 @@ func ParseBinaryFrame(frame []byte) (transferID string, isLast bool, data []byte
 		// 新格式隧道帧,走 parseTunnelFrameRaw
 		tid, _, flags, payload, e := parseTunnelFrameRaw(frame)
 		return tid, flags != 0, payload, e
+	}
+	// 命名空间划界:首字节 ≥ 0x80 属新格式标记,旧格式 id_len 越界即非法帧
+	// (不拒绝会把歧义帧当文件帧解析,与 Build 的重建产物不一致)
+	if frame[0] >= newFrameMarker {
+		return "", false, nil, fmt.Errorf("帧格式非法:旧格式 id_len 不得 ≥ 0x80(与隧道标记冲突)")
 	}
 	// 旧格式文件帧
 	idLen := int(frame[0])

@@ -413,6 +413,7 @@ func (s *xferDirectServer) handleData(w http.ResponseWriter, r *http.Request) {
 	select {
 	case c := <-completeCh:
 		if c.Success {
+			transfers.CountDirect(c.Bytes) // D:直连路径计量
 			writeXferJSON(w, http.StatusOK, map[string]any{
 				"transfer_id": c.TransferID, "bytes": c.Bytes, "sha256": c.SHA256Actual,
 			})
@@ -456,6 +457,7 @@ func (s *xferDirectServer) handleFetch(w http.ResponseWriter, r *http.Request) {
 	select {
 	case c := <-completeCh:
 		if c.Success {
+			transfers.CountDirect(c.Bytes) // D:直连路径计量
 			w.Header().Set(http.TrailerPrefix+"X-Xfer-Sha256", c.SHA256Actual)
 			w.Header().Set(http.TrailerPrefix+"X-Xfer-Bytes", fmt.Sprint(c.Bytes))
 		} else {

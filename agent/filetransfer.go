@@ -41,6 +41,10 @@ type TransferEngine struct {
 	uploadCount   atomic.Int64
 	downloadCount atomic.Int64
 	failedCount   atomic.Int64
+	// D(路径级指标):直连路径(P1)累计字节/次数——与中继路径分流可见,
+	// 部署验证直连命中率与回落频率的观测面。
+	directBytes atomic.Int64
+	directCount atomic.Int64
 }
 
 // SetSendRateLimit 设置发送(下载方向)限速,bytesPerSec<=0 关闭。
@@ -83,6 +87,17 @@ func (te *TransferEngine) SetWorkspace(ws string) {
 func (te *TransferEngine) SnapshotStats() (ub, db, uc, dc, fc int64) {
 	return te.uploadBytes.Load(), te.downloadBytes.Load(),
 		te.uploadCount.Load(), te.downloadCount.Load(), te.failedCount.Load()
+}
+
+// SnapshotDirectStats 读取直连路径计数快照(D:路径级指标)。
+func (te *TransferEngine) SnapshotDirectStats() (bytes, count int64) {
+	return te.directBytes.Load(), te.directCount.Load()
+}
+
+// CountDirect 直连传输成功计量(D:由 xferdirect 数据面回调)。
+func (te *TransferEngine) CountDirect(n int64) {
+	te.directBytes.Add(n)
+	te.directCount.Add(1)
 }
 
 // ActiveSessions 当前活跃传输会话数(gauge)。

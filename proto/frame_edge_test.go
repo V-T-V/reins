@@ -8,18 +8,30 @@ import (
 // === 极端边界测试 ===
 
 func TestParseBinaryFrameMaxLengthID(t *testing.T) {
-	// ID 长度 255(最大 u8)
-	longID := strings.Repeat("a", 255)
-	frame := BuildBinaryFrame(longID, true, []byte("data"))
+	// v4.7.5 命名空间契约:旧格式 id_len 上限 127(首字节 >= 0x80 是隧道标记
+	// 命名空间;fuzz 逮住 >=128 的歧义帧会被误判为隧道格式后修订)
+	maxID := strings.Repeat("a", 127)
+	frame := BuildBinaryFrame(maxID, true, []byte("data"))
 	tid, isLast, data, err := ParseBinaryFrame(frame)
 	if err != nil {
 		t.Fatalf("Parse 失败: %v", err)
 	}
-	if tid != longID {
-		t.Error("长 ID 应完整保留")
+	if tid != maxID {
+		t.Error("127 字节 ID 应完整保留")
 	}
 	if !isLast || string(data) != "data" {
 		t.Error("isLast/data 不匹配")
+	}
+	// 超长 ID 截断到 127(防御性兜底,内部 ID 均远短于此)
+	over := BuildBinaryFrame(strings.Repeat("b", 300), true, nil)
+	tid2, _, _, err2 := ParseBinaryFrame(over)
+	if err2 != nil || len(tid2) != 127 {
+		t.Errorf("300 字节 ID 应截断到 127: err=%v len=%d", err2, len(tid2))
+	}
+	// 歧义帧(id_len >= 0x80 且次字节 0x10/0x11):必须显式拒绝而非误判隧道
+	amb := append([]byte{0x91, 0x11}, []byte("garbage")...)
+	if _, _, _, err := ParseBinaryFrame(amb); err == nil {
+		t.Error("id_len >= 0x80 的旧格式帧应被拒绝(与隧道标记冲突)")
 	}
 }
 

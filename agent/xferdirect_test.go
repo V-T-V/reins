@@ -212,6 +212,10 @@ func TestXferDirectUploadE2E(t *testing.T) {
 	if !bytes.Equal(got, content) {
 		t.Errorf("落盘内容不符: %d bytes", len(got))
 	}
+	// D:直连路径计量(成功传输入 direct 计数)
+	if db, dc := transfers.SnapshotDirectStats(); dc < 1 || db < int64(len(content)) {
+		t.Errorf("直连计量缺失: bytes=%d count=%d", db, dc)
+	}
 	// .part 已清理(rename 完成)
 	if _, err := os.Stat(target + ".part"); !os.IsNotExist(err) {
 		t.Errorf(".part 应已 rename: %v", err)

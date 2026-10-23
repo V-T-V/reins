@@ -126,3 +126,16 @@ BenchmarkParseBinaryFrame-16   76ns     16B     1 alloc
 ```
 
 CI 回归阈值:任何基准 **慢 2x 以上** 标记为性能回归。
+
+## 传输引擎基准(v4.7.5,2026-09-18,16 核 Win/i7)
+
+| 基准 | 吞吐 | 结论 |
+|------|------|------|
+| BenchmarkFrameBuildParse(4K~1M 五档) | 2.0~3.3 GB/s | 帧封装纯开销可忽略,帧尺寸调优无收益 |
+| BenchmarkSHA256Chunk(256K) | 1.29 GB/s | 增量 hash 非瓶颈 |
+| BenchmarkStreamDownloadCore(8M/轮,读+hash+进度+限速查询) | 843 MB/s | 下载引擎核心远超千兆线速 |
+| BenchmarkReceiveUploadCore(256K 块,含临时文件创建+写盘) | 202 MB/s | 落盘路径为引擎最低环,仍 ~2x 千兆 |
+
+**调优结论**:引擎各环节均远超千兆线速(~110MB/s),256KB 帧尺寸与现有缓冲保持不变——
+瓶颈在网络传输层,已由 Phase 1 直连(内网线速)与 Phase 2 数据面分离(多 TCP 并行)
+在架构层解决;引擎侧无进一步调优空间,数据背书。
