@@ -123,6 +123,11 @@ run-agent:
 run-cli:
 	$(GO) run ./cmd/go-rmm status
 
+## === 文档口径门禁 ===
+
+check-docs:
+	bash scripts/check-docs.sh
+
 ## === 工具安装 ===
 
 install-tools:

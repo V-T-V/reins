@@ -2,7 +2,7 @@
 
 ## 项目内容(What)
 
-Go 实现的**企业级零信任远程访问平台**(v4.6.0)——通过反向 WebSocket 中继,让 CLI / Web 控制台远程驱动 Agent 执行全维度运维操作。对标 Teleport / Tailscale。
+Go 实现的**企业级零信任远程访问平台**(v4.7.8)——通过反向 WebSocket 中继,让 CLI / Web 控制台远程驱动 Agent 执行全维度运维操作。对标 Teleport / Tailscale。
 
 ### 三组件架构
 
@@ -59,7 +59,7 @@ SDK (Go client)                ├ bbolt/Redis 持久化                  ├ sc
 3. **PowerShell 为 Windows 核心执行器**:-EncodedCommand(UTF16LE),命令策略黑名单 + Agent 侧二次校验。
 4. **bbolt 单文件为默认持久化**:Redis 后端可选(TaskStore interface 切换)。
 
-## 项目结构(v4.6.0)
+## 项目结构(v4.7.8)
 
 ```
 go-rmm/
@@ -137,24 +137,24 @@ go-rmm/
 └── Makefile            # 世界级构建系统(15 targets)
 ```
 
-## 指标(v4.6.0)
+## 指标(v4.7.8)
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 231 |
-| 代码行 | 42,000+ |
+| Go 文件 | 253 |
+| 代码行 | 48,000+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 555 |
+| 测试用例 | 558 |
 | 基准测试 | 26 |
-| CLI 命令 | 52 |
-| API 端点 | 45 |
+| CLI 命令 | 50+ |
+| API 端点 | 40+ |
 | 任务类型 | 9 |
 | 基础设施产物 | 10+(Docker×2/Helm/OpenAPI/goreleaser/CI/systemd/golangci) |
 | 神级提升 | 50+ |
 
 ---
 
-## 模块完成度(v4.6.0)
+## 模块完成度(v4.7.8)
 
 每个核心包的功能完成度与成熟度。✅ 生产就绪 / 🟡 骨架/接口先行 / ⏳ 预留未实现。
 
@@ -188,7 +188,7 @@ go-rmm/
 
 ---
 
-## 测试覆盖(v4.6.0)
+## 测试覆盖(v4.7.8)
 
 555 测试 + 26 基准(2026-10-23 SDK Update 服务后口径,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
 
