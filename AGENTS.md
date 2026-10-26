@@ -276,7 +276,7 @@ go-rmm/
 
 ## 已知坑位(踩坑实录)
 
-- **Windows Defender 拦"未签名新文件 rename 顶替运行中服务 exe"**(2026-09-17,4060 生产更新实证):`os.Rename(新文件 → 服务exe名)` 确定性 Access denied(4 次复现,与账户/ACL 无关——LocalSystem+全控+写测试通过),但同操作回滚(rename 原文件归位)与改名到其它名字、CopyItem 到同目录全部畅通。**绕法(生产验证过的 copy 舞步)**:脚本任务里 `Copy-Item exe→.bak` → `Rename exe→.exe.old-running` → `Copy-Item 新→exe` → 写 `.update-pending` 标记 → `Register-ScheduledTask+Start-ScheduledTask` 延迟重启(分离 powershell 子进程在服务会话内不执行,schtasks /create 又被命令策略拦——按拦截提示走原生 cmdlet)。根治=构建签名。dev 机(iZt7)无此拦截,标准 push --path 直接过——**同构机器行为不同,更新失败先做 rename/copy 差分测试再选路径**。
+- **Windows Defender 拦"未签名新文件 rename 顶替运行中服务 exe"**(2026-09-17,4060 生产更新实证):`os.Rename(新文件 → 服务exe名)` 确定性 Access denied(4 次复现,与账户/ACL 无关——LocalSystem+全控+写测试通过),但同操作回滚(rename 原文件归位)与改名到其它名字、CopyItem 到同目录全部畅通。**绕法(生产验证过的 copy 舞步)**:脚本任务里 `Copy-Item exe→.bak` → `Rename exe→.exe.old-running` → `Copy-Item 新→exe` → 写 `.update-pending` 标记 → `Register-ScheduledTask+Start-ScheduledTask` 延迟重启(分离 powershell 子进程在服务会话内不执行,schtasks /create 又被命令策略拦——按拦截提示走原生 cmdlet)。根治=构建签名。dev 机(已脱敏)无此拦截,标准 push --path 直接过——**同构机器行为不同,更新失败先做 rename/copy 差分测试再选路径**。
 - **线上 relay 的 unit 文件与运行参数漂移**:`-install-token` 在运行进程有、unit 文件没有,systemctl restart 会静默丢参数——替换二进制前 diff `ps` 与 unit 的 ExecStart,以运行态为准补齐再重启(2026-09-17 实操踩到)。
 
 ## 进入子项目前先读

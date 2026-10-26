@@ -1,15 +1,15 @@
 #!/bin/bash
 # ╔══════════════════════════════════════════════════════════╗
-# ║  go-rmm 部署到 203.0.113.99(一键脚本)                   ║
+# ║  go-rmm 部署到你的服务器(一键脚本)                   ║
 # ╚══════════════════════════════════════════════════════════╝
 #
 # 用法(在本地开发机执行):
 #   ./scripts/deploy-to-server.sh
-#   ./scripts/deploy-to-server.sh --ssh-root root@203.0.113.99
+#   ./scripts/deploy-to-server.sh --ssh-root root@<your-server>
 #
 # 前提:
 #   - 本机有 Go 编译器
-#   - 能 SSH 到 203.0.113.99
+#   - 能 SSH 到 <your-server>
 #   - 服务器有 Nginx + SSL 证书
 set -euo pipefail
 
