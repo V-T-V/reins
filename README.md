@@ -140,7 +140,7 @@ Automation guardrail — `.reins/rules.md` lives in the *managed project's* repo
 
 ### Honest limitations
 
-- **Windows agent is first-class**; the Linux agent covers script/monitor + dialect-aware CLI ops (~85%) — real-machine validation is still in progress.
+- **Windows agent is first-class**; the Linux agent covers script/monitor + dialect-aware CLI ops (~85%) — validated end-to-end on real Ubuntu 24.04/WSL2 (linux relay + agent, sh-script execution, dialect-aware sysinfo driven from the Windows CLI).
 - **Single Relay is the default deployment**; multi-relay failover and the Redis TaskStore/EventBus federation exist and are tested, but production-hardening continues.
 - Command blacklist is best-effort by design; enable allow-only mode (`-policy-allow` on Relay, `policy_allow` on Agent) for strict environments.
 

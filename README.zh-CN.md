@@ -570,7 +570,7 @@ info, _ := c.Sysinfo("agent-1")
 
 ### 诚实的边界
 
-- **Windows Agent 一等公民**;Linux Agent 覆盖 script/monitor + 15 组方言化运维命令(约 85%)——Linux 实机部署验证仍在进行。
+- **Windows Agent 一等公民**;Linux Agent 覆盖 script/monitor + 15 组方言化运维命令(约 85%)——已在 Ubuntu 24.04/WSL2 实测全链路(linux relay+agent+sh 脚本执行+方言化 sysinfo,Windows CLI 跨系统操作)。
 - **单 Relay 是默认部署形态**;多 Relay 故障切换与 Redis TaskStore/EventBus 联邦已实现并有测试,生产硬化持续中。
 - 命令黑名单是 best-effort 设计;严格环境请启用 allow-only 白名单(Relay `-policy-allow` + Agent `policy_allow`)。
 
