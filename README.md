@@ -12,9 +12,7 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-<!-- TODO(launch): record docs/demo/demo-overview.gif (60-90s: relay up → one-line agent install → task run → monitor top) and embed here:
-![demo](./docs/demo/demo-overview.gif)
--->
+![demo](./docs/demo/demo-overview.svg)
 
 reins lets a small team run remote operations on a fleet of Windows/Linux machines from one terminal: command execution, file transfer, interactive shell, port forwarding, multi-step deploy orchestration, batch dispatch, monitoring — over **reverse WebSocket connections** that traverse NAT without opening a single inbound port on your hosts.
 

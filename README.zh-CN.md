@@ -11,6 +11,8 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
+![demo](./docs/demo/demo-overview.svg)
+
 远程运维 Windows/Linux 主机:命令执行、文件传输、交互式 Shell、端口转发、多步编排、批量分发、系统监控、告警、自更新。通过**反向 WebSocket** 中继穿透 NAT——被控端**零入站端口**,Relay 单二进制自托管,mTLS + 内置 CA + 多租户 RBAC + 防篡改审计链,并为 AI 代理提供**规则门禁**(操作前必读项目运维规则)。
 
 ---

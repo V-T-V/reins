@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="470" viewBox="0 0 880 470" font-family="Consolas,'Cascadia Code','Courier New',monospace">
+<style>
+  .win{fill:#010409;stroke:#21262d}
+  .bar{fill:#161b22}
+  .ln{opacity:0;animation:in .25s forwards}
+  .k{animation:blink 1s step-end infinite}
+  @keyframes in{to{opacity:1}}
+  @keyframes blink{50%{opacity:0}}
+</style>
+<rect x="1" y="1" width="878" height="468" rx="10" class="win" stroke-width="1"/>
+<rect x="1" y="1" width="878" height="34" rx="10" class="bar"/>
+<circle cx="22" cy="18" r="6" fill="#ff5f57"/><circle cx="42" cy="18" r="6" fill="#febc2e"/><circle cx="62" cy="18" r="6" fill="#28c840"/>
+<text x="440" y="23" text-anchor="middle" font-size="12" fill="#9198a1">reins — 60 秒接管你的舰队(真实会话)</text>
+<g font-size="14">
+<text class="ln" x="24" y="68" style="animation-delay:.3s"><tspan fill="#9198a1"># ① 服务端:任意一台机器,单二进制零依赖</tspan></text>
+<text class="ln" x="24" y="92" style="animation-delay:1.2s"><tspan fill="#4cc38a">$</tspan> <tspan fill="#e6edf3">./reins-relay -addr :7780</tspan></text>
+<text class="ln" x="24" y="116" style="animation-delay:2.1s"><tspan fill="#58a6ff">║  reins 服务端已启动!  Web UI: http://203.0.113.99:7780  Token: 8f3a...</tspan></text>
+<text class="ln" x="24" y="152" style="animation-delay:3.2s"><tspan fill="#9198a1"># ② 被控端 Windows:一行命令,自动 UAC + 上线确认</tspan></text>
+<text class="ln" x="24" y="176" style="animation-delay:4.1s"><tspan fill="#4cc38a">PS&gt;</tspan> <tspan fill="#e6edf3">iex (((irm 'http://203.0.113.99:7780/install.ps1') -replace '^\uFEFF'))</tspan></text>
+<text class="ln" x="24" y="200" style="animation-delay:5.2s"><tspan fill="#4cc38a">✅ agent-WIN-KIOSK-01 已上线(9 类执行器能力全注册)</tspan></text>
+<text class="ln" x="24" y="236" style="animation-delay:6.3s"><tspan fill="#9198a1"># ③ 操作端:一个终端管一个舰队</tspan></text>
+<text class="ln" x="24" y="260" style="animation-delay:7.2s"><tspan fill="#4cc38a">$</tspan> <tspan fill="#e6edf3">reins agent list</tspan></text>
+<text class="ln" x="24" y="284" style="animation-delay:8s"><tspan fill="#e6edf3">agent-WIN-KIOSK-01   WIN-KIOSK-01   windows/amd64   power,script,monitor,file,browse,...  在线</tspan></text>
+<text class="ln" x="24" y="320" style="animation-delay:9.2s"><tspan fill="#4cc38a">$</tspan> <tspan fill="#e6edf3">reins task run -a agent-WIN-KIOSK-01 -c "hostname"</tspan></text>
+<text class="ln" x="24" y="344" style="animation-delay:10.4s"><tspan fill="#e6edf3">=== 任务结果 ===  </tspan><tspan fill="#4cc38a">成功: true</tspan><tspan fill="#e6edf3">  退出码: 0  耗时: 1.4s</tspan></text>
+<text class="ln" x="24" y="368" style="animation-delay:11.2s"><tspan fill="#58a6ff">WIN-KIOSK-01</tspan></text>
+<text class="ln" x="24" y="404" style="animation-delay:12.4s"><tspan fill="#9198a1"># AI 代理也一样:先读规则,再碰服务器</tspan></text>
+<text class="ln" x="24" y="428" style="animation-delay:13.2s"><tspan fill="#4cc38a">$</tspan> <tspan fill="#e6edf3">reins rules read -a agent-WIN-KIOSK-01   </tspan><tspan fill="#9198a1"># .reins/rules.md 规则门禁,改规则即失效旧 ack</tspan><tspan class="k" fill="#e6edf3">▊</tspan></text>
+</g>
+</svg>
