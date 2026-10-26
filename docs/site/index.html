@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reins — 缰绳在你手里 · 自托管零信任远程运维平台</title>
+<meta name="description" content="Reins:单个 Go 二进制的自托管零信任远程运维平台。零入站端口穿透 NAT,mTLS+RBAC+防篡改审计链,AI 代理先读规则再碰服务器。Teleport/MeshCentral 开源替代。">
+<meta property="og:title" content="Reins — Take the reins of your fleet">
+<meta property="og:description" content="Self-hosted zero-trust remote operations. One Go binary, zero inbound ports.">
+<style>
+:root{--bg:#0d1117;--fg:#e6edf3;--dim:#9198a1;--accent:#4cc38a;--accent2:#58a6ff;--line:#21262d;--card:#161b22;--mono:ui-monospace,'Cascadia Code',Consolas,monospace}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;line-height:1.7}
+.wrap{max-width:1040px;margin:0 auto;padding:0 24px}
+a{color:var(--accent2);text-decoration:none}
+a:hover{text-decoration:underline}
+header{border-bottom:1px solid var(--line);padding:18px 0}
+nav{display:flex;justify-content:space-between;align-items:center}
+.logo{font-weight:700;font-size:20px;color:var(--fg)}
+.logo span{color:var(--accent)}
+nav .links a{margin-left:22px;color:var(--dim);font-size:14px}
+.hero{padding:88px 0 64px;text-align:center}
+.hero h1{font-size:44px;font-weight:800;letter-spacing:-.5px;margin-bottom:14px}
+.hero h1 em{color:var(--accent);font-style:normal}
+.hero .en{color:var(--dim);font-size:18px;margin-bottom:8px;font-family:var(--mono)}
+.hero p.sub{color:var(--dim);font-size:17px;max-width:720px;margin:0 auto 30px}
+.cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-bottom:20px}
+.btn{padding:12px 26px;border-radius:8px;font-size:15px;font-weight:600;border:1px solid transparent}
+.btn.primary{background:var(--accent);color:#0d1117}
+.btn.ghost{border-color:var(--line);color:var(--fg)}
+.terminal{background:#010409;border:1px solid var(--line);border-radius:10px;text-align:left;max-width:760px;margin:34px auto 0;font-family:var(--mono);font-size:13.5px;overflow:hidden}
+.terminal .bar{padding:9px 14px;border-bottom:1px solid var(--line);color:var(--dim);font-size:12px}
+.terminal pre{padding:18px 20px;overflow-x:auto}
+.c{color:var(--dim)}.g{color:var(--accent)}.b{color:var(--accent2)}.y{color:#e3b341}
+section{padding:56px 0;border-top:1px solid var(--line)}
+h2{font-size:26px;margin-bottom:8px}
+h2 .en{color:var(--dim);font-size:14px;font-weight:400;margin-left:10px}
+.lead{color:var(--dim);margin-bottom:34px;max-width:760px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:22px}
+.card h3{font-size:16px;margin-bottom:8px}
+.card p{color:var(--dim);font-size:14px}
+.card .icon{font-size:22px;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left}
+th{color:var(--dim);font-weight:600}
+td:first-child{font-weight:600}
+.yes{color:var(--accent)}.no{color:var(--dim)}.warn{color:var(--y)}
+footer{padding:36px 0 48px;color:var(--dim);font-size:13px;border-top:1px solid var(--line)}
+.badges{margin-top:16px}
+.badges img{margin:0 3px}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap"><nav>
+    <div class="logo">Re<span>ins</span> · 缰绳</div>
+    <div class="links">
+      <a href="https://github.com/V-T-V/reins">GitHub</a>
+      <a href="https://github.com/V-T-V/reins/releases">下载</a>
+      <a href="https://github.com/V-T-V/reins/blob/main/README.zh-CN.md">文档</a>
+      <a href="#quickstart">快速开始</a>
+    </div>
+  </nav></div>
+</header>
+
+<div class="hero wrap">
+  <h1>缰绳，在你<em>手里</em>。</h1>
+  <div class="en">Take the reins of your fleet.</div>
+  <p class="sub">自托管零信任远程运维平台——单个 Go 二进制，零入站端口，数据不出内网。<br>你的机器、你的连接、你的 AI 代理，缰绳都拴在你自己手里。</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/V-T-V/reins/releases">⬇ 下载 v4.8.0</a>
+    <a class="btn ghost" href="https://github.com/V-T-V/reins">★ GitHub Star</a>
+  </div>
+  <div class="badges">
+    <a href="https://github.com/V-T-V/reins/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/V-T-V/reins/ci.yml" alt="CI"></a>
+    <img src="https://img.shields.io/badge/tests-559-brightgreen" alt="tests">
+    <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
+  </div>
+  <div class="terminal">
+    <div class="bar">reins — 60 秒接管你的第一台机器</div>
+<pre><span class="c"># ① 服务端(任意一台 Linux/Windows/Docker)</span>
+<span class="g">$</span> ./reins-relay -addr :7780
+<span class="b">║  reins 服务端已启动!  Token: 8f3a...  ║</span>
+
+<span class="c"># ② 被控端 Windows —— 一行命令,自动 UAC/上线确认</span>
+<span class="g">PS&gt;</span> iex (((irm <span class="y">'http://your-server:7780/install.ps1'</span>) -replace <span class="y">'^\uFEFF'</span>))
+
+<span class="c"># ③ 你的电脑</span>
+<span class="g">$</span> reins --relay http://your-server:7780 --token &lt;token&gt; agent list
+<span class="b">agent-WS-KIOSK-01   windows/amd64   9 executors   在线</span>
+<span class="g">$</span> reins task run -a agent-WS-KIOSK-01 -c <span class="y">"hostname"</span>
+<span class="g">✅ 成功(1.4s)</span> WS-KIOSK-01</pre>
+  </div>
+</div>
+
+<section>
+  <div class="wrap">
+    <h2>为什么是 Reins<span class="en">Why Reins</span></h2>
+    <p class="lead">Teleport 换了许可证、MeshCentral 的 Agent 总被杀软盯上、TacticalRMM 是套 Python 全家桶——你需要一个真开源、单二进制、企业级安全原语齐全的远程运维平面。</p>
+    <div class="grid">
+      <div class="card"><div class="icon">🔒</div><h3>零入站端口</h3><p>Agent 反向 WebSocket 出站连接穿透 NAT。你的主机对互联网完全不可达——这是 NIST 800-207 说的"消除隐式网络信任"。</p></div>
+      <div class="card"><div class="icon">🐴</div><h3>单二进制</h3><p>Relay 是一个静态 Go 二进制(bbolt 持久化,零外部依赖;Redis 可选水平扩展)。不是 Docker Compose 十件套。</p></div>
+      <div class="card"><div class="icon">🪪</div><h3>每设备一个身份</h3><p>mTLS + 内置 CA + CRL 吊销;多租户 RBAC(admin/operator/viewer)+ 组织配额隔离;命令黑/白名单 Relay 与 Agent 双侧执行。</p></div>
+      <div class="card"><div class="icon">📜</div><h3>审计链防篡改</h3><p>hash chain 审计日志 + CEF/Syslog SIEM 导出 + 会话录屏(asciinema)。这正是 CISA AA23-025A 要求企业盘点的 approved-RMM 该有的样子。</p></div>
+      <div class="card"><div class="icon">🤖</div><h3>AI 代理的缰绳</h3><p>被管项目在仓库根写 .reins/rules.md 运维规则——AI/自动化必须先 rules read 读规则并携带内容指纹 ack,规则一改旧 ack 立即失效。先读规则,再碰服务器。</p></div>
+      <div class="card"><div class="icon">⚙️</div><h3>运维而非远控桌面</h3><p>批量分发(重试+SSE 进度)、DAG 编排(失败级联跳过)、部署 playbook、进程守护、快照 diff、网络诊断、日志聚合——50+ CLI 命令一个终端管一个舰队。</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>与同类对比<span class="en">Comparison</span></h2>
+    <table>
+      <tr><th></th><th>Reins</th><th>MeshCentral</th><th>TacticalRMM</th><th>Teleport</th><th>RustDesk</th></tr>
+      <tr><td>License</td><td class="yes">MIT 真开源</td><td>Apache-2.0</td><td class="warn">source-available</td><td class="warn">source-available¹</td><td>AGPL-3.0</td></tr>
+      <tr><td>服务端形态</td><td class="yes">Go 单二进制</td><td>Node.js</td><td class="warn">Django+Vue+Go+MQ</td><td>Go(较重)</td><td>Rust</td></tr>
+      <tr><td>完整 RMM(批量/DAG/监控)</td><td class="yes">✅</td><td class="warn">部分</td><td>✅(MSP 向)</td><td class="no">✖ 访问平面</td><td class="no">✖ 桌面远控</td></tr>
+      <tr><td>mTLS+CA+CRL 设备身份</td><td class="yes">✅</td><td class="warn">部分</td><td class="warn">部分</td><td>✅</td><td class="no">✖</td></tr>
+      <tr><td>审计链+SIEM 导出</td><td class="yes">✅</td><td class="no">✖</td><td class="no">✖</td><td>✅</td><td class="no">✖</td></tr>
+      <tr><td>AI 代理规则门禁</td><td class="yes">✅ 独家</td><td class="no">✖</td><td class="no">✖</td><td class="no">✖</td><td class="no">✖</td></tr>
+    </table>
+    <p style="color:var(--dim);font-size:13px;margin-top:10px">¹ Teleport Community License(2024):免费档限公司 &lt;100 员工且年收入 &lt;$10M。</p>
+  </div>
+</section>
+
+<section id="quickstart">
+  <div class="wrap">
+    <h2>快速开始<span class="en">Quickstart</span></h2>
+    <p class="lead">Docker Compose 一键起 Relay(内嵌 Web 控制台);被控端一行命令装 Agent。</p>
+    <div class="terminal">
+      <div class="bar">bash</div>
+<pre><span class="g">$</span> git clone https://github.com/V-T-V/reins && cd reins
+<span class="g">$</span> echo <span class="y">"REINS_TOKEN=change-me"</span> &gt; .env && docker compose up -d
+<span class="b">reins-relay  |  ✅ HTTP 监听 :7780</span>
+
+<span class="c"># Windows 被控端(PowerShell,一行):</span>
+<span class="g">PS&gt;</span> iex (((irm <span class="y">'http://your-server:7780/install.ps1'</span>) -replace <span class="y">'^\uFEFF'</span>))</pre>
+    </div>
+    <p style="margin-top:18px;color:var(--dim)">生产部署(Nginx TLS 终端/Helm/systemd/自更新)见 <a href="https://github.com/V-T-V/reins/blob/main/DEPLOYMENT.md">部署指南</a>。</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>零信任对照<span class="en">NIST 800-207 mapping</span></h2>
+    <table>
+      <tr><th>NIST 800-207 概念</th><th>Reins 机制</th></tr>
+      <tr><td>消除隐式网络信任</td><td>Agent 仅出站反向 WS;主机零入站端口</td></tr>
+      <tr><td>每请求/每设备身份</td><td>mTLS 客户端证书(内置 CA 签发,一机一证)</td></tr>
+      <tr><td>动态最小权限</td><td>tenant:role:secret RBAC + 命令白名单交集语义</td></tr>
+      <tr><td>持续评估留痕</td><td>hash chain 审计 + CRL 吊销即断链 + 会话录屏</td></tr>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p><strong>Reins</strong> — Take the reins of your fleet. · <a href="https://github.com/V-T-V/reins">GitHub</a> · MIT License © 2026</p>
+    <p style="margin-top:8px">仅用于管理你拥有或获书面授权管理的设备。杀软误报处置见 <a href="https://github.com/V-T-V/reins/blob/main/docs/antivirus.md">docs/antivirus.md</a>;漏洞报告见 SECURITY.md。</p>
+  </div>
+</footer>
+</body>
+</html>
