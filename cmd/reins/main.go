@@ -346,6 +346,7 @@ func taskRun(cfg config, args []string) error {
 	payloadFile := fs.String("f", "", "从文件读取 JSON payload(与 -c/-s 互斥)")
 	command := fs.String("c", "", "PowerShell 命令(快捷方式;复杂命令建议改用 -s 脚本文件)")
 	script := fs.String("s", "", "脚本内容或本地脚本文件路径(推荐:ps1 自动 BOM+UTF-8 头+远端临时文件执行)")
+	langFlag := fs.String("lang", "", "脚本语言(ps1/bat/sh;默认按目标 Agent OS 自动:windows→ps1,linux/macOS→sh)")
 	timeout := fs.Int("timeout", 60, "任务超时秒数(超时后 Agent 杀整棵进程树)")
 	idemKey := fs.String("idem", "", "幂等键(防重复执行,默认按内容自动生成)")
 	noWait := fs.Bool("no-wait", false, "不等待结果,只返回 task_id")
@@ -392,7 +393,15 @@ func taskRun(cfg config, args []string) error {
 		}
 	}
 
-	payload, err := buildPayload(*taskType, *command, *script, *payloadFile)
+	// lang 选择优先级:显式 -lang > 目标 Agent OS 推断 > 文件扩展名(.bat/.cmd) > ps1 默认。
+	// 2026-10-27 WSL 实测改进:此前裸 task run -t script -s 对 linux agent 也默认 ps1,
+	// Agent 报"lang=ps1 仅在 Windows 上可用"才知要手动传 lang=sh(错误信息指引了正解,
+	// 但本就该自动)。isLinuxAgent 查询失败返回 false → 回退 ps1 旧行为,向后兼容。
+	langSel := *langFlag
+	if langSel == "" && isLinuxAgent(cfg, *agentID) {
+		langSel = "sh"
+	}
+	payload, err := buildPayload(*taskType, *command, *script, *payloadFile, langSel)
 	if err != nil {
 		return err
 	}
@@ -523,7 +532,7 @@ func inferScriptDefaults(typeGiven, timeoutGiven bool, taskType, script, command
 	return taskType, timeout
 }
 
-func buildPayload(taskType, command, script, payloadFile string) (json.RawMessage, error) {
+func buildPayload(taskType, command, script, payloadFile, agentLang string) (json.RawMessage, error) {
 	// -f 文件优先
 	if payloadFile != "" {
 		data, err := os.ReadFile(payloadFile)
@@ -569,6 +578,9 @@ func buildPayload(taskType, command, script, payloadFile string) (json.RawMessag
 		lang := "ps1"
 		if strings.HasSuffix(script, ".bat") || strings.HasSuffix(script, ".cmd") {
 			lang = "bat"
+		}
+		if agentLang != "" {
+			lang = agentLang // 显式 -lang 或按目标 OS 的推断,优先于扩展名与 ps1 默认
 		}
 		return json.Marshal(proto.ScriptTask{Lang: lang, Content: content})
 

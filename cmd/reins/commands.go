@@ -188,7 +188,7 @@ func cronAdd(cfg config, args []string) error {
 	if !proto.IsValidTaskType(*taskType) {
 		return fmt.Errorf("未知任务类型: %s", *taskType)
 	}
-	payload, err := buildPayload(*taskType, *command, "", *payloadFile)
+	payload, err := buildPayload(*taskType, *command, "", *payloadFile, "")
 	if err != nil {
 		return err
 	}
@@ -304,7 +304,7 @@ func taskBatch(cfg config, args []string) error {
 	if !proto.IsValidTaskType(*taskType) {
 		return fmt.Errorf("未知任务类型: %s", *taskType)
 	}
-	payload, err := buildPayload(*taskType, *command, "", *payloadFile)
+	payload, err := buildPayload(*taskType, *command, "", *payloadFile, "")
 	if err != nil {
 		return err
 	}

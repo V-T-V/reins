@@ -49,7 +49,7 @@ func batchStart(cfg config, args []string) error {
 	if *tag == "" {
 		return errors.New("-tag <标签> 必填,如 -tag env=prod")
 	}
-	payload, err := buildPayload(*taskType, *command, "", *payloadFile)
+	payload, err := buildPayload(*taskType, *command, "", *payloadFile, "")
 	if err != nil {
 		return err
 	}

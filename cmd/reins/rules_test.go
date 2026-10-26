@@ -113,7 +113,7 @@ func TestBuildPayloadScriptPathGuard(t *testing.T) {
 	t.Chdir(dir)
 
 	for _, p := range []string{`C:\tmp\not-exist.ps1`, `C:/tmp/not-exist.ps1`, `.\rel.ps1`, `/abs/x.ps1`} {
-		_, err := buildPayload("script", "", p, "")
+		_, err := buildPayload("script", "", p, "", "")
 		if err == nil {
 			t.Fatalf("路径形态但文件不存在应报错: %q", p)
 		}
@@ -125,7 +125,7 @@ func TestBuildPayloadScriptPathGuard(t *testing.T) {
 	// 文件存在 → 正常读内容
 	good := filepath.Join(dir, "ok.ps1")
 	os.WriteFile(good, []byte("Write-Host ok"), 0644)
-	payload, err := buildPayload("script", "", good, "")
+	payload, err := buildPayload("script", "", good, "", "")
 	if err != nil {
 		t.Fatalf("存在的脚本文件应正常: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestBuildPayloadScriptPathGuard(t *testing.T) {
 	}
 
 	// 多行字面内容(非路径形态)→ 原样发送
-	payload, err = buildPayload("script", "", "Write-Host \"C:\\x\"\nWrite-Host done", "")
+	payload, err = buildPayload("script", "", "Write-Host \"C:\\x\"\nWrite-Host done", "", "")
 	if err != nil {
 		t.Fatalf("含盘符的命令文本不应被误判为路径: %v", err)
 	}
@@ -150,6 +150,50 @@ func TestBuildPayloadScriptPathGuard(t *testing.T) {
 	}
 	if !strings.Contains(st.Content, "Write-Host done") {
 		t.Fatalf("多行内容应原样: %+v", st)
+	}
+}
+
+// TestBuildPayloadLangPriority lang 选择优先级(2026-10-27 WSL 实测改进):
+// 显式/OS 推断值(agentLang) > 文件扩展名(.bat/.cmd) > ps1 默认;
+// agentLang 为空(旧调用方/查询失败回退)时行为与历史版本逐位一致。
+func TestBuildPayloadLangPriority(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	sh := filepath.Join(dir, "probe.sh")
+	os.WriteFile(sh, []byte("uname -a"), 0755)
+	bat := filepath.Join(dir, "probe.bat")
+	os.WriteFile(bat, []byte("echo hi"), 0644)
+
+	var st struct {
+		Lang string `json:"lang"`
+	}
+	cases := []struct {
+		name      string
+		script    string
+		agentLang string
+		want      string
+	}{
+		{"linux 推断覆盖 ps1 默认", "uname -a", "sh", "sh"},
+		{"推断覆盖 .bat 扩展名(linux agent 发 .bat 属配置错,按目标平台执行)", bat, "sh", "sh"},
+		{"显式 -lang ps1 压过推断", sh, "ps1", "ps1"},
+		{"空 agentLang 回退扩展名", bat, "", "bat"},
+		{"空 agentLang 回退 ps1 默认", sh, "", "ps1"},
+	}
+	for _, c := range cases {
+		s := c.script
+		if !strings.HasPrefix(s, "C:") && !strings.HasPrefix(s, "/") && s != "uname -a" {
+			s = filepath.Join(dir, filepath.Base(s))
+		}
+		payload, err := buildPayload("script", "", s, "", c.agentLang)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if err := json.Unmarshal(payload, &st); err != nil {
+			t.Fatal(err)
+		}
+		if st.Lang != c.want {
+			t.Errorf("%s: lang=%s want %s", c.name, st.Lang, c.want)
+		}
 	}
 }
 

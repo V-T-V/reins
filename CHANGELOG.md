@@ -2,6 +2,12 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [v4.9.1] — 2026-10-27 task run 脚本语言按目标 OS 自动选择
+
+- **改进(2026-10-27 WSL 实测发现)**:裸 `task run -t script -s <文件>` 此前恒默认 `lang=ps1`,发给 linux agent 被 Agent 拒绝("lang=ps1 仅在 Windows 上可用")才知要手动传 lang——现在 CLI 查询目标 Agent OS 自动选 `sh`(linux/macOS),失败回退 ps1 旧行为(向后兼容)。
+- 优先级:显式 `-lang` flag > 目标 OS 推断 > 文件扩展名(.bat/.cmd) > ps1 默认。
+- 新增 `-lang` flag(此前只能靠 `-f` payload JSON 显式指定);+1 测试(五分支优先级表);WSL 真机验收:同一裸命令从报错变 19ms 成功。
+
 ## [v4.9.0] — 2026-10-27 MCP Server(stdio)
 
 ### 新增:cmd/reins-mcp——AI 代理的原生接入层
