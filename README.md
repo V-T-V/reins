@@ -7,7 +7,7 @@
 [![CI](https://github.com/V-T-V/reins/actions/workflows/ci.yml/badge.svg)](https://github.com/V-T-V/reins/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/V-T-V/reins?display_name=tag&sort=semver)](../../releases)
 [![Go Reference](https://pkg.go.dev/badge/github.com/V-T-V/reins/client.svg)](https://pkg.go.dev/github.com/V-T-V/reins/client)
-[![Tests](https://img.shields.io/badge/tests-559-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-567-brightgreen)]()
 [![CLI](https://img.shields.io/badge/CLI-50%2B%20commands-blue)]()
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
@@ -111,11 +111,28 @@ res, _  := c.StreamCommand(ctx, "agent-1", "ping 8.8.8.8", 30, func(ev string, d
 
 Automation guardrail — `.reins/rules.md` lives in the *managed project's* repo root (e.g. "never kill the kiosk shell during business hours", "exclude node_modules/ from deploys"). Agents must `rules read` (content-fingerprint ack, 30s cache) before mutation tasks are accepted; edit the rules and old acks are rejected immediately. The rejection never echoes the fingerprint, so "skip reading, replay the ack" doesn't work.
 
+### MCP server (native AI-client integration)
+
+`reins-mcp` (in every release) exposes the same operations as a [Model Context Protocol](https://modelcontextprotocol.io) stdio server — zero external deps. Claude Desktop / Cursor / any MCP client:
+
+```json
+{
+  "mcpServers": {
+    "reins": {
+      "command": "reins-mcp",
+      "env": { "REINS_RELAY": "http://your-server:7780", "REINS_TOKEN": "your-token" }
+    }
+  }
+}
+```
+
+14 curated tools (`reins_run_command`, `reins_list_agents`, `reins_batch_run`, `reins_power`, cron, …) with JSON-Schema inputs. The rules gate applies regardless of client — MCP, SDK or CLI hit the same execution-layer checkpoint.
+
 ## Project stats
 
 | | |
 |---|---|
-| Go files / LOC | 253 / 48,000+ |
+| Go files / LOC | 256 / 49,000+ |
 | Tests / benchmarks | 558 / 26 (`go test ./...`) |
 | CLI commands / REST endpoints / executors | 50+ / 40+ / 9 |
 | CI | build + `go test -race` + golangci-lint + 3-platform compile gate |

@@ -68,6 +68,22 @@ builds:
       - amd64
       - arm64
 
+  # MCP Server(stdio,AI 代理接入)
+  - id: mcp
+    main: ./cmd/reins-mcp/
+    binary: reins-mcp
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
 archives:
   - id: relay
     builds: [relay]

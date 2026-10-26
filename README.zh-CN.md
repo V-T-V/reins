@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 [![CI](https://github.com/V-T-V/reins/actions/workflows/ci.yml/badge.svg)](https://github.com/V-T-V/reins/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/V-T-V/reins?display_name=tag&sort=semver)](../../releases)
-[![Tests](https://img.shields.io/badge/tests-559-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-567-brightgreen)]()
 [![CLI](https://img.shields.io/badge/CLI-50%2B%20commands-blue)]()
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
@@ -535,18 +535,35 @@ result, _ := c.StreamCommand(ctx, "agent-1", "ping 8.8.8.8", 30, func(event stri
 info, _ := c.Sysinfo("agent-1")
 ```
 
+### MCP Server(AI 客户端原生接入)
+
+`reins-mcp`(每个 Release 附带)把同样的运维能力暴露为 [Model Context Protocol](https://modelcontextprotocol.io) stdio 服务——纯标准库零新依赖。Claude Desktop / Cursor / 任何 MCP 客户端:
+
+```json
+{
+  "mcpServers": {
+    "reins": {
+      "command": "reins-mcp",
+      "env": { "REINS_RELAY": "http://your-server:7780", "REINS_TOKEN": "your-token" }
+    }
+  }
+}
+```
+
+14 个 curated 工具(`reins_run_command`/`reins_list_agents`/`reins_batch_run`/`reins_power`/cron 族…),全部带 JSON Schema 输入描述。规则门禁与客户端无关——MCP、SDK、CLI 走的都是执行层同一道闸。
+
 ---
 
 ## 指标
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 253 |
-| 代码行 | 48,000+ |
+| Go 文件 | 256 |
+| 代码行 | 49,000+ |
 | CLI 命令 | 50+ |
 | API 端点 | 40+(OpenAPI 全量契约) |
 | SDK 方法 | 45+ |
-| 测试用例 | 559 |
+| 测试用例 | 567 |
 | 基准测试 | 26 |
 | 任务类型 | 9 |
 | CI | build + `go test -race` + golangci + 三平台编译门禁 |

@@ -2,6 +2,18 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [v4.9.0] — 2026-10-27 MCP Server(stdio)
+
+### 新增:cmd/reins-mcp——AI 代理的原生接入层
+- **MCP(Model Context Protocol)stdio 传输**:JSON-RPC 2.0 换行分隔帧,零新依赖(纯标准库),Claude Desktop/Cursor/ZCode 等客户端直接配置即用。
+- **curated 14 工具**:list_agents/status/run_command/task_run/task_get/task_list/batch_run/sysinfo/power/cron_list/cron_add/cron_delete/enroll_token/list_relay_tools——逐个映射 client SDK 导出方法,带 JSON Schema 输入描述。
+- 工具内部错误按 MCP 语义回 `isError:true`(协议层成功);日志一律走 stderr(stdout 是协议通道)。
+- 配置:`REINS_RELAY`/`REINS_TOKEN` 环境变量(与 CLI 同名);goreleaser 增发 `reins-mcp` 六平台产物。
+- +8 测试:握手/tools-list schema 校验/ping/未知方法 -32601/通知无响应/run_command 成败两路(假 relay 完整投递链)/list_agents。
+
+### 与规则门禁的关系
+MCP 是接入层,门禁仍在执行层:`.reins/rules.md` 的 ack 校验在 Agent 侧(变更类任务无 ack/过期 ack 拒绝),换任何客户端(CLI/SDK/MCP)同一道闸。
+
 ## [v4.8.0] — 2026-10-27 品牌重命名 go-rmm → reins
 
 ### 为什么改名
