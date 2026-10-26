@@ -1,4 +1,4 @@
-// Package win32 封装 go-rmm 所需的 Windows API：窗口枚举、截图、输入。
+// Package win32 封装 reins 所需的 Windows API：窗口枚举、截图、输入。
 //
 // 跨平台策略：
 //   - windows_amd64/windows_386：真实实现（syscall）

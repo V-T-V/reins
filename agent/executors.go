@@ -4,8 +4,8 @@ import (
 	"log"
 	"runtime"
 
-	"github.com/QiuShichang/go-rmm/executors"
-	"github.com/QiuShichang/go-rmm/vision"
+	"github.com/QiuShichang/reins/executors"
+	"github.com/QiuShichang/reins/vision"
 )
 
 // registerExecutors 构造任务分发器，注册当前可用的执行器。
@@ -90,12 +90,12 @@ func registerExecutors(cfg Config) *executors.Dispatcher {
 		log.Printf("[agent] 下载发送限速已启用: %.1f MB/s", cfg.TransferRateLimitMB)
 	}
 
-	// 项目规则门禁:变更类任务须携带当前 .go-rmm/rules.md 的 ack。
+	// 项目规则门禁:变更类任务须携带当前 .reins/rules.md 的 ack。
 	// 发现范围与文件策略同源(allowed_roots+workspace),规则文件与
 	// 项目部署位置天然一致。默认关闭,config rules_gate 开启。
 	d.SetRulesGate(executors.NewRulesGate(cfg.RulesGate, resolveAllowedRoots(cfg), cfg.Workspace))
 	if cfg.RulesGate {
-		log.Printf("[agent] 项目规则门禁已启用: 变更类任务须携带 rules_ack(先 go-rmm rules read 加载规则)")
+		log.Printf("[agent] 项目规则门禁已启用: 变更类任务须携带 rules_ack(先 reins rules read 加载规则)")
 	}
 
 	return d

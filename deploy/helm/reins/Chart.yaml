@@ -1,0 +1,12 @@
+apiVersion: v2
+name: reins
+description: reins 远程自动化执行平台(Helm chart)
+type: application
+version: 2.2.0
+appVersion: "2.2.0"
+home: https://github.com/QiuShichang/reins
+keywords:
+  - rmm
+  - remote-management
+  - automation
+  - infrastructure

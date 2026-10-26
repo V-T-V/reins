@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TunnelManager 管理所有活跃隧道会话。

@@ -133,8 +133,8 @@ func (c *CA) createRoot() error {
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			Organization: []string{"go-rmm"},
-			CommonName:   "go-rmm-root-ca",
+			Organization: []string{"reins"},
+			CommonName:   "reins-root-ca",
 		},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().AddDate(10, 0, 0), // 10 年
@@ -246,7 +246,7 @@ func (c *CA) signAgentCSR(csrPEM []byte, agentID string, ttl time.Duration, revo
 		SerialNumber: serial,
 		Subject: pkix.Name{
 			CommonName:   agentID, // 强制 CN = enroll 请求的 agentID
-			Organization: []string{"go-rmm"},
+			Organization: []string{"reins"},
 		},
 		NotBefore:   time.Now().Add(-time.Hour),
 		NotAfter:    time.Now().Add(ttl),

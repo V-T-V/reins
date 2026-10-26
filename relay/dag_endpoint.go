@@ -29,8 +29,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/internal/dagflow"
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/internal/dagflow"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // dagTTL 已完成编排的注册表保留时长。

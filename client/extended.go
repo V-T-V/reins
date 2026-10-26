@@ -1,6 +1,6 @@
 // Package client — 扩展 API(AI Agent 接入所需的全部操作)。
 //
-// 让外部 AI Agent 通过此 SDK 完整控制 go-rmm 平台的所有能力。
+// 让外部 AI Agent 通过此 SDK 完整控制 reins 平台的所有能力。
 // 覆盖:任务/文件/Shell/电源/Cron/Secret/系统信息/工具发现。
 package client
 
@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // === 批量任务 ===
@@ -297,7 +297,7 @@ type ToolInfo struct {
 }
 
 // ListTools 获取可用工具清单(GET /api/tools)。
-// AI Agent 用此发现 go-rmm 的全部能力并生成 function calling tool 定义。
+// AI Agent 用此发现 reins 的全部能力并生成 function calling tool 定义。
 func (c *Client) ListTools() ([]ToolInfo, error) {
 	var resp struct {
 		Tools []ToolInfo `json:"tools"`

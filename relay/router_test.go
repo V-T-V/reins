@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // === Relay router 深化测试 ===

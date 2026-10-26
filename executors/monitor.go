@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // MonitorExecutor 流式监测。

@@ -12,7 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TestReaperRedispatchE2E 验证 D2/E2 核心链路：

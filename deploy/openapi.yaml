@@ -1,4 +1,4 @@
-# go-rmm Relay API — OpenAPI 3.0 规范(L5 神级提升)
+# reins Relay API — OpenAPI 3.0 规范(L5 神级提升)
 #
 # 用途:
 #   1. 生成 API 文档(Swagger UI / Redoc)
@@ -9,14 +9,14 @@
 
 openapi: 3.0.3
 info:
-  title: go-rmm Relay API
+  title: reins Relay API
   description: |
-    go-rmm 远程自动化执行平台的 REST API。
+    reins 远程自动化执行平台的 REST API。
     所有端点(除 /healthz)需 Authorization: Bearer <token>。
   version: 2.2.0
   contact:
-    name: go-rmm
-    url: https://github.com/QiuShichang/go-rmm
+    name: reins
+    url: https://github.com/QiuShichang/reins
 
 servers:
   - url: http://localhost:7780

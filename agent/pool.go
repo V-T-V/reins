@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // WorkerPool 限制 Agent 同时执行的任务数，防止被并发任务打爆。

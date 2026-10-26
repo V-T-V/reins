@@ -2,6 +2,22 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [v4.8.0] — 2026-10-27 品牌重命名 go-rmm → reins
+
+### 为什么改名
+- `reins`(缰绳)与产品叙事同构:**缰绳在你手里**——零入站端口的反向连接、每设备证书可吊销、防篡改审计链,以及给 AI 代理的规则门禁(先读规则再动手)。`go-rmm` 缩写难念、无记忆点,且与"远控"品类词汇距离过近。
+- 撞名核查(GitHub/域名/知名产品/恶意软件联想四项)全绿;`go-rmm` 时代未公开发布,改名零迁移成本。
+
+### 重命名范围(全量机械清扫 + 语义修正)
+- module path:`github.com/QiuShichang/go-rmm` → `github.com/QiuShichang/reins`(148 处 import)。
+- 二进制:CLI `reins` / `reins-relay` / `reins-agent`;目录 `cmd/reins`、`deploy/helm/reins`;`nginx-reins.conf`。
+- 环境变量:`GO_RMM_*` → `REINS_*`(105 处);规则门禁目录 `.go-rmm/` → `.reins/`;bash 补全函数 `_reins`。
+- Prometheus 指标前缀:`gormmm_` → `reins_`(90 处,含测试断言);回归测试改写为"旧前缀(gormm_/gormmm_)零残留"断言。
+- 全部文档(README 双语/AGENTS/DEPLOYMENT/docs)同步;历史条目中 CLI 示例一并更新为新名。
+
+### 不变的兼容性承诺
+- 协议(Envelope/消息类型)、API 路径(/api/*)、bbolt 存储结构、配置文件字段均未变——仅命名空间换装。
+
 ## [v4.7.8] — 2026-10-24 sync pull 并行化
 
 ### sync pull 并行下载(-j,与 push 同语义)
@@ -44,7 +60,7 @@
 帧构造 2.0~3.3GB/s、SHA256 1.29GB/s、下载流核心 843MB/s、落盘 202MB/s——引擎各环节均远超千兆线速,**256KB 帧尺寸保持不变**(瓶颈在网络层,已由 Phase1/2 架构性解决),数据入档 BENCHMARK.md。
 
 ### 路径级指标
-Agent 新增 `gormmm_agent_xfer_direct_bytes_total/direct_total`(直连命中率/回落频率观测);Relay 上传统计增加 `dataconn_frames`(数据面分流量)。
+Agent 新增 `reins_agent_xfer_direct_bytes_total/direct_total`(直连命中率/回落频率观测);Relay 上传统计增加 `dataconn_frames`(数据面分流量)。
 
 ### 测试
 +3(直连计量断言/127 命名空间契约三锚/fuzz 种子),总数 548→551 全绿。
@@ -67,12 +83,12 @@ Agent 新增 `gormmm_agent_xfer_direct_bytes_total/direct_total`(直连命中率
 ## [v4.7.3] — 2026-09-18 使用日志驱动的 CLI 深度优化
 
 ### 分析方法与证据
-从 ZCode 会话库(sqlite part 表)提取全部 go-rmm 真实调用:1535 条命令提及、508 条严格 CLI 调用、**12% 失败率**;错误分类:PS 语法 20/超时 15/远端退出码 14/路径策略 7/占用 3。UX 摩擦:500/508 条手敲 `--relay --token` 前缀(平均 72 字符,累计 3.6 万字符);327 次上传 .ps1 却只有 30 次用 `-t script -s` 正解通道。
+从 ZCode 会话库(sqlite part 表)提取全部 reins 真实调用:1535 条命令提及、508 条严格 CLI 调用、**12% 失败率**;错误分类:PS 语法 20/超时 15/远端退出码 14/路径策略 7/占用 3。UX 摩擦:500/508 条手敲 `--relay --token` 前缀(平均 72 字符,累计 3.6 万字符);327 次上传 .ps1 却只有 30 次用 `-t script -s` 正解通道。
 
 ### 优化(按证据权重)
 - **-File 反模式实时引导**:`task run -t powershell -c "powershell -File x.ps1"`(日志最大失败源:四层引号转义 ParserError + 路径 403 + 60s 默认超时三连坑)——CLI 检测到该模式时 stderr 提示正解(本地文件→`-t script -s <路径>` 一步到位;远端路径→确认已上传允许根)。不阻断,仅引导。
 - **结果失败 hint**:printResult 按失败特征(PS 语法/路径策略/占用/超时)追加"--- 建议 ---"段,给出可执行的下一步。
-- **env 补齐与曝光**:`GO_RMM_INSECURE`/`GO_RMM_CACERT` 补齐(relay/token/output 原已支持但无人知晓);usage 新增"环境变量"段(一次 export 终身有效)。
+- **env 补齐与曝光**:`REINS_INSECURE`/`REINS_CACERT` 补齐(relay/token/output 原已支持但无人知晓);usage 新增"环境变量"段(一次 export 终身有效)。
 - 占用冲突类已由 v4.7.0 sweepIdleSessions 修复;上传/合并类已由 v4.7.0 绝对路径分流修复——本版本针对的是日志中仍在发生的坑。
 
 ### 测试
@@ -114,7 +130,7 @@ Agent 新增 `gormmm_agent_xfer_direct_bytes_total/direct_total`(直连命中率
 - **架构**:CLI ↔ Agent 字节流不再绕道云端 Relay——Agent 配置 `xfer_listen`(如 `:7783`,默认关)后监听本网段直传端口,CLI 自动探测直连可达性(Relay 只做信令/授权面),千兆内网从几 MB/s(出口上行瓶颈)提到线速;不可达/未开启时**静默回落**中继路径,零配置成本。
 - **票据授权(零信任姿态不变)**:Relay 新端点 `POST /api/transfer/direct` 签发一次性票据(32B 随机 secret,明文只回 CLI,SHA256 hash 经控制 WS 推给 Agent)——60s 过期、路径(含 .ftpart 分片前缀)+方向绑定、用后即焚、恒时比对、consume 失败也消费防在线穷举;Agent 侧 begin 再签发 data_token 防会话劫持。
 - **Agent 直连端点**:自签 ECDSA P256 TLS(票据不落明文)+ `/xfer/probe|begin|data|fetch` 四端点;`begin` 复用 `HandleInit`(路径策略/续传偏移/ALREADY_COMPLETE 快路径全套中继语义);`SendDownloadData` 重构抽出 `streamDownload` 共核(限速/分片/进度/计数两路同语义)。
-- **CLI 直连优先**:`file upload/download` 单发与分片每片先试直连;`--no-direct`/`GO_RMM_NO_DIRECT` 显式关闭;直连熔断(首个 probe 失败/Agent 未开启即进程级禁用,后续分片零探测开销);路径策略 403 映射 blocked 终态不回落(中继同样会被拒)。
+- **CLI 直连优先**:`file upload/download` 单发与分片每片先试直连;`--no-direct`/`REINS_NO_DIRECT` 显式关闭;直连熔断(首个 probe 失败/Agent 未开启即进程级禁用,后续分片零探测开销);路径策略 403 映射 blocked 终态不回落(中继同样会被拒)。
 - **本地三组件 E2E 五场景实证**:5MB 单发直连 0.6s / 60MB 绝对路径分片(4 路并发+PowerShell 合并)5.3s SHA 一致 / 60MB 直连下载字节逐位一致 / `--no-direct` 中继 / 黑洞直连地址静默回落。
 
 ### 分片上传绝对路径修复(sess_8d55d252 复盘)
@@ -169,7 +185,7 @@ Agent 新增 `gormmm_agent_xfer_direct_bytes_total/direct_total`(直连命中率
 - **db.Batch**（taskstore 全部写事务）。
 
 ### 可观测性
-- 任务延迟直方图（gormmm_task_duration_ms histogram）、tasks_acked/nacked、audit_dropped 进 /metrics；转发透传 env.Payload（省 re-marshal）。
+- 任务延迟直方图（reins_task_duration_ms histogram）、tasks_acked/nacked、audit_dropped 进 /metrics；转发透传 env.Payload（省 re-marshal）。
 
 ### 修复（其他）
 - PowerShell exit code（try/catch 前缀 + -NonInteractive + TestMain 预热）、GetCronRule O(1)、H-4 payload 透传、make dist 所需 install 脚本、quickstart 去硬编码、openapi 重复键。

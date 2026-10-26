@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // === CommandPolicy ===

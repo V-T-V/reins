@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
-// mkRulesFile 在 dir 下创建 .go-rmm/rules.md,返回项目目录。
+// mkRulesFile 在 dir 下创建 .reins/rules.md,返回项目目录。
 func mkRulesFile(t *testing.T, dir, content string) string {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(dir, RulesDirName), 0755); err != nil {
@@ -61,15 +61,15 @@ func TestRulesAckCombined(t *testing.T) {
 
 func TestDiscoverRuleFiles(t *testing.T) {
 	root := t.TempDir()
-	// 深度 0: root/.go-rmm/rules.md
+	// 深度 0: root/.reins/rules.md
 	mkRulesFile(t, root, "root project")
-	// 深度 1: root/proj1/.go-rmm/rules.md
+	// 深度 1: root/proj1/.reins/rules.md
 	mkRulesFile(t, filepath.Join(root, "proj1"), "p1")
-	// 深度 2: root/group/proj2/.go-rmm/rules.md
+	// 深度 2: root/group/proj2/.reins/rules.md
 	mkRulesFile(t, filepath.Join(root, "group", "proj2"), "p2")
 	// 深度 3: 超出发现半径,不应出现
 	mkRulesFile(t, filepath.Join(root, "group", "deep", "proj3"), "p3")
-	// 跳过目录: root/node_modules/hidden/.go-rmm/rules.md
+	// 跳过目录: root/node_modules/hidden/.reins/rules.md
 	mkRulesFile(t, filepath.Join(root, "node_modules", "hidden"), "skipme")
 
 	found := DiscoverRuleFiles([]string{root})

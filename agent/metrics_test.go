@@ -9,30 +9,30 @@ import (
 )
 
 // TestRenderMetricsFormat 指标输出格式:Prometheus 文本规范(HELP/TYPE 行 +
-// gormmm_ 三 m 命名空间统一),关键指标齐全。
+// reins_ 三 m 命名空间统一),关键指标齐全。
 func TestRenderMetricsFormat(t *testing.T) {
 	out := renderMetrics()
 	required := []string{
-		"gormmm_agent_xfer_upload_bytes_total",
-		"gormmm_agent_xfer_download_bytes_total",
-		"gormmm_agent_xfer_uploads_total",
-		"gormmm_agent_xfer_downloads_total",
-		"gormmm_agent_xfer_failures_total",
-		"gormmm_agent_xfer_sessions_active",
-		"gormmm_agent_reconnects_total",
-		"gormmm_agent_uptime_seconds",
-		"gormmm_agent_build_info",
+		"reins_agent_xfer_upload_bytes_total",
+		"reins_agent_xfer_download_bytes_total",
+		"reins_agent_xfer_uploads_total",
+		"reins_agent_xfer_downloads_total",
+		"reins_agent_xfer_failures_total",
+		"reins_agent_xfer_sessions_active",
+		"reins_agent_reconnects_total",
+		"reins_agent_uptime_seconds",
+		"reins_agent_build_info",
 	}
 	for _, name := range required {
 		if !strings.Contains(out, name+" ") && !strings.Contains(out, name+"{") {
 			t.Fatalf("指标输出缺少 %s:\n%s", name, out)
 		}
 	}
-	// 命名空间:不允许两 m 的旧前缀(deep-r7 统一过 Relay 侧,Agent 侧同规)
-	if strings.Contains(out, "gormm_agent_") && !strings.Contains(out, "gormmm_agent_") {
-		t.Fatal("指标前缀应为 gormmm_(三 m)")
+	// 命名空间:不得残留重命名前的旧前缀(deep-r7 统一过 Relay 侧,Agent 侧同规;v4.8.0 全量退役 gormm*/gormmm*)
+	if strings.Contains(out, "gormm_") || strings.Contains(out, "gormmm_") {
+		t.Fatal("指标前缀应为 reins_,不得残留旧前缀")
 	}
-	if !strings.Contains(out, "# HELP gormmm_agent_reconnects_total") {
+	if !strings.Contains(out, "# HELP reins_agent_reconnects_total") {
 		t.Fatal("应含 HELP 行(Prometheus 文本规范)")
 	}
 }
@@ -60,7 +60,7 @@ func TestMetricsHTTPEndpoint(t *testing.T) {
 	}
 	body := make([]byte, 4096)
 	n, _ := resp.Body.Read(body)
-	if !strings.Contains(string(body[:n]), "gormmm_agent_reconnects_total 0") {
+	if !strings.Contains(string(body[:n]), "reins_agent_reconnects_total 0") {
 		t.Fatalf("响应应含 reconnects 指标: %s", body[:n])
 	}
 }
@@ -71,7 +71,7 @@ func TestActiveSessionsSource(t *testing.T) {
 	n.Store(3)
 	SetActiveSessionsSource(func() int { return int(n.Load()) })
 	out := renderMetrics()
-	if !strings.Contains(out, "gormmm_agent_xfer_sessions_active 3") {
+	if !strings.Contains(out, "reins_agent_xfer_sessions_active 3") {
 		t.Fatalf("注入的活跃会话数应出现在输出: %s", out)
 	}
 }

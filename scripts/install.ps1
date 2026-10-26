@@ -1,14 +1,14 @@
-# go-rmm Windows 安装器（从 GitHub Release 下载二进制）
+# reins Windows 安装器（从 GitHub Release 下载二进制）
 #
 # 用法（管理员 PowerShell）:
 #   .\scripts\install.ps1                          # 最新版 Relay
 #   .\scripts\install.ps1 -Component agent         # relay|agent|cli
 param(
     [string]$Owner = "V-T-V",
-    [string]$Repo = "go-rmm",
+    [string]$Repo = "reins",
     [string]$Version = "latest",
     [ValidateSet("relay", "agent", "cli")][string]$Component = "relay",
-    [string]$InstallDir = "$env:ProgramFiles\go-rmm"
+    [string]$InstallDir = "$env:ProgramFiles\reins"
 )
 $ErrorActionPreference = "Stop"
 
@@ -17,10 +17,10 @@ if ($Version -eq "latest") {
     $Version = $rel.tag_name
 }
 
-$Binary = "go-rmm-$Component.exe"
-$Archive = "go-rmm-${Component}_${Version}_windows_amd64.zip"
+$Binary = "reins-$Component.exe"
+$Archive = "reins-${Component}_${Version}_windows_amd64.zip"
 $Url = "https://github.com/$Owner/$Repo/releases/download/$Version/$Archive"
-$Tmp = Join-Path $env:TEMP "go-rmm-install-$(Get-Random)"
+$Tmp = Join-Path $env:TEMP "reins-install-$(Get-Random)"
 
 Write-Host "下载 $Url"
 New-Item -ItemType Directory -Force -Path $Tmp | Out-Null

@@ -16,7 +16,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // Policy 命令安全策略。
@@ -68,8 +68,8 @@ func Default() *Policy {
 		{`(?i)Remove-Item\s+(?:-[A-Za-z]+\s+)*-?Recurse\s+(?:-[A-Za-z]+\s+)*-?Force`, "remove-item", ""},
 		{`(?i)\b(?:Remove-Item|del|erase|rd|rmdir)\s+(?:-[A-Za-z]+\s+)*-?Recurse\s+(?:-[A-Za-z]+\s+)*-?Force\s+[A-Z]:\\(?:Windows|Users|Program)`, "remove-item", ""},
 		// 电源操作指引:平台有原生通道(标签白名单+审计),不要用裸命令绕
-		{`(?i)Stop-Computer`, "stop-computer", "请改用 go-rmm power shutdown(平台原生通道:标签白名单+审计,防误伤非目标机)"},
-		{`(?i)Restart-Computer\s+-Force`, "restart-computer", "请改用 go-rmm power restart(平台原生通道:标签白名单+审计)"},
+		{`(?i)Stop-Computer`, "stop-computer", "请改用 reins power shutdown(平台原生通道:标签白名单+审计,防误伤非目标机)"},
+		{`(?i)Restart-Computer\s+-Force`, "restart-computer", "请改用 reins power restart(平台原生通道:标签白名单+审计)"},
 		{`(?i)diskpart`, "diskpart", ""},
 		{`(?i)\breg\s+(?:delete|import|load)\s+HKLM\\SYSTEM`, "reg ", ""},
 		{`(?i)bcdedit\s+/,`, "bcdedit", ""},

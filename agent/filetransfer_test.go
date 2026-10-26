@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TestBinaryFrameRoundTrip 验证 J1：二进制帧构造与解析往返。

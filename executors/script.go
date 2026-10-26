@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // ScriptExecutor 执行下发的脚本文件。
@@ -53,7 +53,7 @@ func (e *ScriptExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFun
 
 	// 写临时脚本文件
 	ext := "." + lang
-	tmpFile, err := os.CreateTemp("", "go-rmm-*"+ext)
+	tmpFile, err := os.CreateTemp("", "reins-*"+ext)
 	if err != nil {
 		return fail("", "创建临时文件失败: "+err.Error())
 	}

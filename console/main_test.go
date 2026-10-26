@@ -54,8 +54,8 @@ func TestConsoleServesStatic(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "go-rmm") || !strings.Contains(string(body), "html") {
-		t.Fatalf("首页应含 go-rmm 与 html 标签，得到前 100 字符: %s", string(body[:min(100, len(body))]))
+	if !strings.Contains(string(body), "reins") || !strings.Contains(string(body), "html") {
+		t.Fatalf("首页应含 reins 与 html 标签，得到前 100 字符: %s", string(body[:min(100, len(body))]))
 	}
 
 	// app.js 也应可取

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TestRegistryOnlineSince OnlineSince 补齐注册时刻(原列表端点漏填,CLI 恒显"—")。

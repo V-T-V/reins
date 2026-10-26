@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // mockDispatch 构造可控行为的投递函数。

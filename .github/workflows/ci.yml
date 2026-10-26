@@ -1,4 +1,4 @@
-# go-rmm CI/CD
+# reins CI/CD
 # 世界级 Go 项目的标准 CI 流水线
 
 name: CI
@@ -82,7 +82,7 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           go build -ldflags "-X main.version=ci-${{ matrix.goos }}-${{ matrix.goarch }}" \
-            -o go-rmm-relay-${{ matrix.goos }}-${{ matrix.goarch }} ./relay/
+            -o reins-relay-${{ matrix.goos }}-${{ matrix.goarch }} ./relay/
       - name: Cross-compile Agent (Windows only for service)
         if: matrix.goos == 'windows'
         env:
@@ -91,7 +91,7 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           go build -ldflags "-X main.version=ci-${{ matrix.goos }}-${{ matrix.goarch }}" \
-            -o go-rmm-agent-${{ matrix.goos }}-${{ matrix.goarch }}.exe ./agent/
+            -o reins-agent-${{ matrix.goos }}-${{ matrix.goarch }}.exe ./agent/
       - name: Cross-compile Agent (POSIX — P1-4 Linux Agent 编译门禁)
         if: matrix.goos != 'windows'
         env:
@@ -100,4 +100,4 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           go build -ldflags "-X main.version=ci-${{ matrix.goos }}-${{ matrix.goarch }}" \
-            -o go-rmm-agent-${{ matrix.goos }}-${{ matrix.goarch }} ./agent/
+            -o reins-agent-${{ matrix.goos }}-${{ matrix.goarch }} ./agent/

@@ -13,7 +13,7 @@ import (
 	"runtime"
 	"unicode/utf16"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // PowerShellExecutor 执行内联 PowerShell 命令。

@@ -13,6 +13,6 @@ DEPLOYMENT.md
 BENCHMARK.md
 MANUAL.html
 部署指南.txt
-go-rmm-windows.zip
-go-rmm-nginx-deploy.tar.gz
+reins-windows.zip
+reins-nginx-deploy.tar.gz
 build-relay.bat

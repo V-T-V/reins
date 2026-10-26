@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TestReaperReapsStaleDispatched 验证 P1-2 修复：超时的 dispatched 任务被回退 pending。

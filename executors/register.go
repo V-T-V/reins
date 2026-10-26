@@ -3,7 +3,7 @@ package executors
 import (
 	"runtime"
 
-	"github.com/QiuShichang/go-rmm/vision"
+	"github.com/QiuShichang/reins/vision"
 )
 
 // Options 构造 Dispatcher 时的依赖注入。

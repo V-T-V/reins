@@ -15,8 +15,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/go-rmm/executors"
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/executors"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // agentBizID 是当前 Agent 的业务身份（用于 Envelope.From）。

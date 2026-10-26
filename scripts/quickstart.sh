@@ -1,6 +1,6 @@
 #!/bin/bash
 # ╔══════════════════════════════════════════════════════════╗
-# ║  go-rmm 极简安装(一行命令,3 步完成)                      ║
+# ║  reins 极简安装(一行命令,3 步完成)                      ║
 # ╚══════════════════════════════════════════════════════════╝
 #
 # 用法:
@@ -14,7 +14,7 @@
 #   ./scripts/quickstart.sh cli          # 操作端
 set -euo pipefail
 VERSION="${VERSION:-v3.9.0}"
-DIR="${DIR:-$HOME/.go-rmm}"
+DIR="${DIR:-$HOME/.reins}"
 MODE="${1:-server}"
 G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; N='\033[0m'
 ok()   { echo -e "${G}✅${N} $*"; }
@@ -28,9 +28,9 @@ build_or_download() {
         # 本地有 Go 源码?
         if [ -f "go.mod" ]; then
             ok "从源码编译..."
-            CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$VERSION" -o "$DIR/bin/go-rmm-relay" ./relay/
-            CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$VERSION" -o "$DIR/bin/go-rmm-agent" ./agent/
-            CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$VERSION" -o "$DIR/bin/go-rmm" ./cmd/go-rmm/
+            CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$VERSION" -o "$DIR/bin/reins-relay" ./relay/
+            CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$VERSION" -o "$DIR/bin/reins-agent" ./agent/
+            CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$VERSION" -o "$DIR/bin/reins" ./cmd/reins/
         else
             die "请在本项目根目录运行,或指定二进制下载地址: SERVER=http://..."
         fi
@@ -72,7 +72,7 @@ my_ip() {
 # 服务端模式
 # ================================================================
 if [ "$MODE" = "server" ] || [ "$MODE" = "serve" ] || [ "$MODE" = "relay" ]; then
-    echo "🚀 go-rmm 服务端安装"
+    echo "🚀 reins 服务端安装"
     build_or_download
     add_path
     TOKEN=$(gen_token)
@@ -80,7 +80,7 @@ if [ "$MODE" = "server" ] || [ "$MODE" = "serve" ] || [ "$MODE" = "relay" ]; the
 
     # 启动
     ok "启动 Relay..."
-    nohup "$DIR/bin/go-rmm-relay" -addr :7780 -token "$TOKEN" > "$DIR/relay.log" 2>&1 &
+    nohup "$DIR/bin/reins-relay" -addr :7780 -token "$TOKEN" > "$DIR/relay.log" 2>&1 &
     echo $! > "$DIR/relay.pid"
     sleep 2
 
@@ -93,7 +93,7 @@ if [ "$MODE" = "server" ] || [ "$MODE" = "serve" ] || [ "$MODE" = "relay" ]; the
 
     echo ""
     echo "╔════════════════════════════════════════════════════╗"
-    echo "║  go-rmm 服务端已就绪!                              ║"
+    echo "║  reins 服务端已就绪!                              ║"
     echo "╠════════════════════════════════════════════════════╣"
     echo "║                                                    ║"
     echo "║  Web UI:  http://$IP:7780                        "
@@ -102,10 +102,10 @@ if [ "$MODE" = "server" ] || [ "$MODE" = "serve" ] || [ "$MODE" = "relay" ]; the
     echo "║  ─── 接下来 ───                                    ║"
     echo "║                                                    ║"
     echo "║  在被控端(Windows/Linux)执行:                     ║"
-    echo "║  go-rmm-agent run -relay ws://$IP:7780/agent -token $TOKEN"
+    echo "║  reins-agent run -relay ws://$IP:7780/agent -token $TOKEN"
     echo "║                                                    ║"
     echo "║  在你的电脑执行:                                   ║"
-    echo "║  go-rmm --relay http://$IP:7780 --token $TOKEN agent list"
+    echo "║  reins --relay http://$IP:7780 --token $TOKEN agent list"
     echo "║                                                    ║"
     echo "╚════════════════════════════════════════════════════╝"
 
@@ -117,12 +117,12 @@ elif [ "$MODE" = "agent" ]; then
     TOKEN="${TOKEN:-$(cat $DIR/token 2>/dev/null || echo '')}"
     if [ -z "$TOKEN" ]; then die "需要 TOKEN 环境变量"; fi
 
-    echo "📡 go-rmm Agent 安装"
+    echo "📡 reins Agent 安装"
     build_or_download
     add_path
 
     ok "启动 Agent(连接 $RELAY)..."
-    nohup "$DIR/bin/go-rmm-agent" run -relay "$RELAY" -token "$TOKEN" > "$DIR/agent.log" 2>&1 &
+    nohup "$DIR/bin/reins-agent" run -relay "$RELAY" -token "$TOKEN" > "$DIR/agent.log" 2>&1 &
     echo $! > "$DIR/agent.pid"
     sleep 2
     ok "Agent 已启动(日志: $DIR/agent.log)"
@@ -132,21 +132,21 @@ elif [ "$MODE" = "agent" ]; then
     echo "║  Agent 已连接到 Relay!                             ║"
     echo "║                                                    ║"
     echo "║  在操作端执行验证:                                 ║"
-    echo "║  go-rmm --relay http://<relay-ip>:7780 --token $TOKEN agent list"
+    echo "║  reins --relay http://<relay-ip>:7780 --token $TOKEN agent list"
     echo "╚════════════════════════════════════════════════════╝"
 
 # ================================================================
 # 操作端(CLI)模式
 # ================================================================
 elif [ "$MODE" = "cli" ]; then
-    echo "💻 go-rmm CLI 安装"
+    echo "💻 reins CLI 安装"
     build_or_download
     add_path
     ok "CLI 就绪"
     echo ""
     echo "用法:"
-    echo "  go-rmm --relay http://<relay-ip>:7780 --token <token> agent list"
-    echo "  go-rmm --relay http://<relay-ip>:7780 --token <token> task run -a <agent> -c \"hostname\""
+    echo "  reins --relay http://<relay-ip>:7780 --token <token> agent list"
+    echo "  reins --relay http://<relay-ip>:7780 --token <token> task run -a <agent> -c \"hostname\""
 else
     echo "用法: quickstart.sh [server|agent|cli]"
     exit 1

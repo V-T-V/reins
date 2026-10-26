@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/internal/ca"
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/internal/ca"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // BenchmarkSaveTask bbolt SaveTask 吞吐（任务持久化核心路径）。

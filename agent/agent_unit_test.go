@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // === 幂等缓存 ===

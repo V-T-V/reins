@@ -52,8 +52,8 @@ func TestInstallScriptBakesExternalURL(t *testing.T) {
 	if !strings.Contains(s, "wss://203.0.113.99/rmm/agent") {
 		t.Errorf("脚本应烘焙派生 Relay 地址 wss://.../agent,得到(前 200 字) %s", firstN(s, 200))
 	}
-	if strings.Contains(s, "__GO_RMM_") {
-		t.Errorf("占位符应全部被替换,仍残留 __GO_RMM_")
+	if strings.Contains(s, "__REINS_") {
+		t.Errorf("占位符应全部被替换,仍残留 __REINS_")
 	}
 	// 主 Token(cfg.Token)绝不烘焙——本端点未鉴权,防管理凭据随脚本泄漏。
 	// 烘焙值不是主 Token(install.ps1 源文件为两空格格式,两种空格形态都查)。
@@ -84,8 +84,8 @@ func TestInstallScriptBakesInstallToken(t *testing.T) {
 	if !strings.Contains(s, `"deploy-tok-123"`) {
 		t.Errorf("脚本应烘焙部署专用 Token deploy-tok-123")
 	}
-	if strings.Contains(s, "__GO_RMM_") {
-		t.Errorf("占位符应全部被替换,仍残留 __GO_RMM_")
+	if strings.Contains(s, "__REINS_") {
+		t.Errorf("占位符应全部被替换,仍残留 __REINS_")
 	}
 }
 
@@ -104,8 +104,8 @@ func TestInstallScriptDerivesFromRequestHost(t *testing.T) {
 	if !strings.Contains(s, "ws://10.1.2.3:9999/agent") {
 		t.Errorf("脚本应派生 ws://10.1.2.3:9999/agent,得到(前 200 字) %s", firstN(s, 200))
 	}
-	if strings.Contains(s, "__GO_RMM_") {
-		t.Errorf("占位符应全部被替换,仍残留 __GO_RMM_")
+	if strings.Contains(s, "__REINS_") {
+		t.Errorf("占位符应全部被替换,仍残留 __REINS_")
 	}
 }
 
@@ -125,8 +125,8 @@ func TestInstallScriptXForwardedProto(t *testing.T) {
 	if !strings.Contains(s, "wss://example.com/agent") {
 		t.Errorf("脚本应派生 wss://example.com/agent,得到(前 200 字) %s", firstN(s, 200))
 	}
-	if strings.Contains(s, "__GO_RMM_") {
-		t.Errorf("占位符应全部被替换,仍残留 __GO_RMM_")
+	if strings.Contains(s, "__REINS_") {
+		t.Errorf("占位符应全部被替换,仍残留 __REINS_")
 	}
 }
 

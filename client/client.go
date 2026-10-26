@@ -1,4 +1,4 @@
-// Package client 提供 go-rmm Relay API 的 Go SDK(L3 神级提升)。
+// Package client 提供 reins Relay API 的 Go SDK(L3 神级提升)。
 //
 // 第三方程序(运维平台/CMDB/监控系统)可直接 import 调用,无需手抄 HTTP。
 //
@@ -18,10 +18,10 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
-// Client go-rmm Relay API 客户端。
+// Client reins Relay API 客户端。
 type Client struct {
 	baseURL string
 	token   string

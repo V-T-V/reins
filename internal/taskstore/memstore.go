@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // MemoryStore 内存版 TaskStore。

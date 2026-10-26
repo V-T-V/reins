@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // UpdateRepo Agent 二进制版本仓库。

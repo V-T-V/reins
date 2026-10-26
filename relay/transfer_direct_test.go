@@ -22,7 +22,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // directGrantSink 线程安全收集 fake Agent 收到的票据推送(race 检测合规:
@@ -112,7 +112,7 @@ func TestTransferDirectTicketE2E(t *testing.T) {
 	srvURL := startDirectFakeAgent(t, []string{"192.168.1.5:7783", "10.0.0.7:7783"}, sink)
 
 	resp, err := http.Post(srvURL+"/api/transfer/direct", "application/json",
-		strings.NewReader(`{"agent_id":"direct-agent","path":"C:\\go-rmm\\ws\\big.tar","direction":"upload"}`))
+		strings.NewReader(`{"agent_id":"direct-agent","path":"C:\\reins\\ws\\big.tar","direction":"upload"}`))
 	if err != nil {
 		t.Fatalf("请求失败: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestTransferDirectTicketE2E(t *testing.T) {
 		t.Errorf("SecretHash 与明文 secret 不对拍: agent=%s sha256(secret)=%s",
 			gotGrant.SecretHash, hex.EncodeToString(sum[:]))
 	}
-	if gotGrant.Path != `C:\go-rmm\ws\big.tar` || gotGrant.Direction != "upload" {
+	if gotGrant.Path != `C:\reins\ws\big.tar` || gotGrant.Direction != "upload" {
 		t.Errorf("票据绑定字段不符: %+v", gotGrant)
 	}
 	if gotGrant.ExpiryUnix <= time.Now().Unix() {

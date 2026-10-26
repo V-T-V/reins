@@ -72,12 +72,12 @@ func StartWatchdog(cfg Config) {
 }
 
 // DerivedSlaveServiceName 推导从的服务名。
-// slave 的服务名通常是 go-rmm-slave,但允许从 config 推导。
+// slave 的服务名通常是 reins-slave,但允许从 config 推导。
 func (c Config) DerivedSlaveServiceName() string {
 	// 从的服务名:如果 slave 显式配了 ServiceName 用它,否则按 slave role 推导
-	// 注意:这里我们无法读到 slave 的 config,用约定:go-rmm-slave
+	// 注意:这里我们无法读到 slave 的 config,用约定:reins-slave
 	// (主从配对时 install.ps1 会保证命名一致)
-	return "go-rmm-slave"
+	return "reins-slave"
 }
 
 // watchdogLoop 看门狗主循环。
@@ -142,11 +142,11 @@ func rescueSlave(cfg Config, slaveSvc string, attempt int) string {
 // 回滚后由 SCM 的 OnFailure=restart 自动拉起旧版本。
 //
 // 路径约定:
-//   - 从 exe: <SlaveExeDir>/go-rmm-slave.exe
-//   - 备份:   <SlaveExeDir>/go-rmm-slave.exe.bak
-//   - 损坏:   <SlaveExeDir>/go-rmm-slave.exe.bad
+//   - 从 exe: <SlaveExeDir>/reins-slave.exe
+//   - 备份:   <SlaveExeDir>/reins-slave.exe.bak
+//   - 损坏:   <SlaveExeDir>/reins-slave.exe.bad
 func rollbackSlave(cfg Config) bool {
-	slaveExe := filepath.Join(cfg.SlaveExeDir, "go-rmm-slave.exe")
+	slaveExe := filepath.Join(cfg.SlaveExeDir, "reins-slave.exe")
 	bakPath := slaveExe + ".bak"
 	badPath := slaveExe + ".bad"
 

@@ -2,13 +2,13 @@
 
 ## Scope
 
-This policy covers the go-rmm repository (relay, agent, CLI, SDK, protocol, web console). It applies to all released binaries and the default branch.
+This policy covers the reins repository (relay, agent, CLI, SDK, protocol, web console). It applies to all released binaries and the default branch.
 
 ## Reporting a vulnerability
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-- Email: security@go-rmm.dev *(placeholder — replace with a monitored mailbox before public launch)*
+- Email: security@reins.dev *(placeholder — replace with a monitored mailbox before public launch)*
 - Include: affected version/tag, reproduction steps (PoC), impact assessment, and any relevant logs.
 - Please withhold public disclosure until the fix is released.
 
@@ -32,7 +32,7 @@ Every release publishes a `SHA256SUMS` file. Verify before deploying:
 
 ```powershell
 # Windows
-Get-FileHash .\go-rmm-agent-windows-amd64.exe -Algorithm SHA256
+Get-FileHash .\reins-agent-windows-amd64.exe -Algorithm SHA256
 ```
 
 ```bash
@@ -55,4 +55,4 @@ Known limits (documented, by design): the default command blacklist is best-effo
 
 ## Responsible use
 
-go-rmm is intended for managing machines you own or are contractually authorized to manage. Building stealth, anti-detection, or anonymous-access functionality into this project will not be accepted.
+reins is intended for managing machines you own or are contractually authorized to manage. Building stealth, anti-detection, or anonymous-access functionality into this project will not be accepted.

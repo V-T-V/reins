@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/internal/taskstore"
+	"github.com/QiuShichang/reins/internal/taskstore"
 )
 
 // TestTenantPersistenceRoundTrip 实证组织持久化往返:

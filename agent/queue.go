@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // resultQueue 缓存待发送的任务结果。

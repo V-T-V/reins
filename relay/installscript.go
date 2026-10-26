@@ -10,10 +10,10 @@ import (
 
 // install.ps1 内的地址占位符(服务时替换为真实外部地址)。
 const (
-	phServerURL = "__GO_RMM_SERVER_URL__"
-	phRelayURL  = "__GO_RMM_RELAY_URL__"
+	phServerURL = "__REINS_SERVER_URL__"
+	phRelayURL  = "__REINS_RELAY_URL__"
 
-	phInstallToken = "__GO_RMM_TOKEN__" // 部署专用 Token(-install-token;空则替换为空串)
+	phInstallToken = "__REINS_TOKEN__" // 部署专用 Token(-install-token;空则替换为空串)
 )
 
 // externalURLs 推导 Relay 对外可达的 Server / Agent WS 地址(供 install.ps1 烘焙)。

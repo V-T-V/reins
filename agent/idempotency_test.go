@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TestIdempotencyCacheHitMiss 验证幂等缓存命中/未命中。

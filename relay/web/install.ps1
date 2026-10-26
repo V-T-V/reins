@@ -1,5 +1,5 @@
 ﻿# ╔══════════════════════════════════════════════════════════════╗
-# ║  go-rmm Agent 一行命令远程部署 — Windows(无脑化版)           ║
+# ║  reins Agent 一行命令远程部署 — Windows(无脑化版)           ║
 # ║  在目标 Win10 机器上执行一行命令即可自动下载+安装+注册服务     ║
 # ╚══════════════════════════════════════════════════════════════╝
 #
@@ -16,7 +16,7 @@
 #
 #   #   · Relay 仅配主 Token(未配 -install-token)时,补一个参数:
 #   & ([scriptblock]::Create((((irm 'https://203.0.113.99/rmm/install.ps1') -replace '^\uFEFF') -replace '^\u00EF\u00BB\u00BF'))) -Token 'xxx'
-#   #   · 或先设环境变量再零参数运行:  $env:GO_RMM_TOKEN = 'xxx'
+#   #   · 或先设环境变量再零参数运行:  $env:REINS_TOKEN = 'xxx'
 #
 #   # 方式2:显式参数(先下载脚本再跑;烘焙地址存在时参数全部可省)
 #   irm 'https://203.0.113.99/rmm/install.ps1' -OutFile install.ps1
@@ -40,8 +40,8 @@ param(
     [string]$Token = "",
     [string]$AgentId = "",
     [string[]]$Tags = @(),
-    [string]$InstallDir = "C:\Program Files\go-rmm",
-    [string]$Workspace = "C:\go-rmm\workspace",
+    [string]$InstallDir = "C:\Program Files\reins",
+    [string]$Workspace = "C:\reins\workspace",
     [switch]$Foreground,
     [switch]$Uninstall,
     # M1 主从架构:支持装 master/slave 角色
@@ -59,33 +59,33 @@ $ProgressPreference = 'SilentlyContinue'
 # Relay 在 /install.ps1 服务时注入本机外部地址与部署专用 Token(如已配置
 # -install-token),使零参数 iex 全自动部署——地址与 Token 都无需中间传递。
 # 占位符未被替换(静态副本/直接读源码)时视为空,走交互兜底。
-$BakedServer = "__GO_RMM_SERVER_URL__"
-$BakedRelay  = "__GO_RMM_RELAY_URL__"
-$BakedToken  = "__GO_RMM_TOKEN__"
+$BakedServer = "__REINS_SERVER_URL__"
+$BakedRelay  = "__REINS_RELAY_URL__"
+$BakedToken  = "__REINS_TOKEN__"
 if ($BakedServer -match '^__.*__$') { $BakedServer = "" }
 if ($BakedRelay  -match '^__.*__$') { $BakedRelay  = "" }
 if ($BakedToken  -match '^__.*__$') { $BakedToken  = "" }
 
 # 服务名按 Role 推导
 $ServiceName = switch ($Role) {
-    "master" { "go-rmm-master" }
-    "slave"  { "go-rmm-slave" }
-    default  { "go-rmm-agent" }
+    "master" { "reins-master" }
+    "slave"  { "reins-slave" }
+    default  { "reins-agent" }
 }
 
 # 主从模式默认目录
-if ($Role -eq "master" -and $InstallDir -eq "C:\Program Files\go-rmm") {
-    $InstallDir = "C:\Program Files\go-rmm-master"
-    $Workspace = "C:\go-rmm\master-workspace"
+if ($Role -eq "master" -and $InstallDir -eq "C:\Program Files\reins") {
+    $InstallDir = "C:\Program Files\reins-master"
+    $Workspace = "C:\reins\master-workspace"
 }
-if ($Role -eq "slave" -and $InstallDir -eq "C:\Program Files\go-rmm") {
-    $InstallDir = "C:\Program Files\go-rmm-slave"
-    $Workspace = "C:\go-rmm\slave-workspace"
+if ($Role -eq "slave" -and $InstallDir -eq "C:\Program Files\reins") {
+    $InstallDir = "C:\Program Files\reins-slave"
+    $Workspace = "C:\reins\slave-workspace"
 }
 
 # 前台模式(无需管理员):默认装到用户目录
-if ($Foreground -and $InstallDir -eq "C:\Program Files\go-rmm") {
-    $InstallDir = Join-Path $env:LOCALAPPDATA "go-rmm"
+if ($Foreground -and $InstallDir -eq "C:\Program Files\reins") {
+    $InstallDir = Join-Path $env:LOCALAPPDATA "reins"
 }
 
 # === 辅助函数 ===
@@ -134,10 +134,10 @@ function Wait-AgentOnline([string]$ApiBase, [string]$Tok, [string]$WantId, [int]
 
 # === 卸载模式 ===
 if ($Uninstall) {
-    Write-Host "go-rmm Agent 卸载" -ForegroundColor Cyan
-    $exePath = Join-Path $InstallDir "go-rmm-agent.exe"
-    if ($InstallDir -eq "C:\Program Files\go-rmm") {
-        foreach ($p in @("$env:LOCALAPPDATA\go-rmm\go-rmm-agent.exe", "C:\Program Files\go-rmm\go-rmm-agent.exe")) {
+    Write-Host "reins Agent 卸载" -ForegroundColor Cyan
+    $exePath = Join-Path $InstallDir "reins-agent.exe"
+    if ($InstallDir -eq "C:\Program Files\reins") {
+        foreach ($p in @("$env:LOCALAPPDATA\reins\reins-agent.exe", "C:\Program Files\reins\reins-agent.exe")) {
             if (Test-Path $p) { $exePath = $p; break }
         }
     }
@@ -148,7 +148,7 @@ if ($Uninstall) {
             Write-OK "服务已卸载"
         } catch { Write-Info "服务未注册或已卸载" }
     } else {
-        Write-Info "未找到 go-rmm-agent.exe(可能本机未安装)"
+        Write-Info "未找到 reins-agent.exe(可能本机未安装)"
     }
     exit 0
 }
@@ -173,7 +173,7 @@ if (-not $Foreground) {
             if ($SlaveExeDir)  { $extra += " -SlaveExeDir $(Quote-PSVal $SlaveExeDir)" }
             if ($SlaveAgentId) { $extra += " -SlaveAgentId $(Quote-PSVal $SlaveAgentId)" }
             if ($extra) { $inner = "& ([scriptblock]::Create((((irm $(Quote-PSVal $scriptUrl)) -replace '^\uFEFF') -replace '^\u00EF\u00BB\u00BF')))" + $extra }
-            $elevScript = Join-Path $env:TEMP "go-rmm-elevate-$(Get-Random).ps1"
+            $elevScript = Join-Path $env:TEMP "reins-elevate-$(Get-Random).ps1"
             $inner += "; `$null = Read-Host '部署结束,按回车关闭'; Remove-Item -LiteralPath $(Quote-PSVal $elevScript) -ErrorAction SilentlyContinue"
             [System.IO.File]::WriteAllText($elevScript, $inner, (New-Object System.Text.UTF8Encoding $true))
             try {
@@ -204,7 +204,7 @@ if (-not $Server) {
     } else {
         # 交互兜底(仅当脚本未经 Relay 服务且未传任何参数)
         Write-Host ""
-        Write-Host "go-rmm Agent 部署向导" -ForegroundColor Cyan
+        Write-Host "reins Agent 部署向导" -ForegroundColor Cyan
         $Server = Read-Host "请输入 Relay 地址(如 http://203.0.113.99:7780)"
         if (-not $Server) { Write-Err "Server 地址必填"; exit 1 }
     }
@@ -221,15 +221,15 @@ if (-not $Relay) {
     }
 }
 
-# Token 优先级: 显式参数 > 环境变量 GO_RMM_TOKEN > 烘焙值(Relay -install-token 注入) > 留空(dev)。
+# Token 优先级: 显式参数 > 环境变量 REINS_TOKEN > 烘焙值(Relay -install-token 注入) > 留空(dev)。
 # 若 Relay 实际启用了鉴权,由下方 API 预检发现 401 后再补问,不做无谓提问。
-if (-not $Token) { $Token = $env:GO_RMM_TOKEN }
+if (-not $Token) { $Token = $env:REINS_TOKEN }
 if (-not $Token) { $Token = $BakedToken }
 
 # === 横幅 ===
 Write-Host ""
 Write-Host "═══════════════════════════════════════════════════════════════"
-Write-Host " go-rmm Agent $Version 远程部署" -ForegroundColor Cyan
+Write-Host " reins Agent $Version 远程部署" -ForegroundColor Cyan
 Write-Host "═══════════════════════════════════════════════════════════════"
 Write-Host "  Server:    $Server"
 Write-Host "  Relay:     $Relay"
@@ -272,7 +272,7 @@ if (-not $Foreground) {
     if ($status -eq 401) {
         if (-not $Token) {
             if (-not [Environment]::UserInteractive) {
-                Write-Err "Relay 启用了鉴权,需要 Token:请加 -Token 参数或设 `$env:GO_RMM_TOKEN 后重跑"
+                Write-Err "Relay 启用了鉴权,需要 Token:请加 -Token 参数或设 `$env:REINS_TOKEN 后重跑"
                 exit 1
             }
             $Token = Read-Host "Relay 启用了鉴权,请输入 Token"
@@ -305,14 +305,14 @@ $DataDir = Join-Path $InstallDir "data"
 New-Item -ItemType Directory -Force -Path $DataDir    | Out-Null
 
 # === 下载二进制 ===
-# M1:exe 名按 Role 区分(master/slave/默认),但都从同一个 dl/go-rmm-agent.exe 下载
+# M1:exe 名按 Role 区分(master/slave/默认),但都从同一个 dl/reins-agent.exe 下载
 $exeName = switch ($Role) {
-    "master" { "go-rmm-master.exe" }
-    "slave"  { "go-rmm-slave.exe" }
-    default  { "go-rmm-agent.exe" }
+    "master" { "reins-master.exe" }
+    "slave"  { "reins-slave.exe" }
+    default  { "reins-agent.exe" }
 }
 $dstExe = Join-Path $InstallDir $exeName
-$dlUrl = "$Server/dl/go-rmm-agent.exe"
+$dlUrl = "$Server/dl/reins-agent.exe"
 
 Write-Step "下载 Agent 二进制: $dlUrl"
 # 增加重试(大文件首次下载可能慢)
@@ -424,7 +424,7 @@ if ($isRunning) {
 if ($isRunning -and $onlineInfo -and $onlineInfo.online) {
     Write-Host ""
     Write-Host "═══════════════════════════════════════════════════════════════"
-    Write-Host " ✅  go-rmm Agent 部署成功(已在 Relay 上线确认)!" -ForegroundColor Green
+    Write-Host " ✅  reins Agent 部署成功(已在 Relay 上线确认)!" -ForegroundColor Green
     Write-Host "═══════════════════════════════════════════════════════════════"
     Write-Host "  服务名:    $ServiceName"
     Write-Host "  Agent ID:  $($onlineInfo.agents[0].agent_id)"
@@ -441,20 +441,20 @@ if ($isRunning -and $onlineInfo -and $onlineInfo.online) {
     Write-Host "   卸载:     .\install.ps1 -Uninstall -Server $Server"
     Write-Host ""
     Write-Host " 在控制端验证:" -ForegroundColor Yellow
-    Write-Host "   go-rmm --relay $Server agent list"
+    Write-Host "   reins --relay $Server agent list"
     Write-Host "═══════════════════════════════════════════════════════════════"
 } elseif ($isRunning) {
     Write-Host ""
     Write-Host "⚠️  服务已运行,但未完成上线确认(不影响服务本身),排查步骤:" -ForegroundColor Yellow
-    Write-Info "1. 稍后手动核对: go-rmm --relay $Server agent list"
+    Write-Info "1. 稍后手动核对: reins --relay $Server agent list"
     Write-Info "2. 前台调试:     .\install.ps1 -Server $Server -Foreground"
-    Write-Info "3. 事件日志:     Get-EventLog -LogName Application -Source go-rmm-agent -Newest 20"
+    Write-Info "3. 事件日志:     Get-EventLog -LogName Application -Source reins-agent -Newest 20"
     Write-Info "4. 网络连通:     Test-NetConnection $testHost -Port $testPort"
     Write-Info "5. 若 Relay 启用了鉴权,确认 Token 正确后重跑本命令"
 } else {
     Write-Host ""
     Write-Host "⚠️  服务已安装但状态异常,排查步骤:" -ForegroundColor Yellow
     Write-Info "1. 前台调试: .\install.ps1 -Server $Server -Relay $Relay -Foreground"
-    Write-Info "2. 事件日志: Get-EventLog -LogName Application -Source go-rmm-agent -Newest 20"
+    Write-Info "2. 事件日志: Get-EventLog -LogName Application -Source reins-agent -Newest 20"
     Write-Info "3. 网络连通: Test-NetConnection $testHost -Port $testPort"
 }

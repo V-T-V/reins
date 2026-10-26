@@ -2,7 +2,7 @@
 
 ## 先说结论
 
-远程运维 Agent 的行为特征——**常驻服务 + 命令执行 + 文件写入 + 屏幕捕获 + 输入注入**——与安全引擎的远程管理风险模型天然重叠。**少量引擎报毒是本品类的行业常态**,不是 go-rmm 被"黑"的证据:
+远程运维 Agent 的行为特征——**常驻服务 + 命令执行 + 文件写入 + 屏幕捕获 + 输入注入**——与安全引擎的远程管理风险模型天然重叠。**少量引擎报毒是本品类的行业常态**,不是 reins 被"黑"的证据:
 
 - MeshCentral 的 agent 曾被 Windows Defender 标记为木马,维护者的官方答复是让用户加白名单;**持有有效数字签名的版本仍被 Kaspersky 报过**([MeshCentral #7468](https://github.com/Ylianst/MeshCentral/issues/7468)、[#7256](https://github.com/Ylianst/MeshCentral/discussions/7256))。
 - TacticalRMM 官方文档[专设杀软页面](https://docs.tacticalrmm.com/av/),原话是"这个领域充满各种灰色地带的误报"。
@@ -13,7 +13,7 @@
 ## 第一步:核对哈希(每次都要做)
 
 ```powershell
-Get-FileHash .\go-rmm-agent-windows-amd64.exe -Algorithm SHA256
+Get-FileHash .\reins-agent-windows-amd64.exe -Algorithm SHA256
 # 与 Release 页 SHA256SUMS 逐位比对
 ```
 
@@ -24,11 +24,11 @@ Get-FileHash .\go-rmm-agent-windows-amd64.exe -Algorithm SHA256
 安装路径加入排除(管理员 PowerShell):
 
 ```powershell
-Add-MpPreference -ExclusionPath "C:\Program Files\go-rmm"
-Add-MpPreference -ExclusionProcess "go-rmm-agent.exe"
+Add-MpPreference -ExclusionPath "C:\Program Files\reins"
+Add-MpPreference -ExclusionProcess "reins-agent.exe"
 ```
 
-> 排除路径会降低该目录的防护等级,请只对 go-rmm 的安装目录使用,并遵守组织的安全策略。
+> 排除路径会降低该目录的防护等级,请只对 reins 的安装目录使用,并遵守组织的安全策略。
 
 ## 提交误报申诉(维护者会在每个 Release 后统一提交,个人用户也可以)
 
@@ -48,4 +48,4 @@ Add-MpPreference -ExclusionProcess "go-rmm-agent.exe"
 
 ## 代码签名现状
 
-见仓库 Release 公告——签名证书到位前,请一律以 **SHA256SUMS + 源码构建** 作为信任锚:go-rmm 是纯 Go 无 C 依赖,`go build ./cmd/go-rmm` 与 `go build ./cmd/go-rmm-agent`(或 `make build`)可从源码复现等价二进制,供应链完全可审计。
+见仓库 Release 公告——签名证书到位前,请一律以 **SHA256SUMS + 源码构建** 作为信任锚:reins 是纯 Go 无 C 依赖,`go build ./cmd/reins` 与 `go build ./cmd/reins-agent`(或 `make build`)可从源码复现等价二进制,供应链完全可审计。

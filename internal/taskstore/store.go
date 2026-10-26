@@ -12,7 +12,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TaskStore 任务持久化接口(M4 神级提升)。

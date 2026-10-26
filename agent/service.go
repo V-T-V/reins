@@ -11,7 +11,7 @@ import (
 
 	svc "github.com/kardianos/service"
 
-	"github.com/QiuShichang/go-rmm/executors"
+	"github.com/QiuShichang/reins/executors"
 )
 
 // program 实现 svc.Interface，由 kardianos 在服务模式下驱动。
@@ -66,17 +66,17 @@ func (p *program) run() {
 // M1 主从架构:服务名按 Role 推导(master/slave/兼容),避免主从注册冲突。
 func serviceConfig(cfg Config) *svc.Config {
 	name := cfg.DerivedServiceName()
-	displayName := "go-rmm Remote Agent"
+	displayName := "reins Remote Agent"
 	switch cfg.Role {
 	case "master":
-		displayName = "go-rmm Master Agent (稳定,管从)"
+		displayName = "reins Master Agent (稳定,管从)"
 	case "slave":
-		displayName = "go-rmm Slave Agent (业务,可更新)"
+		displayName = "reins Slave Agent (业务,可更新)"
 	}
 	return &svc.Config{
 		Name:        name,
 		DisplayName: displayName,
-		Description: "go-rmm 远程自动化执行 Agent——经反向 WebSocket 连接中继服务器,执行下发的自动化任务。",
+		Description: "reins 远程自动化执行 Agent——经反向 WebSocket 连接中继服务器,执行下发的自动化任务。",
 		// Arguments:服务启动时调用的参数。kardianos 会自动加上可执行文件路径。
 		// 这里不带子命令(空参 = run 模式),从配置文件读 Relay 地址。
 		Arguments: []string{},

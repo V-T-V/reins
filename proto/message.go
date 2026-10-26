@@ -1,4 +1,4 @@
-// Package proto 定义 go-rmm 三组件（Relay / Agent / Console）共享的通信协议。
+// Package proto 定义 reins 三组件（Relay / Agent / Console）共享的通信协议。
 //
 // 所有 WebSocket 与 HTTP 消息都使用统一的 Envelope 信封包装，通过 Type 字段区分种类，
 // Payload 为原始 JSON，由收件方按 Type 反序列化为对应结构体。
@@ -226,11 +226,11 @@ type TaskRequest struct {
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
 	// Attempt 第几次投递（Relay 重投时递增，Agent 可据此判断是否重复）。
 	Attempt int `json:"attempt,omitempty"`
-	// RulesAck 项目规则回执：请求方已读取目标 Agent 上 .go-rmm/rules.md 的证明
+	// RulesAck 项目规则回执：请求方已读取目标 Agent 上 .reins/rules.md 的证明
 	// （rules read 命令输出的 ack 串，本质是规则内容指纹）。Agent 开启
 	// rules_gate 门禁时，变更类任务(powershell/script/browse/guiclick/update/power)
 	// 必须携带与当前规则一致的 ack 才执行——规则变更后旧 ack 失效，强制重新读取。
-	// 设计意图：AI/自动化运维在操作被部署项目前，必须先 `go-rmm rules read`
+	// 设计意图：AI/自动化运维在操作被部署项目前，必须先 `reins rules read`
 	// 加载项目定制规则并遵守。门禁默认关闭(向后兼容)，Agent config rules_gate 开启。
 	RulesAck string `json:"rules_ack,omitempty"`
 }
@@ -280,10 +280,10 @@ type FileTask struct {
 	ChunkIndex  int    `json:"chunk_index,omitempty"`  // 当前分块序号（从 0 开始）
 	TotalChunks int    `json:"total_chunks,omitempty"` // 总分块数
 	UploadID    string `json:"upload_id,omitempty"`    // 分块会话 ID（同一文件的分块共享）
-	// rules: 读取项目规则文件(.go-rmm/rules.md)——Path 指定项目目录时读
-	// <Path>/.go-rmm/rules.md；Path 为空时在允许根目录内自动发现(深度受限)。
+	// rules: 读取项目规则文件(.reins/rules.md)——Path 指定项目目录时读
+	// <Path>/.reins/rules.md；Path 为空时在允许根目录内自动发现(深度受限)。
 	// 返回 Data: {files:[{path,bytes,sha256_16,content}], ack:"<组合指纹>"}。
-	// 供 `go-rmm rules read` 使用；内容随 Data 返回(base64 明文,非 ContentB64)。
+	// 供 `reins rules read` 使用；内容随 Data 返回(base64 明文,非 ContentB64)。
 }
 
 // ScreenshotTask 截图任务。

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TestWorkerPoolLimitsConcurrency 验证 F3 修复：worker pool 限制并发数。

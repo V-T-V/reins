@@ -8,8 +8,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/go-rmm/internal/wsx"
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/internal/wsx"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // wsConn 对 WebSocket 连接的封装:优先级写引擎(共享 internal/wsx)+

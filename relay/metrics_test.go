@@ -70,11 +70,11 @@ func TestPromMetricsIncludesXfer(t *testing.T) {
 	promText := buildPromForTest(snap)
 
 	requiredProm := []string{
-		"gormmm_xfer_uploads_total",
-		"gormmm_xfer_download_bytes_total",
-		"gormmm_xfer_upload_failures_total",
-		"# HELP gormmm_xfer_upload_bytes_total",
-		"# TYPE gormmm_xfer_upload_bytes_total counter",
+		"reins_xfer_uploads_total",
+		"reins_xfer_download_bytes_total",
+		"reins_xfer_upload_failures_total",
+		"# HELP reins_xfer_upload_bytes_total",
+		"# TYPE reins_xfer_upload_bytes_total counter",
 	}
 	for _, p := range requiredProm {
 		if !strings.Contains(promText, p) {
@@ -82,7 +82,7 @@ func TestPromMetricsIncludesXfer(t *testing.T) {
 		}
 	}
 	// 值验证
-	if !strings.Contains(promText, "gormmm_xfer_upload_bytes_total 1024") {
+	if !strings.Contains(promText, "reins_xfer_upload_bytes_total 1024") {
 		t.Errorf("Prometheus 输出应包含 upload_bytes=1024, got:\n%s", promText)
 	}
 }
@@ -173,8 +173,8 @@ func TestMetricsConcurrentInc(t *testing.T) {
 	}
 }
 
-// TestPromMetricsNamespaceConsistency 验证所有 Prom 指标名都用统一 gormmm_ 前缀。
-// 回归:agents_online 曾误写为 gormm_(两 m),破坏 PromQL 命名空间匹配。
+// TestPromMetricsNamespaceConsistency 验证所有 Prom 指标名都用统一 reins_ 前缀。
+// 回归史:曾误写为 gormm_(两 m)破坏 PromQL 命名空间匹配;v4.8.0 品牌重命名后旧前缀 gormmm_ 全量退役。
 func TestPromMetricsNamespaceConsistency(t *testing.T) {
 	metrics = &Metrics{StartedAt: time.Now()}
 	metrics.SetAgentsOnline(3)
@@ -187,25 +187,24 @@ func TestPromMetricsNamespaceConsistency(t *testing.T) {
 	}
 	body := rec.Body.String()
 
-	// 1. agents_online 必须以 gormmm_ 暴露(三 m)
-	if !strings.Contains(body, "gormmm_agents_online") {
-		t.Errorf("输出应含 gormmm_agents_online(三 m 前缀):\n%s", body)
+	// 1. agents_online 必须以 reins_ 暴露
+	if !strings.Contains(body, "reins_agents_online") {
+		t.Errorf("输出应含 reins_agents_online 前缀:\n%s", body)
 	}
-	// 2. 任何指标名不得使用 gormm_(两 m,后非第三个 m)
-	//    匹配 "gormm_" 但非 "gormmm_" 的行
+	// 2. 任何指标行不得残留旧前缀(gormm_ 两 m / gormmm_ 三 m)
 	for _, line := range strings.Split(body, "\n") {
 		// 跳过注释行(# HELP / # TYPE)
 		if strings.HasPrefix(line, "#") {
 			continue
 		}
-		if strings.Contains(line, "gormm_") && !strings.Contains(line, "gormmm_") {
-			t.Errorf("指标使用了不一致的前缀 gormm_(两 m): %q", line)
+		if strings.Contains(line, "gormm_") || strings.Contains(line, "gormmm_") {
+			t.Errorf("指标残留了重命名前的旧前缀: %q", line)
 		}
 	}
 	// 3. HELP/TYPE 注释也应一致
-	helpLines := strings.Count(body, "# HELP gormmm_")
+	helpLines := strings.Count(body, "# HELP reins_")
 	if helpLines < 10 {
-		t.Errorf("gormmm_ HELP 行数=%d 期望 >=10", helpLines)
+		t.Errorf("reins_ HELP 行数=%d 期望 >=10", helpLines)
 	}
 }
 
@@ -217,11 +216,11 @@ func buildPromForTest(snap map[string]any) string {
 		sb.WriteString("# TYPE " + name + " " + typ + "\n")
 		sb.WriteString(name + " " + strconv.FormatInt(val, 10) + "\n")
 	}
-	writeProm("gormmm_xfer_uploads_total", "累计上传次数(成功)", "counter", toInt64(snap["xfer_uploads_total"]))
-	writeProm("gormmm_xfer_downloads_total", "累计下载次数", "counter", toInt64(snap["xfer_downloads_total"]))
-	writeProm("gormmm_xfer_upload_bytes_total", "累计上传字节", "counter", toInt64(snap["xfer_upload_bytes"]))
-	writeProm("gormmm_xfer_download_bytes_total", "累计下载字节", "counter", toInt64(snap["xfer_download_bytes"]))
-	writeProm("gormmm_xfer_upload_failures_total", "上传失败次数", "counter", toInt64(snap["xfer_upload_failures"]))
-	writeProm("gormmm_xfer_download_failures_total", "下载失败次数", "counter", toInt64(snap["xfer_download_failures"]))
+	writeProm("reins_xfer_uploads_total", "累计上传次数(成功)", "counter", toInt64(snap["xfer_uploads_total"]))
+	writeProm("reins_xfer_downloads_total", "累计下载次数", "counter", toInt64(snap["xfer_downloads_total"]))
+	writeProm("reins_xfer_upload_bytes_total", "累计上传字节", "counter", toInt64(snap["xfer_upload_bytes"]))
+	writeProm("reins_xfer_download_bytes_total", "累计下载字节", "counter", toInt64(snap["xfer_download_bytes"]))
+	writeProm("reins_xfer_upload_failures_total", "上传失败次数", "counter", toInt64(snap["xfer_upload_failures"]))
+	writeProm("reins_xfer_download_failures_total", "下载失败次数", "counter", toInt64(snap["xfer_download_failures"]))
 	return sb.String()
 }

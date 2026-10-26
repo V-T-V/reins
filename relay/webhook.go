@@ -6,7 +6,7 @@
 // 配置(flag 或环境变量,优先级 flag > env):
 //
 //	-webhooks "https://hooks.slack.com/...,https://oapi.dingtalk.com/..."
-//	或 GO_RMM_WEBHOOKS="url1,url2"
+//	或 REINS_WEBHOOKS="url1,url2"
 //
 // 触发事件(2026-09-14 收口:5 类事件全接线):
 //   - task_failed     任务执行失败(Agent 回传 result.Success=false)
@@ -49,11 +49,11 @@ func parseWebhookURLs(raw string) []string {
 }
 
 // initWebhooks 初始化 webhook URLs。
-// 优先级:flag 显式配置(-webhooks) > 环境变量(GO_RMM_WEBHOOKS)。
+// 优先级:flag 显式配置(-webhooks) > 环境变量(REINS_WEBHOOKS)。
 func initWebhooks(flagURLs string) {
 	urls := parseWebhookURLs(flagURLs)
 	if len(urls) == 0 {
-		urls = parseWebhookURLs(os.Getenv("GO_RMM_WEBHOOKS"))
+		urls = parseWebhookURLs(os.Getenv("REINS_WEBHOOKS"))
 	}
 	setWebhookURLs(urls)
 	if len(urls) > 0 {
@@ -78,7 +78,7 @@ func notifyWebhook(event string, payload map[string]any) {
 	}
 	// 构造通知体(通用 JSON,适配大多数 webhook 接收端)
 	notification := map[string]any{
-		"source":    "go-rmm",
+		"source":    "reins",
 		"event":     event,
 		"timestamp": time.Now().Format(time.RFC3339),
 		"data":      payload,

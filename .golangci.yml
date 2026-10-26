@@ -1,4 +1,4 @@
-# go-rmm golangci-lint 配置（v2 schema）
+# reins golangci-lint 配置（v2 schema）
 #
 # 背景：CI 的 build step 自仓库建立起就因二进制输出与源码目录撞名而必红，
 # lint 从未真正执行过。2026-08-16 首次启用：本轮已清零 gofmt(130)/

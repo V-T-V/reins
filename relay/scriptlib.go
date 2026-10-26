@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // ScriptLibrary 脚本库(文件系统态)。

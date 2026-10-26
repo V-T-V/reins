@@ -174,8 +174,8 @@ func TestSyslogRFC5424Structure(t *testing.T) {
 	if !strings.HasPrefix(s, "<") {
 		t.Fatal("应以 < 开头")
 	}
-	if !strings.Contains(s, " go-rmm relay ") {
-		t.Fatalf("应含 host=go-rmm app=relay, got: %s", s)
+	if !strings.Contains(s, " reins relay ") {
+		t.Fatalf("应含 host=reins app=relay, got: %s", s)
 	}
 }
 

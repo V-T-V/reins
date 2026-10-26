@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // === Buffer Pool 性能对比 ===

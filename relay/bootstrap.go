@@ -130,14 +130,14 @@ func (r *Relay) emitBootstrap(w http.ResponseWriter, serverURL, relayURL string)
 		OneLineDevCmd:    devCmd,
 		AgentBinaryReady: agentReady,
 		InstallScriptURL: serverURL + "/install.ps1",
-		AgentDownloadURL: serverURL + "/dl/go-rmm-agent.exe",
+		AgentDownloadURL: serverURL + "/dl/reins-agent.exe",
 	}
 	writeJSON(w, http.StatusOK, info)
 }
 
 // checkAgentBinaryReady 检查 dl/ 目录是否有可下载的 agent.exe。
 func checkAgentBinaryReady() bool {
-	path := filepath.Join(dlDir(), "go-rmm-agent.exe")
+	path := filepath.Join(dlDir(), "reins-agent.exe")
 	if fi, err := os.Stat(path); err == nil && fi.Size() > 1024*1024 {
 		return true
 	}

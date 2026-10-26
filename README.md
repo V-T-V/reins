@@ -1,12 +1,12 @@
-# go-rmm
+# Reins
 
-> **Self-hosted zero-trust remote operations platform.** One Go binary, zero inbound ports, your data never leaves your network.
+> **Take the reins of your fleet.** Self-hosted zero-trust remote operations platform — one Go binary, zero inbound ports, your data never leaves your network. And your AI agents touch a server only after reading the rules.
 
 [![Go](https://img.shields.io/badge/go-1.25+-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![CI](https://github.com/V-T-V/go-rmm/actions/workflows/ci.yml/badge.svg)](https://github.com/V-T-V/go-rmm/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/V-T-V/go-rmm?display_name=tag&sort=semver)](../../releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/QiuShichang/go-rmm/client.svg)](https://pkg.go.dev/github.com/QiuShichang/go-rmm/client)
+[![CI](https://github.com/V-T-V/reins/actions/workflows/ci.yml/badge.svg)](https://github.com/V-T-V/reins/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/V-T-V/reins?display_name=tag&sort=semver)](../../releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/QiuShichang/reins/client.svg)](https://pkg.go.dev/github.com/QiuShichang/reins/client)
 [![Tests](https://img.shields.io/badge/tests-558-brightgreen)]()
 [![CLI](https://img.shields.io/badge/CLI-50%2B%20commands-blue)]()
 
@@ -16,7 +16,7 @@
 ![demo](./docs/demo/demo-overview.gif)
 -->
 
-go-rmm lets a small team run remote operations on a fleet of Windows/Linux machines from one terminal: command execution, file transfer, interactive shell, port forwarding, multi-step deploy orchestration, batch dispatch, monitoring — over **reverse WebSocket connections** that traverse NAT without opening a single inbound port on your hosts.
+reins lets a small team run remote operations on a fleet of Windows/Linux machines from one terminal: command execution, file transfer, interactive shell, port forwarding, multi-step deploy orchestration, batch dispatch, monitoring — over **reverse WebSocket connections** that traverse NAT without opening a single inbound port on your hosts.
 
 It is an open-source alternative to Teleport (access plane) and MeshCentral/TacticalRMM (RMM), with enterprise primitives built in: **mTLS with a built-in CA and CRL, multi-tenant RBAC, a tamper-evident audit hash chain with SIEM export**, and a rules gate your **AI agents** must pass before they touch a server.
 
@@ -28,7 +28,7 @@ It is an open-source alternative to Teleport (access plane) and MeshCentral/Tact
                                  Prometheus /metrics + pprof                               power · monitor (TUI)
 ```
 
-## Why go-rmm
+## Why reins
 
 | | |
 |---|---|
@@ -36,13 +36,13 @@ It is an open-source alternative to Teleport (access plane) and MeshCentral/Tact
 | **Zero inbound ports** | Agents dial *out* over WebSocket/wss. Your hosts stay unreachable from the internet; NAT and home/office networks just work. |
 | **Enterprise security primitives** | mTLS with built-in CA, per-device client certs, CRL revocation, `tenant:role:secret` RBAC tokens, command black/allow-lists enforced on both Relay and Agent, append-only audit hash chain, session recording (asciinema v2), secrets with TTL + one-time use. |
 | **Ops, not just remote desktop** | Batch dispatch with retries & live progress, DAG orchestration (dependency graphs, concurrency caps, failure cascade skip), deploy playbooks, process watchdog, cron, snapshots, network diagnostics, log aggregation. |
-| **AI-agent native** | A Go SDK exposes 30+ ops tools, and `.go-rmm/rules.md` gates machine operations: automation must *read the project's operation rules and carry a content-fingerprint ack* before executing — stale acks are rejected when rules change. |
+| **AI-agent native** | A Go SDK exposes 30+ ops tools, and `.reins/rules.md` gates machine operations: automation must *read the project's operation rules and carry a content-fingerprint ack* before executing — stale acks are rejected when rules change. |
 
 ## Quickstart
 
 ```bash
-git clone https://github.com/V-T-V/go-rmm && cd go-rmm
-echo "GO_RMM_TOKEN=devtoken-please-change" > .env
+git clone https://github.com/V-T-V/reins && cd reins
+echo "REINS_TOKEN=devtoken-please-change" > .env
 docker compose up -d          # Relay on http://localhost:7780 (web console included)
 
 # install a Windows agent on a target machine — one line, no pre-setup:
@@ -50,11 +50,11 @@ docker compose up -d          # Relay on http://localhost:7780 (web console incl
 iex (((irm 'http://<relay-host>:7780/install.ps1') -replace '^\uFEFF'))
 
 # from your workstation:
-go-rmm --relay http://<relay-host>:7780 --token devtoken-please-change agent list
-go-rmm --relay http://<relay-host>:7780 --token devtoken-please-change task run -a <agent> -c "hostname"
+reins --relay http://<relay-host>:7780 --token devtoken-please-change agent list
+reins --relay http://<relay-host>:7780 --token devtoken-please-change task run -a <agent> -c "hostname"
 ```
 
-Linux agent: `./go-rmm-agent run -relay ws://<relay>:7780/agent -token <token>` (systemd unit in `deploy/`). Binaries for windows/linux/darwin are on the [Releases](../../releases) page. Production notes: [DEPLOYMENT.md](./DEPLOYMENT.md).
+Linux agent: `./reins-agent run -relay ws://<relay>:7780/agent -token <token>` (systemd unit in `deploy/`). Binaries for windows/linux/darwin are on the [Releases](../../releases) page. Production notes: [DEPLOYMENT.md](./DEPLOYMENT.md).
 
 ## Feature map
 
@@ -68,11 +68,11 @@ Linux agent: `./go-rmm-agent run -relay ws://<relay>:7780/agent -token <token>` 
 | Fleet admin | agent enroll/revoke, service/proc/power management, process watchdog, cron, self-update with health check & automatic rollback |
 | Security | mTLS + CA + CRL, RBAC (admin/operator/viewer) + org quotas & isolation, command policy (32-entry blacklist default, optional allow-only, enforced Relay- *and* Agent-side), audit hash chain + CEF/Syslog/JSON SIEM export, secrets (TTL, one-time), script library with path-traversal protection |
 
-Full CLI reference: run `go-rmm` (50+ commands, exit codes 0–5). API contract: [deploy/openapi.yaml](./deploy/openapi.yaml) (40+ endpoints).
+Full CLI reference: run `reins` (50+ commands, exit codes 0–5). API contract: [deploy/openapi.yaml](./deploy/openapi.yaml) (40+ endpoints).
 
 ## How it compares
 
-| | go-rmm | MeshCentral | TacticalRMM | Teleport | RustDesk |
+| | reins | MeshCentral | TacticalRMM | Teleport | RustDesk |
 |---|---|---|---|---|---|
 | License | **MIT** | Apache-2.0 | source-available | source-available¹ | AGPL-3.0 |
 | Server | **one Go binary** | Node.js | Django+Vue+Go+MQ | Go (heavy) | Rust |
@@ -87,7 +87,7 @@ Full CLI reference: run `go-rmm` (50+ commands, exit codes 0–5). API contract:
 
 ## Security & responsible use
 
-go-rmm is built for **managing machines you own or are contractually authorized to manage**. Unauthorized use is prohibited by the license and likely illegal in your jurisdiction.
+reins is built for **managing machines you own or are contractually authorized to manage**. Unauthorized use is prohibited by the license and likely illegal in your jurisdiction.
 
 Design choices that matter for defenders:
 
@@ -103,7 +103,7 @@ Vulnerability reporting: see [SECURITY.md](./SECURITY.md).
 ## AI agents on your fleet
 
 ```go
-import "github.com/QiuShichang/go-rmm/client"
+import "github.com/QiuShichang/reins/client"
 
 c := client.New("https://relay:7780", "token")
 tools, _ := c.ListTools()                       // 30+ ops tools for your agent
@@ -111,7 +111,7 @@ out, _  := c.RunCommand("agent-1", "Get-Date", 10)
 res, _  := c.StreamCommand(ctx, "agent-1", "ping 8.8.8.8", 30, func(ev string, d json.RawMessage) { fmt.Println(ev, string(d)) })
 ```
 
-Automation guardrail — `.go-rmm/rules.md` lives in the *managed project's* repo root (e.g. "never kill the kiosk shell during business hours", "exclude node_modules/ from deploys"). Agents must `rules read` (content-fingerprint ack, 30s cache) before mutation tasks are accepted; edit the rules and old acks are rejected immediately. The rejection never echoes the fingerprint, so "skip reading, replay the ack" doesn't work.
+Automation guardrail — `.reins/rules.md` lives in the *managed project's* repo root (e.g. "never kill the kiosk shell during business hours", "exclude node_modules/ from deploys"). Agents must `rules read` (content-fingerprint ack, 30s cache) before mutation tasks are accepted; edit the rules and old acks are rejected immediately. The rejection never echoes the fingerprint, so "skip reading, replay the ack" doesn't work.
 
 ## Project stats
 

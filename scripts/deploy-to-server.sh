@@ -1,6 +1,6 @@
 #!/bin/bash
 # ╔══════════════════════════════════════════════════════════╗
-# ║  go-rmm 部署到你的服务器(一键脚本)                   ║
+# ║  reins 部署到你的服务器(一键脚本)                   ║
 # ╚══════════════════════════════════════════════════════════╝
 #
 # 用法(在本地开发机执行):
@@ -16,7 +16,7 @@ set -euo pipefail
 SERVER="${SERVER:-203.0.113.99}"
 SSH_USER="${SSH_USER:-root}"
 SSH_ADDR="${SSH_ADDR:-$SSH_USER@$SERVER}"
-REMOTE_DIR="/opt/go-rmm"
+REMOTE_DIR="/opt/reins"
 VERSION="${VERSION:-v3.9.0}"
 RELAY_ADDR="127.0.0.1:7780"
 
@@ -25,7 +25,7 @@ ok()   { echo -e "${G}✅${N} $*"; }
 warn() { echo -e "${Y}⚠️${N} $*"; }
 die()  { echo -e "${R}✗${N} $*"; exit 1; }
 
-echo "🚀 部署 go-rmm $VERSION 到 $SERVER"
+echo "🚀 部署 reins $VERSION 到 $SERVER"
 echo ""
 
 # === Step 1: 交叉编译 Linux 二进制 ===
@@ -34,11 +34,11 @@ cd "$(dirname "$0")/.."
 
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags "-s -w -X main.version=$VERSION" \
-    -o /tmp/go-rmm-relay-linux ./relay/
+    -o /tmp/reins-relay-linux ./relay/
 
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags "-s -w -X main.version=$VERSION" \
-    -o /tmp/go-rmm-linux ./cmd/go-rmm/
+    -o /tmp/reins-linux ./cmd/reins/
 
 ok "编译完成"
 
@@ -46,38 +46,38 @@ ok "编译完成"
 ok "上传到 $SSH_ADDR:$REMOTE_DIR..."
 ssh "$SSH_ADDR" "mkdir -p $REMOTE_DIR/bin $REMOTE_DIR/data"
 
-scp /tmp/go-rmm-relay-linux "$SSH_ADDR:$REMOTE_DIR/bin/go-rmm-relay"
-scp /tmp/go-rmm-linux "$SSH_ADDR:$REMOTE_DIR/bin/go-rmm"
+scp /tmp/reins-relay-linux "$SSH_ADDR:$REMOTE_DIR/bin/reins-relay"
+scp /tmp/reins-linux "$SSH_ADDR:$REMOTE_DIR/bin/reins"
 scp nginx-rmm.conf "$SSH_ADDR:/tmp/nginx-rmm.conf"
-scp deploy/go-rmm-relay.service "$SSH_ADDR:/tmp/go-rmm-relay.service"
+scp deploy/reins-relay.service "$SSH_ADDR:/tmp/reins-relay.service"
 
 ok "上传完成"
 
 # === Step 3: 安装 systemd 服务 ===
 ok "安装 systemd 服务..."
 ssh "$SSH_ADDR" << 'EOF'
-chmod +x /opt/go-rmm/bin/go-rmm-relay /opt/go-rmm/bin/go-rmm
+chmod +x /opt/reins/bin/reins-relay /opt/reins/bin/reins
 
 # 安装 systemd 服务(如果不存在)
-if ! systemctl is-active go-rmm-relay &>/dev/null; then
-    cp /tmp/go-rmm-relay.service /etc/systemd/system/
+if ! systemctl is-active reins-relay &>/dev/null; then
+    cp /tmp/reins-relay.service /etc/systemd/system/
     systemctl daemon-reload
-    systemctl enable go-rmm-relay
+    systemctl enable reins-relay
 fi
 
 # 重启(用新二进制)
-systemctl restart go-rmm-relay
+systemctl restart reins-relay
 sleep 2
 
 # 验证
-if systemctl is-active go-rmm-relay; then
-    echo "✅ go-rmm-relay 服务运行中"
+if systemctl is-active reins-relay; then
+    echo "✅ reins-relay 服务运行中"
 else
-    echo "⚠️ 服务未运行,检查: journalctl -u go-rmm-relay -f"
+    echo "⚠️ 服务未运行,检查: journalctl -u reins-relay -f"
 fi
 
 # 获取或生成 token
-TOKEN_FILE="/opt/go-rmm/data/.token"
+TOKEN_FILE="/opt/reins/data/.token"
 if [ -f "$TOKEN_FILE" ]; then
     TOKEN=$(cat "$TOKEN_FILE")
 else
@@ -99,7 +99,7 @@ EOF
 ok "部署完成"
 echo ""
 echo "╔════════════════════════════════════════════════════╗"
-echo "║  go-rmm 已部署到 $SERVER           "
+echo "║  reins 已部署到 $SERVER           "
 echo "╠════════════════════════════════════════════════════╣"
 echo "║                                                    ║"
 echo "║  下一步:配置 Nginx(在服务器上执行)               ║"
@@ -113,9 +113,9 @@ echo "║  验证:                                             ║"
 echo "║  curl -k https://$SERVER/rmm/healthz        "
 echo "║                                                    ║"
 echo "║  Agent 连接(在被控端):                            ║"
-echo "║  go-rmm-agent run -relay wss://$SERVER/rmm/agent   ║"
+echo "║  reins-agent run -relay wss://$SERVER/rmm/agent   ║"
 echo "║                                                    ║"
 echo "║  CLI 操作:                                         ║"
-echo "║  go-rmm --relay https://$SERVER/rmm agent list     ║"
+echo "║  reins --relay https://$SERVER/rmm agent list     ║"
 echo "║                                                    ║"
 echo "╚════════════════════════════════════════════════════╝"

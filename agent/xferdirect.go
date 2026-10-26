@@ -46,7 +46,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // --- 票据存储 ---
@@ -108,9 +108,9 @@ func (s *xferTicketStore) verifyConsume(ticketID, secret, path, direction string
 	return subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(g.SecretHash)) == 1
 }
 
-// ticketAuth 从请求提取票据(X-Go-RMM-Ticket: "<id>:<secret>")并校验。
+// ticketAuth 从请求提取票据(X-Reins-Ticket: "<id>:<secret>")并校验。
 func ticketAuth(r *http.Request, path, direction string, consume bool) bool {
-	h := r.Header.Get("X-Go-RMM-Ticket")
+	h := r.Header.Get("X-Reins-Ticket")
 	id, secret, ok := strings.Cut(h, ":")
 	if !ok || id == "" || secret == "" {
 		return false
@@ -133,7 +133,7 @@ func generateSelfSignedCert(agentID string) (tls.Certificate, error) {
 	}
 	tmpl := x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "go-rmm-xfer-" + agentID},
+		Subject:      pkix.Name{CommonName: "reins-xfer-" + agentID},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
@@ -353,7 +353,7 @@ func (s *xferDirectServer) handleBegin(w http.ResponseWriter, r *http.Request) {
 
 // popDataToken 校验并取出 data_token(数据阶段一次性,10min TTL)。
 func (s *xferDirectServer) popDataToken(r *http.Request, transferID string) bool {
-	token := r.Header.Get("X-Go-RMM-Data-Token")
+	token := r.Header.Get("X-Reins-Data-Token")
 	if token == "" {
 		token = r.URL.Query().Get("data_token")
 	}

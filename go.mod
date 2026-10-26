@@ -1,4 +1,4 @@
-module github.com/QiuShichang/go-rmm
+module github.com/QiuShichang/reins
 
 go 1.26
 

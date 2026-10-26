@@ -7,7 +7,7 @@
 package executors
 
 import (
-	"github.com/QiuShichang/go-rmm/internal/cmdpolicy"
+	"github.com/QiuShichang/reins/internal/cmdpolicy"
 )
 
 // CommandPolicy 命令安全策略(共享实现)。

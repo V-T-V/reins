@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TestBatchProgressSSEDone 已完成批次的 SSE 流应立即收到 done 事件并关闭。

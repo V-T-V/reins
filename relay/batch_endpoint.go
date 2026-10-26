@@ -19,7 +19,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // batchTTL 已完成批次的注册表保留时长。

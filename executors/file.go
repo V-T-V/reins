@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // FileMaxBytes 单次文件任务的大小上限（10MB，避免 WS 帧过大）。
@@ -92,9 +92,9 @@ func (e *FileExecutor) Exec(ctx context.Context, payload []byte, _ ProgressFunc)
 	}
 }
 
-// rules 读取项目规则文件(op=rules,`go-rmm rules read` 的后端)。
+// rules 读取项目规则文件(op=rules,`reins rules read` 的后端)。
 //
-//   - task.Path 指定项目目录:读 <Path>/.go-rmm/rules.md,不存在时返回
+//   - task.Path 指定项目目录:读 <Path>/.reins/rules.md,不存在时返回
 //     exists=false 的条目(调用方据此区分"该项目没写规则"与"读失败")
 //   - task.Path 为空:在 AllowedRoots+Workspace 内自动发现(深度受限),
 //     返回全部规则文件与组合 ack
@@ -109,7 +109,7 @@ func (e *FileExecutor) rules(task proto.FileTask) proto.TaskResult {
 			// 区分"项目没写规则"与"读失败":Stat 不存在是正常态
 			if os.IsNotExist(err) || strings.Contains(err.Error(), "不存在") {
 				entries = append(entries, RuleFileEntry{Path: candidate, Exists: false,
-					Error: "项目未定义规则文件(无 .go-rmm/rules.md)"})
+					Error: "项目未定义规则文件(无 .reins/rules.md)"})
 			} else {
 				return fail("", err.Error())
 			}
@@ -217,7 +217,7 @@ func (e *FileExecutor) chunkUpload(task proto.FileTask) proto.TaskResult {
 		return fail("", "upload_id 和 total_chunks 不能为空")
 	}
 	// 临时目录存放分片
-	tmpDir := filepath.Join(os.TempDir(), "go-rmm-chunks-"+task.UploadID)
+	tmpDir := filepath.Join(os.TempDir(), "reins-chunks-"+task.UploadID)
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		return fail("", "创建临时目录失败: "+err.Error())
 	}

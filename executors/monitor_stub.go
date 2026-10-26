@@ -8,7 +8,7 @@ package executors
 import (
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // collectProcFS 非 Linux 桩:Windows 不经此路径;macOS 无 /proc 可读。

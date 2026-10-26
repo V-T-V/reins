@@ -17,9 +17,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/go-rmm/internal/ca"
+	"github.com/QiuShichang/reins/internal/ca"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // 心跳超时清理：Agent 心跳间隔的 3 倍。默认心跳 15s → 阈值 45s。
@@ -29,7 +29,7 @@ func main() {
 	cfg := parseFlags()
 	// S2:结构化日志(JSON 生产 / Text 开发)
 	initLogger(cfg.Dev)
-	initWebhooks(cfg.Webhooks) // F11:webhook 告警(flag > GO_RMM_WEBHOOKS env)
+	initWebhooks(cfg.Webhooks) // F11:webhook 告警(flag > REINS_WEBHOOKS env)
 
 	// 零配置体验:非 dev 模式下自动生成并保存 token(dev 模式不校验)
 	if cfg.Token == "" && !cfg.Dev {
@@ -37,7 +37,7 @@ func main() {
 	}
 
 	slog.Info("relay 启动", "version", version, "config", cfg)
-	log.Printf("[relay] go-rmm-relay %s 启动: %s", version, cfg)
+	log.Printf("[relay] reins-relay %s 启动: %s", version, cfg)
 
 	relay := NewRelay(cfg)
 
@@ -165,16 +165,16 @@ func main() {
 
 	fmt.Println()
 	fmt.Println("╔════════════════════════════════════════════════════╗")
-	fmt.Println("║         go-rmm 服务端已启动!                       ║")
+	fmt.Println("║         reins 服务端已启动!                       ║")
 	fmt.Printf("║  Web UI:  http://localhost:%s                     ║\n", port)
 	fmt.Printf("║  外网IP:  http://%s:%s                          \n", localIP, port)
 	fmt.Printf("║  Token:   %s              \n", tokenHint)
 	fmt.Println("║                                                    ║")
 	fmt.Println("║  ─── 在被控端执行 ───                              ║")
-	fmt.Printf("║  go-rmm-agent run -relay ws://%s:%s/agent -token <token>\n", localIP, port)
+	fmt.Printf("║  reins-agent run -relay ws://%s:%s/agent -token <token>\n", localIP, port)
 	fmt.Println("║                                                    ║")
 	fmt.Println("║  ─── 在操作端执行 ───                              ║")
-	fmt.Printf("║  go-rmm --relay http://%s:%s --token <token> agent list\n", localIP, port)
+	fmt.Printf("║  reins --relay http://%s:%s --token <token> agent list\n", localIP, port)
 	fmt.Println("╚════════════════════════════════════════════════════╝")
 	fmt.Println()
 

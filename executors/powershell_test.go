@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TestPowerShellBasic 验证 PowerShell 执行器能跑真实命令。
@@ -139,7 +139,7 @@ func TestDispatcherRoute(t *testing.T) {
 	r := d.Dispatch(context.Background(), proto.TaskRequest{
 		TaskID:  "t1",
 		Type:    proto.TaskFile,
-		Payload: []byte(`{"op":"download","path":"/nonexistent/go-rmm-test"}`),
+		Payload: []byte(`{"op":"download","path":"/nonexistent/reins-test"}`),
 	}, nil)
 	if r.Success {
 		t.Fatal("不存在的文件应失败")

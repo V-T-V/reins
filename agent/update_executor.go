@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 
-	"github.com/QiuShichang/go-rmm/executors"
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/executors"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // updateExecutor 把"自更新"任务纳入统一 Dispatcher 分发。

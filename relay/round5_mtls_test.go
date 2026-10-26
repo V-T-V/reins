@@ -19,7 +19,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/internal/ca"
+	"github.com/QiuShichang/reins/internal/ca"
 	"time"
 )
 

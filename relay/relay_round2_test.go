@@ -25,7 +25,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // 静音测试期日志（这些 E2E 测试会产生大量心跳/离线日志，干扰输出）。

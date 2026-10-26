@@ -1,5 +1,5 @@
 ﻿# ╔══════════════════════════════════════════════════════════════╗
-# ║  go-rmm 主从双 Agent 部署脚本 (M1 架构)                       ║
+# ║  reins 主从双 Agent 部署脚本 (M1 架构)                       ║
 # ║  装 master + slave 两个服务,主稳定管从,从可热更新             ║
 # ╚══════════════════════════════════════════════════════════════╝
 #
@@ -7,22 +7,22 @@
 #   .\install-dual.ps1 -Server 'https://203.0.113.99/rmm' -Relay 'wss://203.0.113.99/rmm/agent' -Token 'xxx'
 #
 # 安装内容:
-#   C:\Program Files\go-rmm-master\  主(稳定,永不更新)
-#     - go-rmm-master.exe
+#   C:\Program Files\reins-master\  主(稳定,永不更新)
+#     - reins-master.exe
 #     - config.json (role=master, slave_exe_dir/slave_agent_id)
 #     - data\slave-state.json (看门狗状态)
-#   C:\Program Files\go-rmm-slave\   从(可热更新)
-#     - go-rmm-slave.exe
+#   C:\Program Files\reins-slave\   从(可热更新)
+#     - reins-slave.exe
 #     - config.json (role=slave)
 #
 # 两个 Windows 服务:
-#   go-rmm-master  (Automatic + OnFailure=restart + 看门狗监控从)
-#   go-rmm-slave   (Automatic + OnFailure=restart)
+#   reins-master  (Automatic + OnFailure=restart + 看门狗监控从)
+#   reins-slave   (Automatic + OnFailure=restart)
 #
 # 主救援从的机制:
 #   1. 本地看门狗:主每30s检查从服务,挂了sc.exe start拉起 + .bak回滚
 #   2. Relay通道:主经POST /api/updates/apply给从推版本(复用现有机制)
-#   3. CLI:go-rmm rescue restart/rollback/update -a <agent-id>
+#   3. CLI:reins rescue restart/rollback/update -a <agent-id>
 
 param(
     [Parameter(Mandatory=$true)]
@@ -31,10 +31,10 @@ param(
     [string]$Relay,
     [Parameter(Mandatory=$true)]
     [string]$Token,
-    [string]$MasterDir = "C:\Program Files\go-rmm-master",
-    [string]$SlaveDir  = "C:\Program Files\go-rmm-slave",
-    [string]$MasterWorkspace = "C:\go-rmm\master-workspace",
-    [string]$SlaveWorkspace  = "C:\go-rmm\slave-workspace",
+    [string]$MasterDir = "C:\Program Files\reins-master",
+    [string]$SlaveDir  = "C:\Program Files\reins-slave",
+    [string]$MasterWorkspace = "C:\reins\master-workspace",
+    [string]$SlaveWorkspace  = "C:\reins\slave-workspace",
     [string]$Version = "v4.2.0"
 )
 
@@ -49,7 +49,7 @@ if (-not $isAdmin) {
 
 Write-Host ""
 Write-Host "═══════════════════════════════════════════════════════════════"
-Write-Host " go-rmm 主从双 Agent 部署 $Version" -ForegroundColor Cyan
+Write-Host " reins 主从双 Agent 部署 $Version" -ForegroundColor Cyan
 Write-Host "═══════════════════════════════════════════════════════════════"
 Write-Host "  Server:    $Server"
 Write-Host "  Relay:     $Relay"
@@ -60,16 +60,16 @@ Write-Host ""
 
 # === 1. 下载二进制 ===
 Write-Host "[1/6] 下载 Agent 二进制..." -ForegroundColor Cyan
-$dlUrl = "$Server/dl/go-rmm-agent.exe"
+$dlUrl = "$Server/dl/reins-agent.exe"
 $ProgressPreference = 'SilentlyContinue'
 
 # 主二进制
-$masterExe = Join-Path $MasterDir "go-rmm-master.exe"
+$masterExe = Join-Path $MasterDir "reins-master.exe"
 New-Item -ItemType Directory -Force -Path $MasterDir | Out-Null
 Invoke-WebRequest -Uri $dlUrl -OutFile $masterExe -UseBasicParsing -TimeoutSec 120
 
 # 从二进制(同一份二进制,不同名字+不同目录+不同 config)
-$slaveExe = Join-Path $SlaveDir "go-rmm-slave.exe"
+$slaveExe = Join-Path $SlaveDir "reins-slave.exe"
 New-Item -ItemType Directory -Force -Path $SlaveDir | Out-Null
 Invoke-WebRequest -Uri $dlUrl -OutFile $slaveExe -UseBasicParsing -TimeoutSec 120
 
@@ -92,8 +92,8 @@ $json = $slaveCfg | ConvertTo-Json -Depth 3
 [System.IO.File]::WriteAllText($slaveCfgFile, $json, (New-Object System.Text.UTF8Encoding $false))
 
 # 停旧的 + 装新的
-if (Get-Service -Name "go-rmm-slave" -ErrorAction SilentlyContinue) {
-    Stop-Service "go-rmm-slave" -Force -ErrorAction SilentlyContinue
+if (Get-Service -Name "reins-slave" -ErrorAction SilentlyContinue) {
+    Stop-Service "reins-slave" -Force -ErrorAction SilentlyContinue
     & $slaveExe uninstall 2>&1 | Out-Null
 }
 New-Item -ItemType Directory -Force -Path $SlaveWorkspace | Out-Null
@@ -122,8 +122,8 @@ $masterCfgFile = Join-Path $MasterDir "config.json"
 $json = $masterCfg | ConvertTo-Json -Depth 3
 [System.IO.File]::WriteAllText($masterCfgFile, $json, (New-Object System.Text.UTF8Encoding $false))
 
-if (Get-Service -Name "go-rmm-master" -ErrorAction SilentlyContinue) {
-    Stop-Service "go-rmm-master" -Force -ErrorAction SilentlyContinue
+if (Get-Service -Name "reins-master" -ErrorAction SilentlyContinue) {
+    Stop-Service "reins-master" -Force -ErrorAction SilentlyContinue
     & $masterExe uninstall 2>&1 | Out-Null
 }
 New-Item -ItemType Directory -Force -Path $MasterWorkspace | Out-Null
@@ -137,17 +137,17 @@ Write-Host "[OK]   主 Agent ID: $masterAgentID" -ForegroundColor Green
 # === 4. 验证两个服务 ===
 Write-Host ""
 Write-Host "[4/6] 验证服务状态..." -ForegroundColor Cyan
-$masterSvc = Get-Service "go-rmm-master" -ErrorAction SilentlyContinue
-$slaveSvc = Get-Service "go-rmm-slave" -ErrorAction SilentlyContinue
+$masterSvc = Get-Service "reins-master" -ErrorAction SilentlyContinue
+$slaveSvc = Get-Service "reins-slave" -ErrorAction SilentlyContinue
 if ($masterSvc.Status -eq "Running") {
-    Write-Host "[OK]   go-rmm-master: Running" -ForegroundColor Green
+    Write-Host "[OK]   reins-master: Running" -ForegroundColor Green
 } else {
-    Write-Host "[WARN] go-rmm-master: $($masterSvc.Status)" -ForegroundColor Yellow
+    Write-Host "[WARN] reins-master: $($masterSvc.Status)" -ForegroundColor Yellow
 }
 if ($slaveSvc.Status -eq "Running") {
-    Write-Host "[OK]   go-rmm-slave:  Running" -ForegroundColor Green
+    Write-Host "[OK]   reins-slave:  Running" -ForegroundColor Green
 } else {
-    Write-Host "[WARN] go-rmm-slave:  $($slaveSvc.Status)" -ForegroundColor Yellow
+    Write-Host "[WARN] reins-slave:  $($slaveSvc.Status)" -ForegroundColor Yellow
 }
 
 # === 5. 等待上线 ===
@@ -161,21 +161,21 @@ Write-Host "══════════════════════�
 Write-Host " ✅  主从双 Agent 部署成功!" -ForegroundColor Green
 Write-Host "═══════════════════════════════════════════════════════════════"
 Write-Host "  主 Agent: $masterAgentID"
-Write-Host "    服务:   go-rmm-master (永不更新,管从)"
+Write-Host "    服务:   reins-master (永不更新,管从)"
 Write-Host "    目录:   $MasterDir"
 Write-Host "  从 Agent: $slaveAgentID"
-Write-Host "    服务:   go-rmm-slave  (可热更新,承担业务)"
+Write-Host "    服务:   reins-slave  (可热更新,承担业务)"
 Write-Host "    目录:   $SlaveDir"
 Write-Host ""
 Write-Host " 看门狗:主每30s检查从,挂了自动sc start + .bak回滚" -ForegroundColor Yellow
 Write-Host ""
 Write-Host " 在控制端验证:" -ForegroundColor Yellow
-Write-Host "   go-rmm --relay $Server --token '***' agent list"
+Write-Host "   reins --relay $Server --token '***' agent list"
 Write-Host "   (应看到两个 Agent,Tags 含 role=master 和 role=slave)"
 Write-Host ""
 Write-Host " 救援命令:" -ForegroundColor Yellow
-Write-Host "   go-rmm rescue status   -a $masterAgentID   # 查从的状态"
-Write-Host "   go-rmm rescue restart  -a $masterAgentID   # 重启从"
-Write-Host "   go-rmm rescue rollback -a $masterAgentID   # .bak 回滚从"
-Write-Host "   go-rmm rescue update   -a $slaveAgentID -v v4.2.0  # 推版本救援"
+Write-Host "   reins rescue status   -a $masterAgentID   # 查从的状态"
+Write-Host "   reins rescue restart  -a $masterAgentID   # 重启从"
+Write-Host "   reins rescue rollback -a $masterAgentID   # .bak 回滚从"
+Write-Host "   reins rescue update   -a $slaveAgentID -v v4.2.0  # 推版本救援"
 Write-Host "═══════════════════════════════════════════════════════════════"

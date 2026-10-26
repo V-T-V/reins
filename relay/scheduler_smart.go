@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // loadSampleTTL monitor 负载采样有效期(XL6):monitor 任务默认 3s 一采,

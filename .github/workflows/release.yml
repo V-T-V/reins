@@ -34,8 +34,8 @@ jobs:
           file: ./Dockerfile.relay
           push: true
           tags: |
-            ghcr.io/v-t-v/go-rmm-relay:latest
-            ghcr.io/v-t-v/go-rmm-relay:${{ github.ref_name }}
+            ghcr.io/v-t-v/reins-relay:latest
+            ghcr.io/v-t-v/reins-relay:${{ github.ref_name }}
 
       - uses: docker/build-push-action@v6
         with:
@@ -43,8 +43,8 @@ jobs:
           file: ./Dockerfile.agent
           push: true
           tags: |
-            ghcr.io/v-t-v/go-rmm-agent:latest
-            ghcr.io/v-t-v/go-rmm-agent:${{ github.ref_name }}
+            ghcr.io/v-t-v/reins-agent:latest
+            ghcr.io/v-t-v/reins-agent:${{ github.ref_name }}
 
       - uses: goreleaser/goreleaser-action@v6
         with:

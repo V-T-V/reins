@@ -66,8 +66,8 @@ func NewSessionRecorder(sessionID, agentID string, cols, rows int) (*SessionReco
 			"SHELL": "powershell",
 			"TERM":  "xterm-256color",
 		},
-		"command": "go-rmm shell " + sessionID,
-		"title":   "go-rmm session " + agentID,
+		"command": "reins shell " + sessionID,
+		"title":   "reins session " + agentID,
 	}
 	hd, _ := json.Marshal(header)
 	f.Write(hd)

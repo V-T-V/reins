@@ -1,4 +1,4 @@
-// go-rmm 控制台前端 —— 零依赖原生 JS
+// reins 控制台前端 —— 零依赖原生 JS
 //
 // 状态机：
 //   agents: Map<agentID, Register>  当前已知 Agent

@@ -15,7 +15,7 @@ func TestXferTicketGrantRoundTrip(t *testing.T) {
 	grant := XferTicketGrant{
 		TicketID:   "tkt-1234",
 		SecretHash: "abcdef0123456789",
-		Path:       `C:\go-rmm\slave-workspace\big.tar`,
+		Path:       `C:\reins\slave-workspace\big.tar`,
 		Direction:  "upload",
 		ExpiryUnix: time.Now().Add(60 * time.Second).Unix(),
 	}

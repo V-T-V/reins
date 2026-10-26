@@ -1,4 +1,4 @@
-// Package main — 工具发现端点(D2:供 AI Agent 自动发现 go-rmm 能力)。
+// Package main — 工具发现端点(D2:供 AI Agent 自动发现 reins 能力)。
 //
 // GET /api/tools 返回结构化工具清单,AI Agent 据此生成 function calling 定义。
 // 无需鉴权(工具清单本身不泄漏敏感信息,便于 AI Agent 自动发现)。

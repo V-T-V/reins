@@ -1,4 +1,4 @@
-# go-rmm 生产级部署指南
+# reins 生产级部署指南
 
 > v3.8.1 · 从零到生产:架构规划 → 安装 → SSL → 安全加固 → 监控 → 日常运维
 
@@ -37,7 +37,7 @@
                         └───────────┬─────────────────────┘
                                     │ HTTP 127.0.0.1:7780
                         ┌───────────▼─────────────────────┐
-                        │     go-rmm Relay (systemd)      │
+                        │     reins Relay (systemd)      │
                         │  • bbolt 持久化(tasks.db)      │
                         │  • 审计 hash chain(audit.log)  │
                         │  • Prometheus /metrics          │
@@ -98,32 +98,32 @@ curl -fsSL https://your-domain.com/rmm/q.sh | bash
 
 ```bash
 # 编译
-git clone https://github.com/QiuShichang/go-rmm.git && cd go-rmm
-CGO_ENABLED=0 go build -ldflags "-s -w" -o /opt/go-rmm/go-rmm-relay ./relay/
+git clone https://github.com/QiuShichang/reins.git && cd reins
+CGO_ENABLED=0 go build -ldflags "-s -w" -o /opt/reins/reins-relay ./relay/
 
 # systemd 服务
-cat > /etc/systemd/system/go-rmm-relay.service << 'EOF'
+cat > /etc/systemd/system/reins-relay.service << 'EOF'
 [Unit]
-Description=go-rmm Relay
+Description=reins Relay
 After=network-online.target
 Wants=network-online.target
 [Service]
 Type=simple
-ExecStart=/opt/go-rmm/go-rmm-relay -addr 127.0.0.1:7780
-WorkingDirectory=/opt/go-rmm
+ExecStart=/opt/reins/reins-relay -addr 127.0.0.1:7780
+WorkingDirectory=/opt/reins
 Restart=always
 RestartSec=3
 LimitNOFILE=65536
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/opt/go-rmm/data
+ReadWritePaths=/opt/reins/data
 PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now go-rmm-relay
+systemctl enable --now reins-relay
 
 # 验证
 curl http://127.0.0.1:7780/healthz
@@ -133,14 +133,14 @@ curl http://127.0.0.1:7780/healthz
 ### 方式 C:Docker
 
 ```bash
-docker build -f Dockerfile.relay -t go-rmm-relay .
-docker run -d --name rmm -p 7780:7780 -v rmm-data:/data --restart unless-stopped go-rmm-relay
+docker build -f Dockerfile.relay -t reins-relay .
+docker run -d --name rmm -p 7780:7780 -v rmm-data:/data --restart unless-stopped reins-relay
 ```
 
 ### 方式 D:Kubernetes
 
 ```bash
-helm install rmm deploy/helm/go-rmm --set relay.token=$(openssl rand -hex 16)
+helm install rmm deploy/helm/reins --set relay.token=$(openssl rand -hex 16)
 ```
 
 ---
@@ -151,27 +151,27 @@ helm install rmm deploy/helm/go-rmm --set relay.token=$(openssl rand -hex 16)
 
 ```powershell
 # 管理员 PowerShell
-.\go-rmm-agent.exe install -relay wss://your-domain.com/rmm/agent -token <TOKEN>
-.\go-rmm-agent.exe start
-.\go-rmm-agent.exe status
+.\reins-agent.exe install -relay wss://your-domain.com/rmm/agent -token <TOKEN>
+.\reins-agent.exe start
+.\reins-agent.exe status
 ```
 
 ### Linux
 
 ```bash
-cat > /etc/systemd/system/go-rmm-agent.service << 'EOF'
+cat > /etc/systemd/system/reins-agent.service << 'EOF'
 [Unit]
-Description=go-rmm Agent
+Description=reins Agent
 After=network-online.target
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/go-rmm-agent run -relay wss://your-domain.com/rmm/agent -token <TOKEN>
+ExecStart=/usr/local/bin/reins-agent run -relay wss://your-domain.com/rmm/agent -token <TOKEN>
 Restart=always
 RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl enable --now go-rmm-agent
+systemctl enable --now reins-agent
 ```
 
 ### 标签配置(批量管理)
@@ -193,15 +193,15 @@ systemctl enable --now go-rmm-agent
 ### CLI
 
 ```bash
-export GO_RMM_RELAY=https://your-domain.com/rmm
-export GO_RMM_TOKEN=<TOKEN>
+export REINS_RELAY=https://your-domain.com/rmm
+export REINS_TOKEN=<TOKEN>
 
-go-rmm agent list
-go-rmm task run -a win-prod-01 -c "Get-Date"
-go-rmm task stream -a win-prod-01 -c "ping -t 8.8.8.8"
-go-rmm events
-go-rmm sysinfo -a win-prod-01
-go-rmm monitor top -a win-prod-01
+reins agent list
+reins task run -a win-prod-01 -c "Get-Date"
+reins task stream -a win-prod-01 -c "ping -t 8.8.8.8"
+reins events
+reins sysinfo -a win-prod-01
+reins monitor top -a win-prod-01
 ```
 
 ### SDK(AI Agent 接入)
@@ -272,7 +272,7 @@ curl -k https://your-domain.com/rmm/healthz
 
 ```yaml
 scrape_configs:
-  - job_name: go-rmm
+  - job_name: reins
     static_configs: [{targets: ['relay:7780']}]
     metrics_path: /metrics
 ```
@@ -281,8 +281,8 @@ scrape_configs:
 
 ```bash
 # flag(优先)或环境变量,二选一
-go-rmm-relay -webhooks "https://hooks.slack.com/xxx,https://oapi.dingtalk.com/yyy"
-export GO_RMM_WEBHOOKS="https://hooks.slack.com/xxx"
+reins-relay -webhooks "https://hooks.slack.com/xxx,https://oapi.dingtalk.com/yyy"
+export REINS_WEBHOOKS="https://hooks.slack.com/xxx"
 # 自动触发:任务失败/Agent离线/策略拦截(单任务/批量/DAG)/电源操作/证书撤销
 ```
 
@@ -290,7 +290,7 @@ export GO_RMM_WEBHOOKS="https://hooks.slack.com/xxx"
 
 ```bash
 # crontab
-*/1 * * * * curl -sf http://127.0.0.1:7780/healthz || systemctl restart go-rmm-relay
+*/1 * * * * curl -sf http://127.0.0.1:7780/healthz || systemctl restart reins-relay
 ```
 
 ---
@@ -298,10 +298,10 @@ export GO_RMM_WEBHOOKS="https://hooks.slack.com/xxx"
 ## 9. 日常运维
 
 ```bash
-journalctl -u go-rmm-relay -f       # Relay 日志
-journalctl -u go-rmm-agent -f       # Agent 日志
-go-rmm events                        # 实时事件流
-go-rmm task list --status failed     # 查失败任务
+journalctl -u reins-relay -f       # Relay 日志
+journalctl -u reins-agent -f       # Agent 日志
+reins events                        # 实时事件流
+reins task list --status failed     # 查失败任务
 go tool pprof http://relay:7780/debug/pprof/heap  # 内存分析
 ```
 
@@ -314,7 +314,7 @@ go tool pprof http://relay:7780/debug/pprof/heap  # 内存分析
 | Agent 连不上 | `ping relay` → `telnet relay 7780` → 检查 token |
 | Nginx 404 | `proxy_pass` 尾部必须有 `/` |
 | WSS 连接失败 | HTTPS 下 Agent 必须用 `wss://` 而非 `ws://` |
-| 任务卡 pending | Agent 是否在线 → `go-rmm agent list` |
+| 任务卡 pending | Agent 是否在线 → `reins agent list` |
 | 中文乱码 | 已用 EncodedCommand(UTF16LE)解决 |
 
 ---
@@ -323,12 +323,12 @@ go tool pprof http://relay:7780/debug/pprof/heap  # 内存分析
 
 ```bash
 # 备份(Relay 停机后)
-tar czf /backup/rmm-$(date +%Y%m%d).tar.gz /opt/go-rmm/data/
+tar czf /backup/rmm-$(date +%Y%m%d).tar.gz /opt/reins/data/
 
 # 恢复
-systemctl stop go-rmm-relay
+systemctl stop reins-relay
 tar xzf /backup/rmm-20260101.tar.gz -C /
-systemctl start go-rmm-relay
+systemctl start reins-relay
 ```
 
 ---
@@ -338,24 +338,24 @@ systemctl start go-rmm-relay
 ### Agent 自更新(远程)
 
 ```bash
-go-rmm update upload -f agent-new.exe --version v4.0
-go-rmm update push -a win-prod-01 --version v4.0
+reins update upload -f agent-new.exe --version v4.0
+reins update push -a win-prod-01 --version v4.0
 # 自动 rename+copy+重启+60s 健康回滚
 ```
 
 ### Relay 升级
 
 ```bash
-cd go-rmm && git pull
-go build -o /opt/go-rmm/go-rmm-relay ./relay/
-systemctl restart go-rmm-relay
+cd reins && git pull
+go build -o /opt/reins/reins-relay ./relay/
+systemctl restart reins-relay
 ```
 
 ### 回滚
 
 ```bash
 # Relay:换旧二进制重启
-# Agent:go-rmm update rollback -a <agent>
+# Agent:reins update rollback -a <agent>
 ```
 
 ---

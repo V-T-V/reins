@@ -23,8 +23,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/go-rmm/internal/ca"
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/internal/ca"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // --- 测试基建:webhook 接收端(sink) ---
@@ -122,7 +122,7 @@ func TestParseWebhookURLs(t *testing.T) {
 
 // TestInitWebhooksFlagOverEnv flag 显式配置优先于环境变量。
 func TestInitWebhooksFlagOverEnv(t *testing.T) {
-	t.Setenv("GO_RMM_WEBHOOKS", "https://env.example/hook")
+	t.Setenv("REINS_WEBHOOKS", "https://env.example/hook")
 	t.Cleanup(func() { setWebhookURLs(nil) })
 
 	initWebhooks("https://flag.example/hook1,https://flag.example/hook2")
@@ -135,7 +135,7 @@ func TestInitWebhooksFlagOverEnv(t *testing.T) {
 
 // TestInitWebhooksEnvFallback flag 为空时回退环境变量。
 func TestInitWebhooksEnvFallback(t *testing.T) {
-	t.Setenv("GO_RMM_WEBHOOKS", "https://env.example/hook1,https://env.example/hook2")
+	t.Setenv("REINS_WEBHOOKS", "https://env.example/hook1,https://env.example/hook2")
 	t.Cleanup(func() { setWebhookURLs(nil) })
 
 	initWebhooks("")
@@ -152,8 +152,8 @@ func TestWebhookNotifyDeliversJSON(t *testing.T) {
 
 	notifyWebhook("unit_event", map[string]any{"key": "value", "num": 42})
 	n := sink.waitEvent(t, "unit_event")
-	if n.Source != "go-rmm" {
-		t.Errorf("source 应为 go-rmm,得到 %q", n.Source)
+	if n.Source != "reins" {
+		t.Errorf("source 应为 reins,得到 %q", n.Source)
 	}
 	if n.Timestamp == "" {
 		t.Error("timestamp 不应为空")

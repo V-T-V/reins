@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // noopExecutor 测试用执行器，立即返回成功。

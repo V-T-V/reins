@@ -174,7 +174,7 @@ func (a *Agent) tryAutoUpdate(ctx context.Context) error {
 
 // autoUpdateBinPath 自动更新下载的暂存文件路径。
 func autoUpdateBinPath() string {
-	return filepath.Join(exeDir(), "go-rmm-agent.exe.auto")
+	return filepath.Join(exeDir(), "reins-agent.exe.auto")
 }
 
 // downloadTo 流式下载 URL 到 .auto 暂存文件,校验 SHA256。

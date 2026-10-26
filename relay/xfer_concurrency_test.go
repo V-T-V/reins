@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TestXferChannelConcurrentClose 并发 routeXferData 与 unregisterXferChannels,

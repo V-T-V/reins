@@ -1,5 +1,5 @@
 {
-  "_comment": "go-rmm Agent 配置示例。拷贝为 config.json 后按实际修改。字段定义见 agent/config.go。",
+  "_comment": "reins Agent 配置示例。拷贝为 config.json 后按实际修改。字段定义见 agent/config.go。",
 
   "agent_id": "",
   "relay_url": "ws://your-relay-host:7780/agent",

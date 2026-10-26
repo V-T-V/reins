@@ -1,4 +1,4 @@
-// Package main 是 go-rmm Web 控制台。
+// Package main 是 reins Web 控制台。
 //
 // 控制台自身无状态：所有 Agent/任务数据都从 Relay 取。
 // 它做两件事：
@@ -29,8 +29,8 @@ var version = "dev"
 var webFS embed.FS
 
 func main() {
-	addr := flag.String("addr", getEnv("GO_RMM_CONSOLE_ADDR", ":7781"), "控制台 HTTP 监听地址")
-	relayURL := flag.String("relay", getEnv("GO_RMM_RELAY_URL", "http://127.0.0.1:7780"), "Relay 地址（反向代理目标）")
+	addr := flag.String("addr", getEnv("REINS_CONSOLE_ADDR", ":7781"), "控制台 HTTP 监听地址")
+	relayURL := flag.String("relay", getEnv("REINS_RELAY_URL", "http://127.0.0.1:7780"), "Relay 地址（反向代理目标）")
 	flag.Parse()
 
 	mux := buildMux(*relayURL)
@@ -40,7 +40,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
-		log.Printf("[console] go-rmm-console %s", version)
+		log.Printf("[console] reins-console %s", version)
 		log.Printf("[console] 监听 %s（反向代理 Relay %s）", *addr, *relayURL)
 		log.Printf("[console] 浏览器打开 http://localhost%s", portOrDefault(*addr))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

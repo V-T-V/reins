@@ -120,7 +120,7 @@ func formatCEF(r auditRecord) string {
 	}
 	ext := fmt.Sprintf("rt=%d suser=%s act=%s dst=%s msg=%s",
 		r.TS, r.Operator, r.Event, r.AgentID, escapeCEF(r.Detail))
-	return fmt.Sprintf("CEF:0|go-rmm|relay|2.3|%s|%s|%s|%s",
+	return fmt.Sprintf("CEF:0|reins|relay|2.3|%s|%s|%s|%s",
 		r.Event, r.Event, severity, ext)
 }
 
@@ -131,7 +131,7 @@ func formatSyslog(r auditRecord) string {
 	if strings.Contains(r.Event, "blocked") || strings.Contains(r.Event, "power") {
 		priority = 132 // severity=4(warning)
 	}
-	return fmt.Sprintf("<%d>1 %s go-rmm relay %d - - act=%s agent=%s detail=%s",
+	return fmt.Sprintf("<%d>1 %s reins relay %d - - act=%s agent=%s detail=%s",
 		priority, ts, r.TS, r.Event, r.AgentID, r.Detail)
 }
 

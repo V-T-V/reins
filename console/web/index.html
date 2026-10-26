@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>go-rmm 控制台</title>
+<title>reins 控制台</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; }
@@ -82,13 +82,13 @@
 <!-- P2 安装引导（0 Agent 时显示） -->
 <div class="setup-overlay" id="setup-overlay" style="display:none">
   <div class="setup-card">
-    <h2>🚀 go-rmm 部署向导</h2>
+    <h2>🚀 reins 部署向导</h2>
     <p style="color:#8b949e">还没有 Agent 连接。按以下步骤部署：</p>
 
     <div class="step">
       <span class="step-num">1</span><strong>在 Windows 被控机器上，管理员 PowerShell 运行：</strong>
       <div class="cmd" onclick="navigator.clipboard.writeText(this.querySelector('code').textContent);this.querySelector('.copy-hint').textContent='已复制!'">
-        <code id="install-cmd">go-rmm-agent.exe install -relay <span id="relay-ip">IP</span></code>
+        <code id="install-cmd">reins-agent.exe install -relay <span id="relay-ip">IP</span></code>
         <span class="copy-hint">点击复制</span>
       </div>
     </div>
@@ -115,7 +115,7 @@
   <!-- 主区 -->
   <main class="main">
     <div class="toolbar">
-      <h1>go-rmm 控制台</h1>
+      <h1>reins 控制台</h1>
       <span class="relay-badge" id="relay-info">Relay: 连接中...</span>
     </div>
     <div class="content">

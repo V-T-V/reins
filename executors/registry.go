@@ -1,4 +1,4 @@
-// Package executors 实现并注册 go-rmm 的 6 类任务执行器。
+// Package executors 实现并注册 reins 的 6 类任务执行器。
 //
 // 本包同时定义 Executor 接口与 Dispatcher（任务路由器），供 agent 包引用。
 // 依赖方向（单向）：agent → executors → {win32, vision, proto}。
@@ -9,7 +9,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // Executor 是任务执行器的统一接口。
@@ -45,7 +45,7 @@ type Dispatcher struct {
 	// 由 SetCommandPolicy 注入;Dispatch 前强制校验。
 	commandPolicy *CommandPolicy
 	// rulesGate 项目规则门禁(nil 或 Enabled=false 时不拦截)。
-	// 由 SetRulesGate 注入;变更类任务须携带与当前 .go-rmm/rules.md
+	// 由 SetRulesGate 注入;变更类任务须携带与当前 .reins/rules.md
 	// 一致的 rules_ack。与命令策略同属 Agent 侧最后防线。
 	rulesGate *RulesGate
 }
@@ -125,7 +125,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, task proto.TaskRequest, progr
 		}
 	}
 
-	// 项目规则门禁:变更类任务须携带当前 .go-rmm/rules.md 的 ack。
+	// 项目规则门禁:变更类任务须携带当前 .reins/rules.md 的 ack。
 	// 与命令策略同为 Agent 侧防线——即使 Relay 被绕过也生效。
 	// 校验在锁外执行(snapshot 有自己的锁,且可能做目录扫描)。
 	d.mu.RLock()

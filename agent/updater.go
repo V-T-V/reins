@@ -27,7 +27,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // pendingRestart 自更新完成后置 true,主循环检测后退出让 SCM 重启。
@@ -150,12 +150,12 @@ func (e *UpdateExecutor) execUpdate(payload []byte) proto.TaskResult {
 		}
 		binaryPath = autoUpdateBinPath()
 	} else if task.BinaryB64 != "" {
-		// 解码 base64 写到 exeDir/go-rmm-agent.exe.new
+		// 解码 base64 写到 exeDir/reins-agent.exe.new
 		binData, err := base64.StdEncoding.DecodeString(task.BinaryB64)
 		if err != nil {
 			return proto.TaskResult{Success: false, Error: "base64 解码失败: " + err.Error()}
 		}
-		binaryPath = filepath.Join(exeDir(), "go-rmm-agent.exe.new")
+		binaryPath = filepath.Join(exeDir(), "reins-agent.exe.new")
 		if err := os.WriteFile(binaryPath, binData, 0755); err != nil {
 			return proto.TaskResult{Success: false, Error: "写临时文件失败: " + err.Error()}
 		}

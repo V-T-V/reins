@@ -1,9 +1,9 @@
 #!/bin/bash
-# go-rmm 一键部署脚本 — Linux Relay 端
+# reins 一键部署脚本 — Linux Relay 端
 #
 # 用法:
 #   # 方式1: 直接下载运行
-#   curl -fsSL https://raw.githubusercontent.com/QiuShichang/go-rmm/main/scripts/deploy-relay-linux.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/QiuShichang/reins/main/scripts/deploy-relay-linux.sh | bash
 #
 #   # 方式2: 本地运行
 #   chmod +x scripts/deploy-relay-linux.sh
@@ -14,7 +14,7 @@
 #
 # 功能:
 #   1. 检测架构(amd64/arm64)
-#   2. 下载/编译 go-rmm-relay
+#   2. 下载/编译 reins-relay
 #   3. 安装为 systemd 服务(开机自启 + 崩溃恢复)
 #   4. 配置防火墙
 #   5. 验证运行
@@ -25,9 +25,9 @@ set -euo pipefail
 VERSION="${VERSION:-v3.9.0}"
 ADDR="${ADDR:-:7780}"
 TOKEN="${TOKEN:-}"
-INSTALL_DIR="/opt/go-rmm"
+INSTALL_DIR="/opt/reins"
 DATA_DIR="${INSTALL_DIR}/data"
-SERVICE_NAME="go-rmm-relay"
+SERVICE_NAME="reins-relay"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -65,24 +65,24 @@ if command -v go &>/dev/null; then
         info "当前目录有源码,直接编译"
     else
         # 克隆源码
-        info "克隆 go-rmm 源码..."
-        git clone --depth 1 https://github.com/QiuShichang/go-rmm.git /tmp/go-rmm-src || true
-        if [ -d "/tmp/go-rmm-src" ]; then
-            cp -r /tmp/go-rmm-src/* .
+        info "克隆 reins 源码..."
+        git clone --depth 1 https://github.com/QiuShichang/reins.git /tmp/reins-src || true
+        if [ -d "/tmp/reins-src" ]; then
+            cp -r /tmp/reins-src/* .
         fi
     fi
     CGO_ENABLED=0 GOOS=linux GOARCH=$GOARCH \
-        go build -ldflags "-s -w -X main.version=$VERSION" -o go-rmm-relay ./relay/
+        go build -ldflags "-s -w -X main.version=$VERSION" -o reins-relay ./relay/
     info "编译完成"
 else
     info "无 Go 环境,下载预编译二进制..."
     # 尝试从 GitHub Release 下载
-    DOWNLOAD_URL="https://github.com/QiuShichang/go-rmm/releases/download/${VERSION}/go-rmm-relay-linux-${GOARCH}"
-    if curl -fsSL "$DOWNLOAD_URL" -o go-rmm-relay; then
-        chmod +x go-rmm-relay
+    DOWNLOAD_URL="https://github.com/QiuShichang/reins/releases/download/${VERSION}/reins-relay-linux-${GOARCH}"
+    if curl -fsSL "$DOWNLOAD_URL" -o reins-relay; then
+        chmod +x reins-relay
         info "下载完成"
     else
-        error "下载失败($DOWNLOAD_URL),请安装 Go 或手动上传二进制到 $INSTALL_DIR/go-rmm-relay"
+        error "下载失败($DOWNLOAD_URL),请安装 Go 或手动上传二进制到 $INSTALL_DIR/reins-relay"
     fi
 fi
 
@@ -101,13 +101,13 @@ if [ "$EUID" -eq 0 ] || command -v sudo &>/dev/null; then
     info "安装 systemd 服务..."
     cat > /tmp/${SERVICE_NAME}.service << EOF
 [Unit]
-Description=go-rmm Relay Server
+Description=reins Relay Server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/go-rmm-relay ${CONFIG_ARGS}
+ExecStart=${INSTALL_DIR}/reins-relay ${CONFIG_ARGS}
 WorkingDirectory=${INSTALL_DIR}
 Restart=always
 RestartSec=3
@@ -135,7 +135,7 @@ EOF
     info "systemd 服务已安装并启动"
 else
     warn "无 root 权限,跳过 systemd 安装"
-    warn "手动运行: cd $INSTALL_DIR && ./go-rmm-relay $CONFIG_ARGS"
+    warn "手动运行: cd $INSTALL_DIR && ./reins-relay $CONFIG_ARGS"
 fi
 
 # === Step 5: 防火墙 ===
@@ -148,7 +148,7 @@ fi
 # === Step 6: 验证 ===
 sleep 2
 if curl -sf "http://127.0.0.1:${ADDR#:}/healthz" | grep -q "ok"; then
-    info "✅ go-rmm Relay 部署成功!"
+    info "✅ reins Relay 部署成功!"
     echo ""
     echo "  地址: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')${ADDR#:}"
     echo "  健康: http://127.0.0.1${ADDR#:}/healthz"
@@ -156,7 +156,7 @@ if curl -sf "http://127.0.0.1:${ADDR#:}/healthz" | grep -q "ok"; then
     echo "  日志: journalctl -u ${SERVICE_NAME} -f"
     echo ""
     echo "  下一步: 在 Windows 机器上安装 Agent:"
-    echo "    go-rmm-agent.exe install -relay ws://<本机IP>${ADDR#:}/agent"
+    echo "    reins-agent.exe install -relay ws://<本机IP>${ADDR#:}/agent"
 else
     warn "健康检查未通过,检查日志: journalctl -u ${SERVICE_NAME} -f"
 fi

@@ -1,5 +1,5 @@
 #!/bin/bash
-# go-rmm Linux 安装器（从 GitHub Release 下载二进制）
+# reins Linux 安装器（从 GitHub Release 下载二进制）
 #
 # 用法:
 #   ./scripts/install.sh                          # 安装最新版 Relay
@@ -10,7 +10,7 @@
 set -euo pipefail
 
 OWNER="${OWNER:-V-T-V}"
-REPO="${REPO:-go-rmm}"
+REPO="${REPO:-reins}"
 VERSION="${VERSION:-latest}"
 COMPONENT="${COMPONENT:-relay}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
@@ -38,8 +38,8 @@ if [ "$VERSION" = "latest" ]; then
   [ -z "$VERSION" ] && { echo "无法解析最新版本"; exit 1; }
 fi
 
-BINARY="go-rmm-$COMPONENT"
-ARCHIVE="go-rmm-${COMPONENT}_${VERSION}_${OS}_${ARCH}.tar.gz"
+BINARY="reins-$COMPONENT"
+ARCHIVE="reins-${COMPONENT}_${VERSION}_${OS}_${ARCH}.tar.gz"
 URL="https://github.com/$OWNER/$REPO/releases/download/$VERSION/$ARCHIVE"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

@@ -9,14 +9,14 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/QiuShichang/go-rmm/executors"
+	"github.com/QiuShichang/reins/executors"
 )
 
 // usage 打印用法。
-const usage = `go-rmm-agent %s —— 远程自动化执行 Agent
+const usage = `reins-agent %s —— 远程自动化执行 Agent
 
 用法:
-  go-rmm-agent <command> [flags]
+  reins-agent <command> [flags]
 
 命令:
   install      注册为系统服务（Windows 服务 / Linux systemd），需先配置 -relay
@@ -48,7 +48,7 @@ func main() {
 	// 处理无需配置文件的命令
 	switch args[0] {
 	case "version", "-v", "--version":
-		fmt.Printf("go-rmm-agent %s\n", version)
+		fmt.Printf("reins-agent %s\n", version)
 		return
 	case "uninstall":
 		if err := uninstallService(); err != nil {

@@ -1,4 +1,4 @@
-# go-rmm Makefile — 世界级 Go 项目构建系统
+# reins Makefile — 世界级 Go 项目构建系统
 #
 # 用法:
 #   make all         — 编译全部组件到 bin/
@@ -28,16 +28,16 @@ tidy:
 all: relay agent cli
 
 relay:
-	CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/go-rmm-relay$(EXT) ./relay
+	CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/reins-relay$(EXT) ./relay
 
 agent:
-	CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/go-rmm-agent$(EXT) ./agent
+	CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/reins-agent$(EXT) ./agent
 
 cli:
-	CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/go-rmm$(EXT) ./cmd/go-rmm
+	CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/reins$(EXT) ./cmd/reins
 
 console:
-	CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/go-rmm-console$(EXT) ./console
+	CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/reins-console$(EXT) ./console
 
 ## === 测试 ===
 
@@ -77,8 +77,8 @@ ci: vet test test-race lint
 ## === Docker ===
 
 docker:
-	docker build -f Dockerfile.relay -t go-rmm-relay:$(VERSION) .
-	docker build -f Dockerfile.agent -t go-rmm-agent:$(VERSION) .
+	docker build -f Dockerfile.relay -t reins-relay:$(VERSION) .
+	docker build -f Dockerfile.agent -t reins-agent:$(VERSION) .
 
 ## === 发布 ===
 
@@ -87,7 +87,7 @@ release:
 	goreleaser release --clean
 
 helm:
-	helm package deploy/helm/go-rmm -d $(BIN_DIR)/charts
+	helm package deploy/helm/reins -d $(BIN_DIR)/charts
 	@echo "Helm chart: $(BIN_DIR)/charts/"
 
 ## === 发行包(极简部署:一个包 + 一行安装) ===
@@ -96,21 +96,21 @@ dist: all
 	@echo "📦 构建发行包..."
 	@mkdir -p dist
 	@cp scripts/install.sh scripts/install.ps1 scripts/deploy-relay-linux.sh scripts/deploy-agent-windows.ps1 scripts/deploy-docker.sh dist/
-	@cp deploy/go-rmm-relay.service deploy/openapi.yaml dist/
+	@cp deploy/reins-relay.service deploy/openapi.yaml dist/
 	@cp README.md DEPLOYMENT.md dist/
 # Windows 包(.zip)
-	zip -j dist/go-rmm-$(VERSION)-windows.zip \
-		$(BIN_DIR)/go-rmm-relay.exe $(BIN_DIR)/go-rmm-agent.exe $(BIN_DIR)/go-rmm.exe \
+	zip -j dist/reins-$(VERSION)-windows.zip \
+		$(BIN_DIR)/reins-relay.exe $(BIN_DIR)/reins-agent.exe $(BIN_DIR)/reins.exe \
 		dist/install.ps1 dist/deploy-agent-windows.ps1 \
 		README.md 2>/dev/null || true
 # Linux 包(.tar.gz) — 交叉编译
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/go-rmm-relay-linux ./relay
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/go-rmm-agent-linux ./agent
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/go-rmm-linux ./cmd/go-rmm
-	tar czf dist/go-rmm-$(VERSION)-linux.tar.gz \
-		-C dist go-rmm-relay-linux go-rmm-agent-linux go-rmm-linux install.sh deploy-relay-linux.sh
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/reins-relay-linux ./relay
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/reins-agent-linux ./agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o dist/reins-linux ./cmd/reins
+	tar czf dist/reins-$(VERSION)-linux.tar.gz \
+		-C dist reins-relay-linux reins-agent-linux reins-linux install.sh deploy-relay-linux.sh
 	@echo "✅ 发行包: dist/"
-	@ls -lh dist/go-rmm-*.zip dist/go-rmm-*.tar.gz 2>/dev/null
+	@ls -lh dist/reins-*.zip dist/reins-*.tar.gz 2>/dev/null
 
 ## === 本地运行 ===
 
@@ -121,7 +121,7 @@ run-agent:
 	$(GO) run ./agent run -relay ws://127.0.0.1:7780/agent
 
 run-cli:
-	$(GO) run ./cmd/go-rmm status
+	$(GO) run ./cmd/reins status
 
 ## === 文档口径门禁 ===
 

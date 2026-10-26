@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TestRegisterExecutorsUpdateCapability update 执行器注册回归:

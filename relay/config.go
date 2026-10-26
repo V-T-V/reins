@@ -28,7 +28,7 @@ type Config struct {
 	// 例:-policy-allow '^Get-Service,^Get-Process,^node '
 	PolicyAllow string
 	// F11 webhook 告警(逗号分隔 URL)。触发:task_failed/agent_offline/policy_blocked/
-	// power_executed/agent_revoked;flag 优先,空则回退 GO_RMM_WEBHOOKS 环境变量。
+	// power_executed/agent_revoked;flag 优先,空则回退 REINS_WEBHOOKS 环境变量。
 	Webhooks string
 }
 
@@ -37,21 +37,21 @@ type Config struct {
 // 优先级：命令行 flag > 环境变量 > 默认值。
 func parseFlags() Config {
 	c := Config{}
-	flag.StringVar(&c.Addr, "addr", getEnv("GO_RMM_RELAY_ADDR", ":7780"), "HTTP 监听地址")
-	flag.StringVar(&c.Token, "token", getEnv("GO_RMM_RELAY_TOKEN", ""), "Agent/Console 鉴权 token（空则不校验）")
-	flag.BoolVar(&c.Dev, "dev", getEnv("GO_RMM_RELAY_DEV", "") != "", "开发模式（详细日志）")
-	flag.BoolVar(&c.MTLS, "mtls", getEnv("GO_RMM_RELAY_MTLS", "") != "", "启用 mTLS（需内置 CA + Agent 客户端证书）")
-	flag.StringVar(&c.CertFile, "tls-cert", getEnv("GO_RMM_RELAY_TLS_CERT", ""), "Relay TLS 证书文件（mTLS/HTTPS 用）")
-	flag.StringVar(&c.KeyFile, "tls-key", getEnv("GO_RMM_RELAY_TLS_KEY", ""), "Relay TLS 私钥文件（mTLS/HTTPS 用）")
-	flag.StringVar(&c.ExternalURL, "external-url", getEnv("GO_RMM_EXTERNAL_URL", ""), "外部访问地址(经 nginx 反代/TLS 终端时用),如 https://host/rmm")
-	flag.StringVar(&c.InstallToken, "install-token", getEnv("GO_RMM_INSTALL_TOKEN", ""), "部署专用 Token:服务 /install.ps1 时自动烘焙,目标机器零参数部署;仅授权 Agent 注册与 GET /api/agents,不授予其余 REST 权限;泄漏后果=可注册伪 Agent,建议部署窗口开启并定期轮换")
+	flag.StringVar(&c.Addr, "addr", getEnv("REINS_RELAY_ADDR", ":7780"), "HTTP 监听地址")
+	flag.StringVar(&c.Token, "token", getEnv("REINS_RELAY_TOKEN", ""), "Agent/Console 鉴权 token（空则不校验）")
+	flag.BoolVar(&c.Dev, "dev", getEnv("REINS_RELAY_DEV", "") != "", "开发模式（详细日志）")
+	flag.BoolVar(&c.MTLS, "mtls", getEnv("REINS_RELAY_MTLS", "") != "", "启用 mTLS（需内置 CA + Agent 客户端证书）")
+	flag.StringVar(&c.CertFile, "tls-cert", getEnv("REINS_RELAY_TLS_CERT", ""), "Relay TLS 证书文件（mTLS/HTTPS 用）")
+	flag.StringVar(&c.KeyFile, "tls-key", getEnv("REINS_RELAY_TLS_KEY", ""), "Relay TLS 私钥文件（mTLS/HTTPS 用）")
+	flag.StringVar(&c.ExternalURL, "external-url", getEnv("REINS_EXTERNAL_URL", ""), "外部访问地址(经 nginx 反代/TLS 终端时用),如 https://host/rmm")
+	flag.StringVar(&c.InstallToken, "install-token", getEnv("REINS_INSTALL_TOKEN", ""), "部署专用 Token:服务 /install.ps1 时自动烘焙,目标机器零参数部署;仅授权 Agent 注册与 GET /api/agents,不授予其余 REST 权限;泄漏后果=可注册伪 Agent,建议部署窗口开启并定期轮换")
 	// P1 生产硬化:metrics/pprof 访问控制
-	flag.StringVar(&c.MetricsToken, "metrics-token", getEnv("GO_RMM_METRICS_TOKEN", ""), "/metrics 独立 token(空则回退主 Token;生产推荐配独立低权 token 或 nginx IP 白名单)")
-	flag.BoolVar(&c.DebugPprof, "debug-pprof", getEnv("GO_RMM_DEBUG_PPROF", "") != "", "启用 /debug/pprof(默认关,生产关闭防内存侦察;dev 模式自动开)")
+	flag.StringVar(&c.MetricsToken, "metrics-token", getEnv("REINS_METRICS_TOKEN", ""), "/metrics 独立 token(空则回退主 Token;生产推荐配独立低权 token 或 nginx IP 白名单)")
+	flag.BoolVar(&c.DebugPprof, "debug-pprof", getEnv("REINS_DEBUG_PPROF", "") != "", "启用 /debug/pprof(默认关,生产关闭防内存侦察;dev 模式自动开)")
 	// P1-6:命令策略白名单(黑名单 best-effort 可绕,白名单 allow-only 收紧)
-	flag.StringVar(&c.PolicyAllow, "policy-allow", getEnv("GO_RMM_POLICY_ALLOW", ""), "命令白名单(逗号分隔正则;非空则 allow-only:须命中白名单且不碰黑名单)")
-	// F11:webhook 告警(空则回退 GO_RMM_WEBHOOKS 环境变量)
-	flag.StringVar(&c.Webhooks, "webhooks", getEnv("GO_RMM_WEBHOOKS", ""), "webhook 告警 URL(逗号分隔;触发 task_failed/agent_offline/policy_blocked/power_executed/agent_revoked)")
+	flag.StringVar(&c.PolicyAllow, "policy-allow", getEnv("REINS_POLICY_ALLOW", ""), "命令白名单(逗号分隔正则;非空则 allow-only:须命中白名单且不碰黑名单)")
+	// F11:webhook 告警(空则回退 REINS_WEBHOOKS 环境变量)
+	flag.StringVar(&c.Webhooks, "webhooks", getEnv("REINS_WEBHOOKS", ""), "webhook 告警 URL(逗号分隔;触发 task_failed/agent_offline/policy_blocked/power_executed/agent_revoked)")
 	flag.Parse()
 	return c
 }

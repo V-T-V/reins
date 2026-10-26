@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // reaperLoop 周期扫描在途任务,回退超时项。

@@ -19,7 +19,7 @@ func TestMain(m *testing.M) {
 	if runtime.GOOS == "windows" {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive",
-			"-Command", "Write-Output go-rmm-preheat")
+			"-Command", "Write-Output reins-preheat")
 		_ = cmd.Run() // 结果不重要,只为触发并完成模块缓存准备
 		cancel()
 	}

@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // StreamHandler 流式事件回调。
@@ -97,7 +97,7 @@ func (c *Client) StreamCommand(ctx context.Context, agentID, command string, tim
 	return c.StreamExec(ctx, task, handler)
 }
 
-// === 内部 SSE 解析(避免与 cmd/go-rmm 的 newSSEScanner 冲突)===
+// === 内部 SSE 解析(避免与 cmd/reins 的 newSSEScanner 冲突)===
 
 type sseEvent2 struct {
 	event string

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/internal/taskstore"
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/internal/taskstore"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // newDAGTestServer 构造带 DAG 路由的测试服务器。

@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // PowerTagRequired 允许电源操作的标签。

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // scriptPayload 构造 script 任务 JSON 载荷。

@@ -16,7 +16,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/QiuShichang/go-rmm/internal/taskstore"
+	"github.com/QiuShichang/reins/internal/taskstore"
 )
 
 // Organization 一个租户(组织)。

@@ -47,8 +47,8 @@ type Config struct {
 	// Agent 是强制底线——即使 Relay 被绕过(交互式 shell/cron)也生效。
 	PolicyAllow []string `json:"policy_allow,omitempty"`
 	// RulesGate 项目规则门禁(默认 false)。开启后,变更类任务(powershell/
-	// script/browse/guiclick/update/power)必须携带与当前 .go-rmm/rules.md
-	// 内容一致的 rules_ack 才执行——AI/自动化运维须先 `go-rmm rules read`
+	// script/browse/guiclick/update/power)必须携带与当前 .reins/rules.md
+	// 内容一致的 rules_ack 才执行——AI/自动化运维须先 `reins rules read`
 	// 加载被部署项目的定制规则(如"勿在营业时段杀壳"/"部署排除目录"),
 	// 规则文件变更后旧 ack 失效。发现范围=allowed_roots+workspace(深度 2)。
 	// 没有任何规则文件时不拦截(未写规则的项目零影响);file/screenshot/
@@ -109,13 +109,13 @@ type Config struct {
 	Role string `json:"role,omitempty"`
 
 	// ServiceName Windows/Linux 服务名。
-	// 留空则按 Role 推导:master→go-rmm-master, slave→go-rmm-slave, 空→go-rmm-agent(兼容)。
+	// 留空则按 Role 推导:master→reins-master, slave→reins-slave, 空→reins-agent(兼容)。
 	// 用于 kardianos/service 注册 + 看门狗 sc.exe 操作。
 	ServiceName string `json:"service_name,omitempty"`
 
 	// === master 专属配置(看门狗 + 救援用) ===
 	//
-	// SlaveExeDir 从 Agent 的 exe 目录(如 C:\Program Files\go-rmm-slave)。
+	// SlaveExeDir 从 Agent 的 exe 目录(如 C:\Program Files\reins-slave)。
 	// 看门狗用它定位从的 .bak 文件做本地回滚兜底。仅 master 需要。
 	SlaveExeDir string `json:"slave_exe_dir,omitempty"`
 	// SlaveAgentID 从 Agent 的 agent_id(如 agent-PC-abc123)。
@@ -203,11 +203,11 @@ func (c Config) DerivedServiceName() string {
 	}
 	switch c.Role {
 	case "master":
-		return "go-rmm-master"
+		return "reins-master"
 	case "slave":
-		return "go-rmm-slave"
+		return "reins-slave"
 	default:
-		return "go-rmm-agent" // 向后兼容
+		return "reins-agent" // 向后兼容
 	}
 }
 
@@ -215,12 +215,12 @@ func (c Config) DerivedServiceName() string {
 //
 // 子命令模式：
 //
-//	go-rmm-agent install -relay <url> [-token <t>]   注册为服务
-//	go-rmm-agent uninstall
-//	go-rmm-agent start
-//	go-rmm-agent stop
-//	go-rmm-agent run -relay <url> [-token <t>]       前台调试
-//	go-rmm-agent status
+//	reins-agent install -relay <url> [-token <t>]   注册为服务
+//	reins-agent uninstall
+//	reins-agent start
+//	reins-agent stop
+//	reins-agent run -relay <url> [-token <t>]       前台调试
+//	reins-agent status
 func loadConfig(args []string) (cmd string, cfg Config, err error) {
 	cfg = DefaultConfig()
 

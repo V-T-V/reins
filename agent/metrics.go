@@ -2,7 +2,7 @@
 //
 // 默认监听 127.0.0.1:7781(仅本机,不暴露公网;远程采集经 tunnel 转发)。
 // config metrics_addr 可改地址,设 "off" 禁用。
-// 指标命名与其他端统一 gormmm_*(三 m)命名空间。
+// 指标命名与其他端统一 reins_*(三 m)命名空间。
 package main
 
 import (
@@ -63,22 +63,22 @@ func renderMetrics() string {
 		return fmt.Sprintf("# HELP %s %s\n# TYPE %s counter\n", name, help, name)
 	}
 	out := ""
-	out += help("gormmm_agent_xfer_upload_bytes_total", "累计上传字节数")
-	out += fmt.Sprintf("gormmm_agent_xfer_upload_bytes_total %d\n", ub)
-	out += help("gormmm_agent_xfer_download_bytes_total", "累计下载字节数")
-	out += fmt.Sprintf("gormmm_agent_xfer_download_bytes_total %d\n", db)
-	out += help("gormmm_agent_xfer_uploads_total", "累计上传完成次数")
-	out += fmt.Sprintf("gormmm_agent_xfer_uploads_total %d\n", uc)
-	out += help("gormmm_agent_xfer_downloads_total", "累计下载完成次数")
-	out += fmt.Sprintf("gormmm_agent_xfer_downloads_total %d\n", dc)
-	out += help("gormmm_agent_xfer_failures_total", "累计传输失败次数")
-	out += fmt.Sprintf("gormmm_agent_xfer_failures_total %d\n", fc)
-	out += "# HELP gormmm_agent_xfer_sessions_active 活跃传输会话数\n# TYPE gormmm_agent_xfer_sessions_active gauge\n"
-	out += fmt.Sprintf("gormmm_agent_xfer_sessions_active %d\n", active)
-	out += "# HELP gormmm_agent_reconnects_total 到 Relay 的重连尝试次数(含首次连接失败)\n# TYPE gormmm_agent_reconnects_total counter\n"
-	out += fmt.Sprintf("gormmm_agent_reconnects_total %d\n", reconnectsTotal.Load())
-	out += "# HELP gormmm_agent_uptime_seconds 进程运行秒数\n# TYPE gormmm_agent_uptime_seconds gauge\n"
-	out += fmt.Sprintf("gormmm_agent_uptime_seconds %d\n", int(time.Since(agentStartAt).Seconds()))
-	out += fmt.Sprintf("# HELP gormmm_agent_build_info 构建信息\n# TYPE gormmm_agent_build_info gauge\ngormmm_agent_build_info{version=%q} 1\n", version)
+	out += help("reins_agent_xfer_upload_bytes_total", "累计上传字节数")
+	out += fmt.Sprintf("reins_agent_xfer_upload_bytes_total %d\n", ub)
+	out += help("reins_agent_xfer_download_bytes_total", "累计下载字节数")
+	out += fmt.Sprintf("reins_agent_xfer_download_bytes_total %d\n", db)
+	out += help("reins_agent_xfer_uploads_total", "累计上传完成次数")
+	out += fmt.Sprintf("reins_agent_xfer_uploads_total %d\n", uc)
+	out += help("reins_agent_xfer_downloads_total", "累计下载完成次数")
+	out += fmt.Sprintf("reins_agent_xfer_downloads_total %d\n", dc)
+	out += help("reins_agent_xfer_failures_total", "累计传输失败次数")
+	out += fmt.Sprintf("reins_agent_xfer_failures_total %d\n", fc)
+	out += "# HELP reins_agent_xfer_sessions_active 活跃传输会话数\n# TYPE reins_agent_xfer_sessions_active gauge\n"
+	out += fmt.Sprintf("reins_agent_xfer_sessions_active %d\n", active)
+	out += "# HELP reins_agent_reconnects_total 到 Relay 的重连尝试次数(含首次连接失败)\n# TYPE reins_agent_reconnects_total counter\n"
+	out += fmt.Sprintf("reins_agent_reconnects_total %d\n", reconnectsTotal.Load())
+	out += "# HELP reins_agent_uptime_seconds 进程运行秒数\n# TYPE reins_agent_uptime_seconds gauge\n"
+	out += fmt.Sprintf("reins_agent_uptime_seconds %d\n", int(time.Since(agentStartAt).Seconds()))
+	out += fmt.Sprintf("# HELP reins_agent_build_info 构建信息\n# TYPE reins_agent_build_info gauge\nreins_agent_build_info{version=%q} 1\n", version)
 	return out
 }

@@ -4,7 +4,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // === RBAC authorizeRBAC 集成 ===
@@ -148,7 +148,7 @@ func TestFormatCEF(t *testing.T) {
 	if cef == "" {
 		t.Error("CEF 不应为空")
 	}
-	if !contains(cef, "CEF:0|go-rmm") {
+	if !contains(cef, "CEF:0|reins") {
 		t.Error("应含 CEF header")
 	}
 }

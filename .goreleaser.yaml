@@ -1,19 +1,19 @@
-# go-rmm goreleaser 配置(L7 神级提升)
+# reins goreleaser 配置(L7 神级提升)
 #
 # 用法:
 #   goreleaser release --clean
 #   goreleaser build --clean  (只构建不发布)
 #
 # 产物:
-#   - go-rmm-relay_{version}_{os}_{arch}.tar.gz
-#   - go-rmm-agent_{version}_{os}_{arch}.tar.gz (Windows .exe)
-#   - go-rmm-cli_{version}_{os}_{arch}.tar.gz
+#   - reins-relay_{version}_{os}_{arch}.tar.gz
+#   - reins-agent_{version}_{os}_{arch}.tar.gz (Windows .exe)
+#   - reins-cli_{version}_{os}_{arch}.tar.gz
 #   - checksums.txt (SHA256)
 #   - SBOM (syft 格式)
 
 version: 2
 
-project_name: go-rmm
+project_name: reins
 
 before:
   hooks:
@@ -24,7 +24,7 @@ builds:
   # Relay(服务端)
   - id: relay
     main: ./relay/
-    binary: go-rmm-relay
+    binary: reins-relay
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
     env:
@@ -39,7 +39,7 @@ builds:
   # Agent(Windows 服务 + Linux daemon)
   - id: agent
     main: ./agent/
-    binary: go-rmm-agent
+    binary: reins-agent
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
     env:
@@ -54,8 +54,8 @@ builds:
 
   # CLI(跨平台客户端)
   - id: cli
-    main: ./cmd/go-rmm/
-    binary: go-rmm
+    main: ./cmd/reins/
+    binary: reins
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
     env:
@@ -72,19 +72,19 @@ archives:
   - id: relay
     builds: [relay]
     name_template: >-
-      go-rmm-relay_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+      reins-relay_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     format_overrides:
       - goos: windows
         format: zip
     files:
-      - deploy/go-rmm-relay.service
+      - deploy/reins-relay.service
       - README.md
       - DEPLOYMENT.md
 
   - id: agent
     builds: [agent]
     name_template: >-
-      go-rmm-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+      reins-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     format_overrides:
       - goos: windows
         format: zip
@@ -92,7 +92,7 @@ archives:
   - id: cli
     builds: [cli]
     name_template: >-
-      go-rmm-cli_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+      reins-cli_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     format_overrides:
       - goos: windows
         format: zip
@@ -113,13 +113,13 @@ changelog:
 
 # SBOM 生成(供应链安全)
 sboms:
-  - id: go-rmm
+  - id: reins
     artifacts: archive
 
 release:
   github:
     owner: QiuShichang
-    name: go-rmm
+    name: reins
   draft: true
   prerelease: auto
-  name_template: "go-rmm {{ .Version }}"
+  name_template: "reins {{ .Version }}"

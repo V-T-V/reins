@@ -15,7 +15,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // handleStreamTask POST /api/tasks/stream —— 下发任务 + SSE 实时推送。

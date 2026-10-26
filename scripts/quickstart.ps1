@@ -1,5 +1,5 @@
 # ╔══════════════════════════════════════════════════════════╗
-# ║  go-rmm 极简安装 — Windows(一行命令,3 步完成)            ║
+# ║  reins 极简安装 — Windows(一行命令,3 步完成)            ║
 # ╚══════════════════════════════════════════════════════════╝
 #
 # 用法(管理员 PowerShell):
@@ -13,7 +13,7 @@ param(
     [string]$Mode = "server",
     [string]$Relay = "",
     [string]$Token = "",
-    [string]$Dir = "$env:USERPROFILE\.go-rmm",
+    [string]$Dir = "$env:USERPROFILE\.reins",
     [string]$Version = "v3.9.0"
 )
 
@@ -32,15 +32,15 @@ function Get-Token {
 }
 
 # === 编译 ===
-Write-Host "go-rmm $Version" -ForegroundColor Cyan
+Write-Host "reins $Version" -ForegroundColor Cyan
 
-if (Test-Path "D:\M_X_M\go-rmm\go.mod") {
+if (Test-Path "D:\M_X_M\reins\go.mod") {
     Write-Host "[编译] 从源码..." -ForegroundColor Green
-    Push-Location "D:\M_X_M\go-rmm"
+    Push-Location "D:\M_X_M\reins"
     $env:CGO_ENABLED = "0"
-    go build -ldflags "-s -w -X main.version=$Version" -o "$Bin\go-rmm-relay.exe" ./relay/
-    go build -ldflags "-s -w -X main.version=$Version" -o "$Bin\go-rmm-agent.exe" ./agent/
-    go build -ldflags "-s -w -X main.version=$Version" -o "$Bin\go-rmm.exe" ./cmd/go-rmm/
+    go build -ldflags "-s -w -X main.version=$Version" -o "$Bin\reins-relay.exe" ./relay/
+    go build -ldflags "-s -w -X main.version=$Version" -o "$Bin\reins-agent.exe" ./agent/
+    go build -ldflags "-s -w -X main.version=$Version" -o "$Bin\reins.exe" ./cmd/reins/
     Pop-Location
 } else {
     Write-Host "[错误] 需要在源码目录运行,或指定下载地址" -ForegroundColor Red
@@ -63,20 +63,20 @@ if ($Mode -eq "server" -or $Mode -eq "serve") {
     if (-not $Token) { $Token = Get-Token }
 
     Write-Host "[启动] Relay..." -ForegroundColor Green
-    Start-Process -FilePath "$Bin\go-rmm-relay.exe" -ArgumentList "-addr", ":7780", "-token", $Token -WindowStyle Minimized
+    Start-Process -FilePath "$Bin\reins-relay.exe" -ArgumentList "-addr", ":7780", "-token", $Token -WindowStyle Minimized
     Start-Sleep 3
 
     Write-Host ""
-    Write-Host "go-rmm 服务端已就绪!" -ForegroundColor Green
+    Write-Host "reins 服务端已就绪!" -ForegroundColor Green
     Write-Host ""
     Write-Host "  Web UI:  http://$IP`:7780"
     Write-Host "  Token:   $Token"
     Write-Host ""
     Write-Host "  在被控端执行:" -ForegroundColor Yellow
-    Write-Host "    go-rmm-agent.exe run -relay ws://$IP`:7780/agent -token $Token"
+    Write-Host "    reins-agent.exe run -relay ws://$IP`:7780/agent -token $Token"
     Write-Host ""
     Write-Host "  在操作端执行:" -ForegroundColor Yellow
-    Write-Host "    go-rmm --relay http://$IP`:7780 --token $Token agent list"
+    Write-Host "    reins --relay http://$IP`:7780 --token $Token agent list"
     Write-Host ""
 
 } elseif ($Mode -eq "agent") {
@@ -85,12 +85,12 @@ if ($Mode -eq "server" -or $Mode -eq "serve") {
     if (-not $Token) { $Token = Get-Token }
 
     Write-Host "[启动] Agent..." -ForegroundColor Green
-    Start-Process -FilePath "$Bin\go-rmm-agent.exe" -ArgumentList "run", "-relay", $Relay, "-token", $Token -WindowStyle Minimized
+    Start-Process -FilePath "$Bin\reins-agent.exe" -ArgumentList "run", "-relay", $Relay, "-token", $Token -WindowStyle Minimized
     Start-Sleep 2
 
     Write-Host "Agent 已连接!" -ForegroundColor Green
 
 } elseif ($Mode -eq "cli") {
     Write-Host "CLI 就绪!" -ForegroundColor Green
-    Write-Host "  go-rmm --relay http://<relay-ip>:7780 --token <token> agent list"
+    Write-Host "  reins --relay http://<relay-ip>:7780 --token <token> agent list"
 }

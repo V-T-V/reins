@@ -91,7 +91,7 @@ func TestBuildMuxInvalidRelayURL(t *testing.T) {
 
 func TestGetEnv(t *testing.T) {
 	// 默认值
-	if got := getEnv("GO_RMM_TEST_NONEXIST", "default"); got != "default" {
+	if got := getEnv("REINS_TEST_NONEXIST", "default"); got != "default" {
 		t.Errorf("getEnv 默认值 = %s", got)
 	}
 }

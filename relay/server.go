@@ -15,11 +15,11 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/go-rmm/internal/ca"
-	"github.com/QiuShichang/go-rmm/internal/wsx"
+	"github.com/QiuShichang/reins/internal/ca"
+	"github.com/QiuShichang/reins/internal/wsx"
 	"github.com/google/uuid"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // wsConn 对一条 WebSocket 连接的轻封装。

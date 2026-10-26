@@ -1,0 +1,47 @@
+# reins Relay systemd 服务模板
+#
+# 安装:
+#   sudo cp deploy/reins-relay.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable reins-relay
+#   sudo systemctl start reins-relay
+#
+# 日志: journalctl -u reins-relay -f
+
+[Unit]
+Description=reins Relay Server (远程自动化中继)
+Documentation=https://github.com/QiuShichang/reins
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rmm
+Group=rmm
+
+# 二进制路径(按实际安装位置修改)
+ExecStart=/opt/reins/reins-relay -addr :7780
+
+# 数据目录
+WorkingDirectory=/opt/reins
+Environment="REINS_RELAY_DATA_DIR=/opt/reins/data"
+
+# 自动重启 + 限制
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+# 安全加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/reins/data
+PrivateTmp=true
+
+# 日志到 journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=reins-relay
+
+[Install]
+WantedBy=multi-user.target

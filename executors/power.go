@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // PowerExecutor 电源操作。

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // TestMatchTagAnyExtra —— round9_secrets_test 已覆盖基本四态;

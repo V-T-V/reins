@@ -3,7 +3,7 @@ package executors
 import (
 	"context"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // BrowseExecutor 接口（实现由 build tag 切换）。

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // idempotencyCache 缓存已执行任务的幂等键与结果，防 Relay 重投导致重复执行。

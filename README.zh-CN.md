@@ -1,11 +1,11 @@
-# go-rmm
+# Reins
 
-> **自托管零信任远程运维平台** —— 单个 Go 二进制,零入站端口,数据不出内网。
+> **缰绳在你手里。** 自托管零信任远程运维平台——单个 Go 二进制,零入站端口,数据不出内网;AI 代理先读规则,再碰服务器。
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![CI](https://github.com/V-T-V/go-rmm/actions/workflows/ci.yml/badge.svg)](https://github.com/V-T-V/go-rmm/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/V-T-V/go-rmm?display_name=tag&sort=semver)](../../releases)
+[![CI](https://github.com/V-T-V/reins/actions/workflows/ci.yml/badge.svg)](https://github.com/V-T-V/reins/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/V-T-V/reins?display_name=tag&sort=semver)](../../releases)
 [![Tests](https://img.shields.io/badge/tests-558-brightgreen)]()
 [![CLI](https://img.shields.io/badge/CLI-50%2B%20commands-blue)]()
 
@@ -26,7 +26,7 @@
 - [安全与负责任使用](#安全与负责任使用)
 - [多租户与 RBAC](#多租户与-rbac)
 - [批量任务分发](#批量任务分发)
-- [项目规则门禁(.go-rmm/rules.md)](#项目规则门禁go-rmmrulesmd)
+- [项目规则门禁(.reins/rules.md)](#项目规则门禁reinsrulesmd)
 - [文件传输](#文件传输)
 - [API](#api)
 - [AI Agent 接入](#ai-agent-接入)
@@ -42,7 +42,7 @@
                         │                     Relay 中继服务器                          │
    CLI / AI SDK         │  HTTP REST (40+ 端点) + 内嵌 Web 控制台 + SSE 事件流           │
    ┌──────────┐  HTTPS  │  ┌────────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
-   │ go-rmm   │────────►│  │  Router    │─►│ Policy   │─►│  RBAC    │─►│  Audit   │   │
+   │ reins   │────────►│  │  Router    │─►│ Policy   │─►│  RBAC    │─►│  Audit   │   │
    │ (50+cmd) │         │  │  (REST)    │  │ (黑名单) │  │ (多租户) │  │(hash链) │   │
    └──────────┘         │  └─────┬──────┘  └──────────┘  └──────────┘  └──────────┘   │
                         │        │ dispatch                                              │
@@ -79,7 +79,7 @@
 
 ## 与同类项目对比
 
-| | go-rmm | MeshCentral | TacticalRMM | Teleport | RustDesk |
+| | reins | MeshCentral | TacticalRMM | Teleport | RustDesk |
 |---|---|---|---|---|---|
 | License | **MIT** | Apache-2.0 | source-available | source-available¹ | AGPL-3.0 |
 | 服务端 | **Go 单二进制** | Node.js | Django+Vue+Go+MQ | Go(较重) | Rust |
@@ -149,7 +149,7 @@
 | **Secret 管理** | 凭据 TTL+一次性,不落 audit |
 | **Session 录屏** | asciinema v2,可回放 |
 | **可观测性** | slog + Prometheus + pprof;Agent 本地 `127.0.0.1:7781/metrics`(xfer 计数/会话/重连/uptime) |
-| **Webhook 告警** | Slack/钉钉/企业微信;5 事件(任务失败/Agent 离线/策略拦截/电源操作/证书撤销),`-webhooks` flag 或 `GO_RMM_WEBHOOKS` |
+| **Webhook 告警** | Slack/钉钉/企业微信;5 事件(任务失败/Agent 离线/策略拦截/电源操作/证书撤销),`-webhooks` flag 或 `REINS_WEBHOOKS` |
 | **水平扩展** | TaskStore interface + Redis + Pub/Sub |
 | **智能调度** | `GET /api/scheduler/best` 按 CPU*0.4+内存*0.3+在途任务*10 选最低载 Agent;CPU/内存取 monitor 采样回流(2 分钟 TTL,过期按无数据处理) |
 | **AI Agent SDK** | `client.New()` → 45+ 方法 + 流式执行 |
@@ -160,19 +160,19 @@
 
 ```bash
 # 1. 服务端(一台机器)——Docker 一键起,或直接跑单二进制(零配置,自动生成 token)
-cp .env.example .env && 编辑 GO_RMM_TOKEN
+cp .env.example .env && 编辑 REINS_TOKEN
 docker compose up -d        # → http://localhost:7780(内嵌 Web 控制台)
 
 # 2. 被控端 Windows——复制一行命令即可(自动 UAC/Token 探测/上线确认)
 iex (((irm 'http://<relay>:7780/install.ps1') -replace '^\uFEFF'))
 
 # 3. 操作(你的电脑)
-go-rmm --relay http://<relay>:7780 --token <token> agent list
-go-rmm --relay http://<relay>:7780 --token <token> task run -a <agent> -c "hostname"
-go-rmm --relay http://<relay>:7780 --token <token> monitor top -a <agent>
+reins --relay http://<relay>:7780 --token <token> agent list
+reins --relay http://<relay>:7780 --token <token> task run -a <agent> -c "hostname"
+reins --relay http://<relay>:7780 --token <token> monitor top -a <agent>
 ```
 
-> 零配置:Relay 首次启动若未设 `-token` 会自动生成一个并打印;Agent 也可用 `GET /api/bootstrap` 拿到一行 PowerShell 安装命令,复制粘贴到目标机即可。Linux Agent:`./go-rmm-agent run -relay ws://relay:7780/agent -token <token>`。
+> 零配置:Relay 首次启动若未设 `-token` 会自动生成一个并打印;Agent 也可用 `GET /api/bootstrap` 拿到一行 PowerShell 安装命令,复制粘贴到目标机即可。Linux Agent:`./reins-agent run -relay ws://relay:7780/agent -token <token>`。
 
 ---
 
@@ -182,8 +182,8 @@ go-rmm --relay http://<relay>:7780 --token <token> monitor top -a <agent>
 |------|------|
 | Linux | `./scripts/quickstart.sh server` |
 | Windows | `.\scripts\quickstart.ps1` |
-| Docker | `docker build -f Dockerfile.relay -t go-rmm . && docker run -p 7780:7780 go-rmm` |
-| K8s | `helm install rmm deploy/helm/go-rmm` |
+| Docker | `docker build -f Dockerfile.relay -t reins . && docker run -p 7780:7780 reins` |
+| K8s | `helm install rmm deploy/helm/reins` |
 | 服务器 | `SERVER=<your-server> ./scripts/deploy-to-server.sh` |
 | Nginx 反代 | 见 `nginx-rmm.conf`(子路径部署 + TLS 终端) |
 
@@ -194,8 +194,8 @@ go-rmm --relay http://<relay>:7780 --token <token> monitor top -a <agent>
 ```bash
 # 标准流程:分片上传新二进制 → 引用模式推送(零内联,公网必用——内联 7MB+
 # base64 单帧 WS 写在公网链路必超时)
-go-rmm file upload -a <agent> go-rmm-agent.exe "C:\go-rmm\slave-workspace\go-rmm-agent-new.exe"
-go-rmm update push -a <agent> --version v1.2.3 --path "C:\go-rmm\slave-workspace\go-rmm-agent-new.exe"
+reins file upload -a <agent> reins-agent.exe "C:\reins\slave-workspace\reins-agent-new.exe"
+reins update push -a <agent> --version v1.2.3 --path "C:\reins\slave-workspace\reins-agent-new.exe"
 
 # Agent 侧:SHA256 校验 → .bak 备份 → 两步 rename(运行中 exe 先移走再顶名,
 # Windows 顶名到被映射路径必 Access denied)→ SCM 重启;健康自检失败自动回滚
@@ -205,19 +205,19 @@ go-rmm update push -a <agent> --version v1.2.3 --path "C:\go-rmm\slave-workspace
 
 ```bash
 # Linux 被控端:同一二进制,systemd 服务或前台运行
-./go-rmm-agent run -relay ws://relay:7780/agent -token <token>
+./reins-agent run -relay ws://relay:7780/agent -token <token>
 
 # 下发 shell 脚本(lang=sh,临时文件执行+进程树管理)
-go-rmm task run -a <agent> -t script -s deploy.sh          # 本地脚本文件直传
-go-rmm -o json task run -a <agent> -t script -f payload.json
+reins task run -a <agent> -t script -s deploy.sh          # 本地脚本文件直传
+reins -o json task run -a <agent> -t script -f payload.json
 
 # 运维命令自动平台方言化(CLI 查询 agent os 字段选 PowerShell 或 sh):
-go-rmm sysinfo -a <agent>          # /proc+df 手拼同构 JSON
-go-rmm service list -a <agent>     # systemctl list-units
-go-rmm proc list -a <agent>        # ps --sort=-pcpu
-go-rmm logs tail -a <agent> /var/log/syslog   # tail -f
-go-rmm net ports -a <agent>        # ss -tlnp
-go-rmm monitor top -a <agent>      # /proc 全维(CPU 差分/Top 进程/NetIO 速率)
+reins sysinfo -a <agent>          # /proc+df 手拼同构 JSON
+reins service list -a <agent>     # systemctl list-units
+reins proc list -a <agent>        # ps --sort=-pcpu
+reins logs tail -a <agent> /var/log/syslog   # tail -f
+reins net ports -a <agent>        # ss -tlnp
+reins monitor top -a <agent>      # /proc 全维(CPU 差分/Top 进程/NetIO 速率)
 ```
 
 CI 三平台(windows/linux/darwin)编译门禁;workflow/playbook 的命令内容由作者写,方言自定义。
@@ -234,7 +234,7 @@ Agent 配置 `xfer_listen` 后,同网段 CLI 的文件传输自动走直连(千�
 
 ```bash
 # CLI 无需任何改动:直连优先,--no-direct 可强制走中继
-go-rmm --relay https://relay:7780 --token t file upload -a agent1 big.zip C:\data\big.zip
+reins --relay https://relay:7780 --token t file upload -a agent1 big.zip C:\data\big.zip
 ```
 
 安全模型与中继一致(路径策略/per-chunk SHA256/断点续传),票据 60s 过期+路径绑定+用后即焚。
@@ -245,15 +245,15 @@ Relay 配置优先级:**命令行 flag > 环境变量 > 默认值**。
 
 | Flag | 环境变量 | 默认 | 说明 |
 |------|----------|------|------|
-| `-addr` | `GO_RMM_RELAY_ADDR` | `:7780` | HTTP 监听地址 |
-| `-token` | `GO_RMM_RELAY_TOKEN` | (自动生成) | Agent/Console 鉴权 token;空则不校验 |
-| `-dev` | `GO_RMM_RELAY_DEV` | off | 开发模式(详细日志、放宽校验) |
-| `-mtls` | `GO_RMM_RELAY_MTLS` | off | 启用 mTLS(需内置 CA + Agent 客户端证书) |
-| `-tls-cert` | `GO_RMM_RELAY_TLS_CERT` | — | Relay TLS 证书文件 |
-| `-tls-key` | `GO_RMM_RELAY_TLS_KEY` | — | Relay TLS 私钥文件 |
-| `-external-url` | `GO_RMM_EXTERNAL_URL` | — | 外部访问地址(经反代/TLS 终端时用),如 `https://host/rmm` |
-| `-policy-allow` | `GO_RMM_POLICY_ALLOW` | (黑名单模式) | 命令白名单(逗号分隔正则);非空则 allow-only |
-| `-webhooks` | `GO_RMM_WEBHOOKS` | — | Webhook 告警地址(逗号分隔) |
+| `-addr` | `REINS_RELAY_ADDR` | `:7780` | HTTP 监听地址 |
+| `-token` | `REINS_RELAY_TOKEN` | (自动生成) | Agent/Console 鉴权 token;空则不校验 |
+| `-dev` | `REINS_RELAY_DEV` | off | 开发模式(详细日志、放宽校验) |
+| `-mtls` | `REINS_RELAY_MTLS` | off | 启用 mTLS(需内置 CA + Agent 客户端证书) |
+| `-tls-cert` | `REINS_RELAY_TLS_CERT` | — | Relay TLS 证书文件 |
+| `-tls-key` | `REINS_RELAY_TLS_KEY` | — | Relay TLS 私钥文件 |
+| `-external-url` | `REINS_EXTERNAL_URL` | — | 外部访问地址(经反代/TLS 终端时用),如 `https://host/rmm` |
+| `-policy-allow` | `REINS_POLICY_ALLOW` | (黑名单模式) | 命令白名单(逗号分隔正则);非空则 allow-only |
+| `-webhooks` | `REINS_WEBHOOKS` | — | Webhook 告警地址(逗号分隔) |
 
 配置校验(`Config.Validate()`):`addr` 不能为空;mTLS 模式必须配证书;token 长度建议 ≥8。
 
@@ -274,10 +274,10 @@ CLI 全局 flag:`--relay`(默认 `http://127.0.0.1:7780`)、`--token`、`--outpu
 | **隔离** | 租户只能看自己的 Agent(tags["tenant"] 过滤) |
 
 > 深度防御:黑名单为 best-effort(可绕过),Agent 侧二次校验兜底;需要收紧时启用白名单——
-> Relay `-policy-allow '^Get-Service,^node '`(或 `GO_RMM_POLICY_ALLOW` env,逗号分隔正则)、
+> Relay `-policy-allow '^Get-Service,^node '`(或 `REINS_POLICY_ALLOW` env,逗号分隔正则)、
 > Agent config `policy_allow: ["^systemctl status"]`。白名单非空时命令必须命中其一且不碰黑名单。
 
-**负责任使用**:go-rmm 用于管理**你自己拥有或获得书面授权管理**的设备。未经授权使用违反许可证,且在任何司法辖区很可能违法。本项目的安全设计(出站连接、每设备证书可吊销、防篡改审计链)正是为了满足企业对"经批准的远程运维工具"(CISA AA23-025A 建议的 approved-RMM allowlist 场景)的管控要求。
+**负责任使用**:reins 用于管理**你自己拥有或获得书面授权管理**的设备。未经授权使用违反许可证,且在任何司法辖区很可能违法。本项目的安全设计(出站连接、每设备证书可吊销、防篡改审计链)正是为了满足企业对"经批准的远程运维工具"(CISA AA23-025A 建议的 approved-RMM allowlist 场景)的管控要求。
 
 **杀软误报**:远程运维 Agent 的行为特征(服务持久化+命令执行)与安全引擎的风险模型天然重叠,少量引擎报毒是本品类常态(MeshCentral/TacticalRMM/RustDesk 同样如此)。处置方法见 [docs/antivirus.md](./docs/antivirus.md);每个 Release 附 SHA256 清单,请认官方哈希。漏洞报告见 [SECURITY.md](./SECURITY.md)。
 
@@ -322,8 +322,8 @@ curl $RELAY/api/batch/<batch_id> -H "Authorization: Bearer $TOKEN"
 curl -N $RELAY/api/batch/<batch_id>/progress -H "Authorization: Bearer $TOKEN"
 
 # CLI 等价
-go-rmm batch start --tag env=prod -c "Get-Date" --retries 2
-go-rmm batch watch <batch_id>          # 实时跟踪到终态
+reins batch start --tag env=prod -c "Get-Date" --retries 2
+reins batch watch <batch_id>          # 实时跟踪到终态
 ```
 
 **同步端点(轻量场景)**:`POST /api/tasks/batch`
@@ -386,9 +386,9 @@ curl -X POST $RELAY/api/dag -H "Authorization: Bearer $TOKEN" -d '{
 curl $RELAY/api/dag/<dag_id> -H "Authorization: Bearer $TOKEN"
 
 # CLI 等价
-go-rmm dag apply -f flow.json -concurrency 2
-go-rmm dag status <dag_id> -w       # -w 轮询到终态
-go-rmm dag list
+reins dag apply -f flow.json -concurrency 2
+reins dag status <dag_id> -w       # -w 轮询到终态
+reins dag list
 ```
 
 节点执行体复用既有任务链路(agent_id 直指或 tag 扇出 → store 持久化 + WS 投递 → 轮询任务终态);失败节点下游由调度核心级联跳过(**零任务投递**);提交期逐节点过命令策略校验(高危命令 403),全程审计。
@@ -418,12 +418,12 @@ go-rmm dag list
 
 ```bash
 # 上传(大文件自动分片)
-go-rmm file upload -a <agent> <local> <remote>
-go-rmm file upload -a <agent> --concurrency 8 --chunk-size 20M --chunk-retry 5 <local> <remote>
+reins file upload -a <agent> <local> <remote>
+reins file upload -a <agent> --concurrency 8 --chunk-size 20M --chunk-retry 5 <local> <remote>
 
 # 下载(大文件自动分片)
-go-rmm file download -a <agent> <remote> <local>
-go-rmm file download -a <agent> --concurrency 8 <remote> <local>
+reins file download -a <agent> <remote> <local>
+reins file download -a <agent> --concurrency 8 <remote> <local>
 ```
 
 | flag | 默认 | 说明 |
@@ -460,9 +460,9 @@ go-rmm file download -a <agent> --concurrency 8 <remote> <local>
 
 ---
 
-## 项目规则门禁(.go-rmm/rules.md)
+## 项目规则门禁(.reins/rules.md)
 
-被部署项目可在**项目根**放 `.go-rmm/rules.md` 写定制运维规则——AI/自动化用 go-rmm 操作该项目前必须先加载规则并遵守。规则随项目仓库走,部署同步到远端。
+被部署项目可在**项目根**放 `.reins/rules.md` 写定制运维规则——AI/自动化用 reins 操作该项目前必须先加载规则并遵守。规则随项目仓库走,部署同步到远端。
 
 ### 规则文件示例
 
@@ -481,11 +481,11 @@ go-rmm file download -a <agent> --concurrency 8 <remote> <local>
 
 ```bash
 # ① 加载规则:读全文 + 自动缓存 ack(规则内容指纹)
-go-rmm rules read -a agent-xxx            # 自动发现全部规则
-go-rmm rules read -a agent-xxx -p D:\proj # 只读指定项目
+reins rules read -a agent-xxx            # 自动发现全部规则
+reins rules read -a agent-xxx -p D:\proj # 只读指定项目
 
 # ② 操作:task run / exec / deploy 自动携带缓存的 ack
-go-rmm task run -a agent-xxx -c "..."     # 上一步的 ack 已自动附上
+reins task run -a agent-xxx -c "..."     # 上一步的 ack 已自动附上
 
 # ③ 规则变更 → 旧 ack 失效,任务被拒并指引重新 read(强制读新规则)
 ```
@@ -494,7 +494,7 @@ go-rmm task run -a agent-xxx -c "..."     # 上一步的 ack 已自动附上
 
 | 层 | 行为 | 生效条件 |
 |----|------|----------|
-| 软提醒 | CLI 当前目录有 `.go-rmm/rules.md` 时,变更类命令把规则全文打印到 stderr(AI 上下文可见)并以本地指纹为 ack | 始终(本地模式) |
+| 软提醒 | CLI 当前目录有 `.reins/rules.md` 时,变更类命令把规则全文打印到 stderr(AI 上下文可见)并以本地指纹为 ack | 始终(本地模式) |
 | 硬门禁 | Agent 拒绝无 ack / 过期 ack 的变更类任务(powershell/script/browse/guiclick/update/power),拒绝信息不回显指纹(防跳过阅读直接重放) | agent 配置 `rules_gate: true` |
 
 - ack 语义:规则内容 SHA256 前 16 hex。多项目时接受组合指纹或任一单项目指纹
@@ -505,8 +505,8 @@ go-rmm task run -a agent-xxx -c "..."     # 上一步的 ack 已自动附上
 ### 一行命令部署模板
 
 ```bash
-go-rmm deploy init myapp                       # basic: 上传→停→启→健康检查
-go-rmm deploy init myapp --template zip-node   # zip 包→镜像同步(排除表)→npm→重启计划任务→健康检查
+reins deploy init myapp                       # basic: 上传→停→启→健康检查
+reins deploy init myapp --template zip-node   # zip 包→镜像同步(排除表)→npm→重启计划任务→健康检查
 ```
 
 ---
@@ -514,7 +514,7 @@ go-rmm deploy init myapp --template zip-node   # zip 包→镜像同步(排除�
 ## AI Agent 接入
 
 ```go
-import "github.com/QiuShichang/go-rmm/client"
+import "github.com/QiuShichang/reins/client"
 
 c := client.New("https://relay:7780", "token")
 

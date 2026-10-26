@@ -16,7 +16,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // newTestRelay 创建测试用 Relay 实例(MemoryStore + 无 audit)。

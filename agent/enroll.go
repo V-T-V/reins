@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // AgentCerts 管理 Agent 的 mTLS 客户端证书。
@@ -181,7 +181,7 @@ func (a *AgentCerts) TLSConfig() *tls.Config {
 	return &tls.Config{
 		Certificates: []tls.Certificate{*a.cert},
 		RootCAs:      a.caPool,
-		ServerName:   "go-rmm-relay", // Relay 证书的 CN/SAN
+		ServerName:   "reins-relay", // Relay 证书的 CN/SAN
 		MinVersion:   tls.VersionTLS12,
 	}
 }

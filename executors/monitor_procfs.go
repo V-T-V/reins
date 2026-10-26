@@ -25,7 +25,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 // procSampleInterval CPU/NetIO 差分采样间隔。

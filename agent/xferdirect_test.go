@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/go-rmm/proto"
+	"github.com/QiuShichang/reins/proto"
 )
 
 func ticketSecretHash(secret string) string {
@@ -137,7 +137,7 @@ func (c *directClient) begin(t *testing.T, ticketID, path, direction string, ext
 	}
 	b, _ := json.Marshal(body)
 	req, _ := http.NewRequest("POST", c.base+"/xfer/begin", bytes.NewReader(b))
-	req.Header.Set("X-Go-RMM-Ticket", ticketID+":"+c.token)
+	req.Header.Set("X-Reins-Ticket", ticketID+":"+c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		t.Fatalf("begin 失败: %v", err)
@@ -187,7 +187,7 @@ func TestXferDirectUploadE2E(t *testing.T) {
 
 	// data:流式上传
 	req, _ := http.NewRequest("POST", srv.URL+"/xfer/data?transfer_id=dx-1", bytes.NewReader(content))
-	req.Header.Set("X-Go-RMM-Data-Token", dataToken)
+	req.Header.Set("X-Reins-Data-Token", dataToken)
 	resp, err := srv.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -223,7 +223,7 @@ func TestXferDirectUploadE2E(t *testing.T) {
 
 	// data_token 一次性:重复 data 拒绝
 	req2, _ := http.NewRequest("POST", srv.URL+"/xfer/data?transfer_id=dx-1", bytes.NewReader(content))
-	req2.Header.Set("X-Go-RMM-Data-Token", dataToken)
+	req2.Header.Set("X-Reins-Data-Token", dataToken)
 	resp2, _ := srv.Client().Do(req2)
 	resp2.Body.Close()
 	if resp2.StatusCode != http.StatusUnauthorized {
@@ -276,7 +276,7 @@ func TestXferDirectDownloadE2E(t *testing.T) {
 	}
 
 	req, _ := http.NewRequest("POST", srv.URL+"/xfer/fetch?transfer_id=dx-dl-1", nil)
-	req.Header.Set("X-Go-RMM-Data-Token", ready["data_token"].(string))
+	req.Header.Set("X-Reins-Data-Token", ready["data_token"].(string))
 	resp, err := srv.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -313,7 +313,7 @@ func TestXferDirectPolicyReject(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]any{"path": filepath.Join(ws, "x.bin"), "direction": "upload"})
 	req, _ := http.NewRequest("POST", srv.URL+"/xfer/begin", bytes.NewReader(body))
-	req.Header.Set("X-Go-RMM-Ticket", "e2e-deny:"+secret)
+	req.Header.Set("X-Reins-Ticket", "e2e-deny:"+secret)
 	resp, err := srv.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
