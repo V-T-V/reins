@@ -153,10 +153,7 @@ func main() {
 	defer stop()
 
 	// 零交互:启动成功后打印连接信息
-	port := strings.TrimPrefix(cfg.Addr, ":")
-	if port == "" {
-		port = "7780"
-	}
+	port := addrPort(cfg.Addr)
 	localIP := getLocalIP()
 	tokenHint := cfg.Token
 	if len(tokenHint) > 8 {

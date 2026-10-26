@@ -226,3 +226,22 @@ func TestRegistryUnregisterGuard(t *testing.T) {
 		t.Fatal("新连接应成功 Unregister")
 	}
 }
+
+// TestAddrPort —— 启动横幅端口提取(2026-10-27 冒烟逮住 TrimPrefix 只认 ":7780"
+// 形态、带 host 的 addr 整串被当端口拼出废址的 bug)。
+func TestAddrPort(t *testing.T) {
+	cases := map[string]string{
+		":7780":           "7780",
+		"127.0.0.1:7780":  "7780",
+		"0.0.0.0:9000":    "9000",
+		"[::1]:7780":      "7780",
+		"7780":            "7780", // 裸端口兜底
+		"":                "7780", // 空兜底
+		"localhost:17890": "17890",
+	}
+	for addr, want := range cases {
+		if got := addrPort(addr); got != want {
+			t.Errorf("addrPort(%q) = %q, want %q", addr, got, want)
+		}
+	}
+}

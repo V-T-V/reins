@@ -8,7 +8,7 @@ This policy covers the reins repository (relay, agent, CLI, SDK, protocol, web c
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-- Email: security@reins.dev *(placeholder — replace with a monitored mailbox before public launch)*
+- Email: 1207565967@qq.com *(与 git 提交作者邮箱一致;如需专用安全邮箱请替换)*
 - Include: affected version/tag, reproduction steps (PoC), impact assessment, and any relevant logs.
 - Please withhold public disclosure until the fix is released.
 

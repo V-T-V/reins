@@ -144,7 +144,7 @@ reins/
 | Go 文件 | 253 |
 | 代码行 | 48,000+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 558 |
+| 测试用例 | 559 |
 | 基准测试 | 26 |
 | CLI 命令 | 50+ |
 | API 端点 | 40+ |
