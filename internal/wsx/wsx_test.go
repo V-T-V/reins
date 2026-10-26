@@ -83,11 +83,14 @@ func TestControlPriorityOverData(t *testing.T) {
 	ctx := context.Background()
 	w.Start(ctx)
 
-	const frames = 8
-	const frameSize = 256 * 1024
+	// 32×1MB = 32MB:必须远大于任何宿主的 socket 缓冲(CI runner 内核 wmem 可达数 MB,
+	// 早期 8×256KB=2MB 版本在缓冲较大的机器上 writer 根本不阻塞,顺序断言必然翻转——
+	// 2026-10-26 GitHub Actions 首跑即 flake 的真机制)。
+	const frames = 32
+	const frameSize = 1024 * 1024
 	payload := bytes.Repeat([]byte("D"), frameSize)
 
-	// 生产者:连发 8 个 256KB 数据帧(客户端先不读 → writer 尽快阻塞在写)。
+	// 生产者:连发 32 个 1MB 数据帧(客户端先不读 → writer 尽快阻塞在写)。
 	done := make(chan error, frames)
 	go func() {
 		for i := 0; i < frames; i++ {
@@ -95,7 +98,7 @@ func TestControlPriorityOverData(t *testing.T) {
 		}
 	}()
 	// 等 writer 真正阻塞在 socket 写:第一批 WriteData 完成数停滞即说明
-	// OS 发送缓冲已满(完成后帧也不再被写出)。256KB×8 ≫ loopback 缓冲。
+	// OS 发送缓冲已满(完成后帧也不再被写出)。32MB ≫ loopback/CI 缓冲。
 	time.Sleep(300 * time.Millisecond)
 
 	// 数据积压时投 control 帧(它入 controlCh 缓冲,不被 dataCh 排队阻塞)。

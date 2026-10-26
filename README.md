@@ -2,7 +2,7 @@
 
 > **Take the reins of your fleet.** Self-hosted zero-trust remote operations platform — one Go binary, zero inbound ports, your data never leaves your network. And your AI agents touch a server only after reading the rules.
 
-[![Go](https://img.shields.io/badge/go-1.25+-00ADD8?logo=go)](https://go.dev)
+[![Go](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 [![CI](https://github.com/V-T-V/reins/actions/workflows/ci.yml/badge.svg)](https://github.com/V-T-V/reins/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/V-T-V/reins?display_name=tag&sort=semver)](../../releases)

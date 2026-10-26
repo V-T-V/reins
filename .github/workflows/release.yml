@@ -19,7 +19,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.26"
           cache: true
 
       - uses: docker/login-action@v3
@@ -45,6 +45,10 @@ jobs:
           tags: |
             ghcr.io/v-t-v/reins-agent:latest
             ghcr.io/v-t-v/reins-agent:${{ github.ref_name }}
+
+      # SBOM 生成依赖 syft(anchore),runner 默认不带——2026-10-26 v4.8.0 首发干跑补齐
+      - name: Install syft (SBOM tooling)
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
 
       - uses: goreleaser/goreleaser-action@v6
         with:

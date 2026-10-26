@@ -6,7 +6,7 @@
 # 数据卷: /data (持久化 tasks.db + audit.log + ca-* + agent-binaries/)
 
 # === Stage 1: 构建 ===
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
 
