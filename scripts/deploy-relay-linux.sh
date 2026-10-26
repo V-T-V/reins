@@ -66,7 +66,7 @@ if command -v go &>/dev/null; then
     else
         # 克隆源码
         info "克隆 reins 源码..."
-        git clone --depth 1 https://github.com/QiuShichang/reins.git /tmp/reins-src || true
+        git clone --depth 1 https://github.com/V-T-V/reins.git /tmp/reins-src || true
         if [ -d "/tmp/reins-src" ]; then
             cp -r /tmp/reins-src/* .
         fi
@@ -77,7 +77,7 @@ if command -v go &>/dev/null; then
 else
     info "无 Go 环境,下载预编译二进制..."
     # 尝试从 GitHub Release 下载
-    DOWNLOAD_URL="https://github.com/QiuShichang/reins/releases/download/${VERSION}/reins-relay-linux-${GOARCH}"
+    DOWNLOAD_URL="https://github.com/V-T-V/reins/releases/download/${VERSION}/reins-relay-linux-${GOARCH}"
     if curl -fsSL "$DOWNLOAD_URL" -o reins-relay; then
         chmod +x reins-relay
         info "下载完成"

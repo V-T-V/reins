@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // TestPowerShellBasic 验证 PowerShell 执行器能跑真实命令。

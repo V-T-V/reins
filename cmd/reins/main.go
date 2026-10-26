@@ -43,7 +43,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // version 由 -ldflags 注入。

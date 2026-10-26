@@ -11,7 +11,7 @@ import (
 
 	svc "github.com/kardianos/service"
 
-	"github.com/QiuShichang/reins/executors"
+	"github.com/V-T-V/reins/executors"
 )
 
 // program 实现 svc.Interface，由 kardianos 在服务模式下驱动。

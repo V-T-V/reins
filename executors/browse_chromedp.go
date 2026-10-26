@@ -14,7 +14,7 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 type chromedpBrowseExecutor struct{}

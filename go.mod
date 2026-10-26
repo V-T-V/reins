@@ -1,4 +1,4 @@
-module github.com/QiuShichang/reins
+module github.com/V-T-V/reins
 
 go 1.26
 

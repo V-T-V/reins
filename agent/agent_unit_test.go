@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // === 幂等缓存 ===

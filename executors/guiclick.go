@@ -8,9 +8,9 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
-	"github.com/QiuShichang/reins/vision"
-	"github.com/QiuShichang/reins/win32"
+	"github.com/V-T-V/reins/proto"
+	"github.com/V-T-V/reins/vision"
+	"github.com/V-T-V/reins/win32"
 )
 
 // GUIClickExecutor 视觉驱动的桌面 GUI 点击。

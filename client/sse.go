@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // Event SSE 事件。

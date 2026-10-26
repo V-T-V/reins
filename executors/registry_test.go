@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // noopExecutor 测试用执行器，立即返回成功。

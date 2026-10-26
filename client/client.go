@@ -18,7 +18,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // Client reins Relay API 客户端。

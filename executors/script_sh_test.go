@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // scriptPayload 构造 script 任务 JSON 载荷。

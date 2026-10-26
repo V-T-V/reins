@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // mockDispatch 构造可控行为的投递函数。

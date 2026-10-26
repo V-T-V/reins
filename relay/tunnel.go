@@ -21,7 +21,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // handleTunnelOpen POST /api/tunnel/open —— Console 开启隧道。

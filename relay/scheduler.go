@@ -8,7 +8,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // CronRule/bucketCrons 已拆入 internal/taskstore;本包经 store_alias.go 引用。

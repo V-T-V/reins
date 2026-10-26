@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // BatchRequest 批量任务请求(一对多)。

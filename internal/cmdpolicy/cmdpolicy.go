@@ -16,7 +16,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // Policy 命令安全策略。

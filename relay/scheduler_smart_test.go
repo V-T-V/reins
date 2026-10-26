@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // TestMatchTagAnyExtra —— round9_secrets_test 已覆盖基本四态;

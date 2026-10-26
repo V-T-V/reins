@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/QiuShichang/reins/executors"
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/executors"
+	"github.com/V-T-V/reins/proto"
 )
 
 // === Agent executors.go 测试 ===

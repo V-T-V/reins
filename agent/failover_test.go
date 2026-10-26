@@ -12,8 +12,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/reins/executors"
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/executors"
+	"github.com/V-T-V/reins/proto"
 )
 
 // TestBuildRelayCandidates W1 候选列表构造:主 URL 优先 + 备用去重 + 全空。

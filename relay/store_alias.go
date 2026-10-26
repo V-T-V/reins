@@ -6,7 +6,7 @@
 package main
 
 import (
-	"github.com/QiuShichang/reins/internal/taskstore"
+	"github.com/V-T-V/reins/internal/taskstore"
 )
 
 // 类型 alias。

@@ -23,8 +23,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/reins/internal/ca"
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/internal/ca"
+	"github.com/V-T-V/reins/proto"
 )
 
 // --- 测试基建:webhook 接收端(sink) ---

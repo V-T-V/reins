@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // agentOS 查询目标 Agent 的平台标识(如 "windows/amd64"/"linux/amd64")。

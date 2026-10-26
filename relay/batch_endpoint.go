@@ -19,7 +19,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // batchTTL 已完成批次的注册表保留时长。

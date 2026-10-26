@@ -8,7 +8,7 @@
 #   .\scripts\deploy-agent-windows.ps1 -RelayUrl "ws://your-relay:7780/agent" -Token "your-secret"
 #
 #   # 方式3: 一行命令(远程下载运行)
-#   iex (New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/QiuShichang/reins/main/scripts/deploy-agent-windows.ps1')
+#   iex (New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/V-T-V/reins/main/scripts/deploy-agent-windows.ps1')
 #
 # 功能:
 #   1. 下载/编译 reins-agent.exe
@@ -63,7 +63,7 @@ if (Test-Path "D:\M_X_M\reins") {
     # 下载
     Write-Host "[INFO] 下载 reins-agent.exe..."
     $arch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "amd64" }
-    $url = "https://github.com/QiuShichang/reins/releases/download/$Version/reins-agent-windows-$arch.exe"
+    $url = "https://github.com/V-T-V/reins/releases/download/$Version/reins-agent-windows-$arch.exe"
     try {
         Invoke-WebRequest -Uri $url -OutFile $AgentExe -UseBasicParsing
     } catch {

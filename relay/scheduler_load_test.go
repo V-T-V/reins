@@ -20,7 +20,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // TestParseMonitorLoad —— 纯函数:Message JSON 段提取与全部拒绝路径。

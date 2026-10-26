@@ -21,7 +21,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 func newUpdateTestRelay(t *testing.T) (*Relay, *httptest.Server, *UpdateRepo) {

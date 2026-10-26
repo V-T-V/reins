@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QiuShichang/reins/executors"
+	"github.com/V-T-V/reins/executors"
 )
 
 // withCacheDir 把用户缓存目录重定向到临时目录(ack 缓存测试用)。

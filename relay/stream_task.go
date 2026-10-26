@@ -15,7 +15,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // handleStreamTask POST /api/tasks/stream —— 下发任务 + SSE 实时推送。

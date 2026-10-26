@@ -98,7 +98,7 @@ curl -fsSL https://your-domain.com/rmm/q.sh | bash
 
 ```bash
 # 编译
-git clone https://github.com/QiuShichang/reins.git && cd reins
+git clone https://github.com/V-T-V/reins.git && cd reins
 CGO_ENABLED=0 go build -ldflags "-s -w" -o /opt/reins/reins-relay ./relay/
 
 # systemd 服务

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/QiuShichang/reins/internal/taskstore"
+	"github.com/V-T-V/reins/internal/taskstore"
 )
 
 // TestTenantPersistenceRoundTrip 实证组织持久化往返:

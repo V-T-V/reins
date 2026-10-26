@@ -9,7 +9,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // Executor 是任务执行器的统一接口。

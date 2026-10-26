@@ -13,7 +13,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // === status 命令 ===

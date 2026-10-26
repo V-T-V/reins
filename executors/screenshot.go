@@ -6,8 +6,8 @@ import (
 	"runtime"
 	"strconv"
 
-	"github.com/QiuShichang/reins/proto"
-	"github.com/QiuShichang/reins/win32"
+	"github.com/V-T-V/reins/proto"
+	"github.com/V-T-V/reins/win32"
 )
 
 // ScreenshotExecutor 截图。

@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // StreamHandler 流式事件回调。

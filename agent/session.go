@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // SessionManager 管理交互式 shell 会话。

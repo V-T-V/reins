@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // taskStream 下发流式任务(POST /api/tasks/stream + SSE 实时输出)。

@@ -3,7 +3,7 @@ package taskstore
 import (
 	"testing"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 func TestMemoryStoreSaveGet(t *testing.T) {

@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // MonitorExecutor 流式监测。

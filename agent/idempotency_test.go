@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // TestIdempotencyCacheHitMiss 验证幂等缓存命中/未命中。

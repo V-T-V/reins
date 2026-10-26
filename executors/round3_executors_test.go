@@ -23,7 +23,7 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // === 1. 命令(command)：Dispatcher 层强制命令策略 ===

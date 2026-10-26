@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // resultQueue 缓存待发送的任务结果。

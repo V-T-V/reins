@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/QiuShichang/reins/executors"
+	"github.com/V-T-V/reins/executors"
 )
 
 // usage 打印用法。

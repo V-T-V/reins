@@ -13,7 +13,7 @@ import (
 	"runtime"
 	"unicode/utf16"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // PowerShellExecutor 执行内联 PowerShell 命令。

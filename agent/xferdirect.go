@@ -46,7 +46,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // --- 票据存储 ---

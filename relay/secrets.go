@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // SecretStore 凭据存储(内存态,TTL + 一次性)。

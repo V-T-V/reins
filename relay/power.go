@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // PowerTagRequired 允许电源操作的标签。

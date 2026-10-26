@@ -10,7 +10,7 @@
 
 [Unit]
 Description=reins Relay Server (远程自动化中继)
-Documentation=https://github.com/QiuShichang/reins
+Documentation=https://github.com/V-T-V/reins
 After=network-online.target
 Wants=network-online.target
 

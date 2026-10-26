@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // TestXferChannelConcurrentClose 并发 routeXferData 与 unregisterXferChannels,

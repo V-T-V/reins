@@ -118,7 +118,7 @@ sboms:
 
 release:
   github:
-    owner: QiuShichang
+    owner: V-T-V
     name: reins
   draft: true
   prerelease: auto

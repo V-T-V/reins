@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // TestBinaryFrameRoundTrip 验证 J1：二进制帧构造与解析往返。

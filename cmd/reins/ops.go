@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // === sysinfo 一次性系统体检 ===

@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // TestRegisterExecutorsUpdateCapability update 执行器注册回归:

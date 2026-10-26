@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // === Buffer Pool 性能对比 ===

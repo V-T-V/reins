@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // runSingleChunkUpload 模拟一次单片上传(init → 单帧 isLast),返回 complete 结果。

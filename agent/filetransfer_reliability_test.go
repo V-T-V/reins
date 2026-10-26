@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // TestPathMutexRejectConcurrentSamePath 验证 R1:path 互斥拒绝并发同 path。

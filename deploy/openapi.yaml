@@ -16,7 +16,7 @@ info:
   version: 2.2.0
   contact:
     name: reins
-    url: https://github.com/QiuShichang/reins
+    url: https://github.com/V-T-V/reins
 
 servers:
   - url: http://localhost:7780

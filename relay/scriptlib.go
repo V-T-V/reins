@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // ScriptLibrary 脚本库(文件系统态)。

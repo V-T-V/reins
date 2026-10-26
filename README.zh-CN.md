@@ -514,7 +514,7 @@ reins deploy init myapp --template zip-node   # zip 包→镜像同步(排除表
 ## AI Agent 接入
 
 ```go
-import "github.com/QiuShichang/reins/client"
+import "github.com/V-T-V/reins/client"
 
 c := client.New("https://relay:7780", "token")
 

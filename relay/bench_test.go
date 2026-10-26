@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/reins/internal/ca"
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/internal/ca"
+	"github.com/V-T-V/reins/proto"
 )
 
 // BenchmarkSaveTask bbolt SaveTask 吞吐（任务持久化核心路径）。

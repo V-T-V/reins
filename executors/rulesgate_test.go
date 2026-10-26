@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // mkRulesFile 在 dir 下创建 .reins/rules.md,返回项目目录。

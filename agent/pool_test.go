@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // TestWorkerPoolLimitsConcurrency 验证 F3 修复：worker pool 限制并发数。

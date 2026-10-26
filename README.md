@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 [![CI](https://github.com/V-T-V/reins/actions/workflows/ci.yml/badge.svg)](https://github.com/V-T-V/reins/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/V-T-V/reins?display_name=tag&sort=semver)](../../releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/QiuShichang/reins/client.svg)](https://pkg.go.dev/github.com/QiuShichang/reins/client)
+[![Go Reference](https://pkg.go.dev/badge/github.com/V-T-V/reins/client.svg)](https://pkg.go.dev/github.com/V-T-V/reins/client)
 [![Tests](https://img.shields.io/badge/tests-558-brightgreen)]()
 [![CLI](https://img.shields.io/badge/CLI-50%2B%20commands-blue)]()
 
@@ -103,7 +103,7 @@ Vulnerability reporting: see [SECURITY.md](./SECURITY.md).
 ## AI agents on your fleet
 
 ```go
-import "github.com/QiuShichang/reins/client"
+import "github.com/V-T-V/reins/client"
 
 c := client.New("https://relay:7780", "token")
 tools, _ := c.ListTools()                       // 30+ ops tools for your agent

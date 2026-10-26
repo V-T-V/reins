@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // AgentCerts 管理 Agent 的 mTLS 客户端证书。

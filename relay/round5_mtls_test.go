@@ -19,7 +19,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/QiuShichang/reins/internal/ca"
+	"github.com/V-T-V/reins/internal/ca"
 	"time"
 )
 

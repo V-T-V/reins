@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // FileMaxBytes 单次文件任务的大小上限（10MB，避免 WS 帧过大）。

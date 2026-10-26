@@ -13,8 +13,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/reins/executors"
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/executors"
+	"github.com/V-T-V/reins/proto"
 )
 
 // startWSServer 起一个测试用 WS 服务器，accept 后把收到的消息原样回传（echo）。

@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // UpdateRepo Agent 二进制版本仓库。

@@ -17,9 +17,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/reins/internal/ca"
+	"github.com/V-T-V/reins/internal/ca"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // 心跳超时清理：Agent 心跳间隔的 3 倍。默认心跳 15s → 阈值 45s。

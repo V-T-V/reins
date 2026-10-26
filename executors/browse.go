@@ -3,7 +3,7 @@ package executors
 import (
 	"context"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // BrowseExecutor 接口（实现由 build tag 切换）。

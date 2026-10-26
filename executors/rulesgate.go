@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // 规则文件约定:项目根下 .reins/rules.md。

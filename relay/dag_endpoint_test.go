@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QiuShichang/reins/internal/taskstore"
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/internal/taskstore"
+	"github.com/V-T-V/reins/proto"
 )
 
 // newDAGTestServer 构造带 DAG 路由的测试服务器。

@@ -22,7 +22,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // directGrantSink 线程安全收集 fake Agent 收到的票据推送(race 检测合规:

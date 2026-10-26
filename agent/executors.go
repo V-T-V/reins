@@ -4,8 +4,8 @@ import (
 	"log"
 	"runtime"
 
-	"github.com/QiuShichang/reins/executors"
-	"github.com/QiuShichang/reins/vision"
+	"github.com/V-T-V/reins/executors"
+	"github.com/V-T-V/reins/vision"
 )
 
 // registerExecutors 构造任务分发器，注册当前可用的执行器。

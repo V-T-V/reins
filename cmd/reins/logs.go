@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/proto"
 )
 
 // cmdLogs logs 子命令入口。

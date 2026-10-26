@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 
-	"github.com/QiuShichang/reins/executors"
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/executors"
+	"github.com/V-T-V/reins/proto"
 )
 
 // updateExecutor 把"自更新"任务纳入统一 Dispatcher 分发。

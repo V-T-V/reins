@@ -25,8 +25,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QiuShichang/reins/executors"
-	"github.com/QiuShichang/reins/proto"
+	"github.com/V-T-V/reins/executors"
+	"github.com/V-T-V/reins/proto"
 )
 
 // localRulesRelPath 本地项目规则的相对位置(相对 CLI 当前目录)。

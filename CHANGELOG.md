@@ -9,7 +9,7 @@
 - 撞名核查(GitHub/域名/知名产品/恶意软件联想四项)全绿;`go-rmm` 时代未公开发布,改名零迁移成本。
 
 ### 重命名范围(全量机械清扫 + 语义修正)
-- module path:`github.com/QiuShichang/go-rmm` → `github.com/QiuShichang/reins`(148 处 import)。
+- module path:`github.com/QiuShichang/go-rmm` → `github.com/V-T-V/reins`(148 处 import)。
 - 二进制:CLI `reins` / `reins-relay` / `reins-agent`;目录 `cmd/reins`、`deploy/helm/reins`;`nginx-reins.conf`。
 - 环境变量:`GO_RMM_*` → `REINS_*`(105 处);规则门禁目录 `.go-rmm/` → `.reins/`;bash 补全函数 `_reins`。
 - Prometheus 指标前缀:`gormmm_` → `reins_`(90 处,含测试断言);回归测试改写为"旧前缀(gormm_/gormmm_)零残留"断言。
