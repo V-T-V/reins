@@ -28,7 +28,7 @@ func newWSConn(c *websocket.Conn) *wsConn {
 }
 
 // startWriter 启动优先级 writer(兼容名,转发共享引擎)。
-func (w *wsConn) startWriter(ctx context.Context) { w.Writer.Start(ctx) }
+func (w *wsConn) startWriter(ctx context.Context) { w.Start(ctx) }
 
 // writeControlEnvelope 构造 Envelope + 投 P0(心跳/ack 高优先)。
 func (w *wsConn) writeControlEnvelope(ctx context.Context, typ, to string, payload any) error {

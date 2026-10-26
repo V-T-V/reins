@@ -74,24 +74,14 @@ func syncPush(cfg config, args []string) error {
 
 	// 并行上传(worker 池,-j 默认 1=串行保持原行为;>1 时逐文件进度必交错,
 	// 静默 fileUpload 输出只留汇总+失败清单)。直连/数据面下多文件天然多流。
-	// -j 剥离(posArg 不认识它,"4"会被当位置参数吃掉目录)
+	// -j 只取值不剥离(位置参数在本函数已消费完毕,args 不再下游使用——
+	// 旧版"剥离到 filtered 再赋回 args"是只写不读的死代码,golangci ineffassign+SA4010 逮住删除)
 	jobs := 1
-	filtered := make([]string, 0, len(args))
-	for i, a := range args {
-		if a == "-j" || strings.HasPrefix(a, "-j=") {
-			continue // "-j N"形态的 N 由下一分支跳过
-		}
-		if i > 0 && args[i-1] == "-j" && isAllDigit(a) {
-			continue
-		}
-		filtered = append(filtered, a)
-	}
 	if j := extractArg(args, "-j"); j != "" {
 		if n, err := strconv.Atoi(j); err == nil && n > 0 {
 			jobs = n
 		}
 	}
-	args = filtered
 	quiet := jobs > 1
 
 	// 先建全部子目录(串行,幂等,免 worker 间竞争 mkdir 任务)

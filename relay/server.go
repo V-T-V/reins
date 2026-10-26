@@ -179,7 +179,7 @@ func safeCloseCompleteChan(ch chan *proto.FileTransferComplete) {
 	close(ch)
 }
 
-func (w *wsConn) startWriter(ctx context.Context) { w.Writer.Start(ctx) }
+func (w *wsConn) startWriter(ctx context.Context) { w.Start(ctx) }
 
 func (w *wsConn) writeControlJSON(ctx context.Context, v any) error {
 	data, err := json.Marshal(v)
@@ -483,7 +483,7 @@ func (r *Relay) serveAgentData(ctx context.Context, wc *wsConn) {
 	}
 	defer r.agents.UnbindDataConn(join.AgentID, wc)
 	ackEnv, _ := proto.NewEnvelope(proto.TypeDataConnAck, "relay", join.AgentID,
-		proto.DataConnAck{AgentID: join.AgentID, Index: join.Index})
+		proto.DataConnAck(join))
 	if err := wc.writeControlJSON(ctx, ackEnv); err != nil {
 		log.Printf("[agent-data] %s ack 写失败: %v", wc.id, err)
 		return

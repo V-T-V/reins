@@ -29,7 +29,7 @@ func main() {
 	defer cancel()
 
 	hdr := http.Header{"Authorization": {"Bearer " + token}}
-	c, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: hdr})
+	c, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: hdr}) //nolint:bodyclose // coder/websocket:成功时 resp.Body 为 nil,无需关闭
 	if err != nil {
 		log.Fatalf("拨号失败: %v", err)
 	}

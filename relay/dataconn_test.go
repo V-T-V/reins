@@ -190,8 +190,8 @@ func TestRegistryDataConnPool(t *testing.T) {
 		t.Fatalf("池应=2,实际 %d", r.DataConnCount("a"))
 	}
 	// 稳定绑定:不同 key 分散到两条连接,同 key 恒定同一条
-	if r.DataConnFor("a", "k1") == r.DataConnFor("a", "k1") {
-	} else {
+	bind1, bind2 := r.DataConnFor("a", "k1"), r.DataConnFor("a", "k1")
+	if bind1 != bind2 {
 		t.Error("同 key 应稳定")
 	}
 	distinct := 0
