@@ -83,3 +83,7 @@ deploy-out/
 
 # relay 运行时数据目录
 data/
+
+# 发布策略与发帖剧本(私存于仓外,不入公开树)
+docs/launch/
+docs/PROMOTION_PLAN.md
