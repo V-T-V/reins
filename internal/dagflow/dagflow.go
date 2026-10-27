@@ -234,14 +234,31 @@ func (g *Graph) Run(ctx context.Context) *Result {
 
 	for {
 		mu.Lock()
-		if ctx.Err() != nil || len(status) == len(g.Nodes) {
+		if len(status) == len(g.Nodes) {
+			mu.Unlock()
+			break
+		}
+		if ctx.Err() != nil {
+			// 取消收尾:未启动节点标 skipped;**在跑节点等它自己的终态落账**。
+			// 此前的清扫把 running 中、Action 已返回但 finish() 尚未执行的节点
+			// 一并埋成 skipped——取消前已成功的动作被误标(CI 两次 flake 的根因,
+			// cancel() 在 Action 内先于 finish 调用时,轮询循环立刻在 ctx.Done 醒来
+			// 抢先清扫)。Action 收到已取消的 runCtx 会尽快返回,等待有界。
 			for _, n := range g.Nodes {
-				if _, done := status[n.ID]; !done {
+				if _, done := status[n.ID]; !done && !running[n.ID] {
 					status[n.ID] = StatusSkipped
 				}
 			}
+			if len(running) == 0 {
+				mu.Unlock()
+				break
+			}
 			mu.Unlock()
-			break
+			select {
+			case <-ctx.Done():
+			case <-time.After(50 * time.Microsecond):
+			}
+			continue
 		}
 		// 就绪 = 未终态、未运行、所有硬依赖 succeeded 且软依赖已终态。
 		ready := make([]string, 0)

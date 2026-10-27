@@ -256,6 +256,32 @@ func TestRunContextCancel(t *testing.T) {
 	}
 }
 
+// TestRunContextCancelDeterministic 取消竞态回归锚:Action 内 cancel() 先于
+// finish() 落账的窗口里,在跑节点的成功终态不得被取消清扫误标 skipped
+// (2026-10 CI 两次 flake 的根因,修复=清扫只埋未启动节点)。50 次全绿为过。
+func TestRunContextCancelDeterministic(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		g := &Graph{MaxConcurrency: 1, Nodes: []Node{
+			{ID: "a", Action: func(c context.Context) error {
+				cancel()
+				return nil
+			}},
+			{ID: "b", Deps: []string{"a"}, Action: func(context.Context) error {
+				t.Fatal("取消后 b 不应执行")
+				return nil
+			}},
+		}}
+		res := g.Run(ctx)
+		if res.Nodes[findRes(t, res, "a")].Status != StatusSucceeded {
+			t.Fatalf("round %d: a 取消前已成功,不得被清扫误标: %+v", i, res.Nodes)
+		}
+		if res.Nodes[findRes(t, res, "b")].Status != StatusSkipped {
+			t.Fatalf("round %d: b 应 skipped: %+v", i, res.Nodes)
+		}
+	}
+}
+
 // TestRunInvalidGraphSkipped 未过 Validate 的带环图:Run 不死锁不
 // panic,环上节点 skipped 收尾。
 func TestRunInvalidGraphSkipped(t *testing.T) {

@@ -2,6 +2,11 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [v4.9.2] — 2026-10-27 dagflow 取消竞态根治 + 发布树净化
+
+- **引擎修复(CI 两次 flake 的根因)**:Run 的取消清扫曾把 running 中、Action 已返回但 finish() 未落账的节点一并埋成 skipped——Action 内 cancel() 先于返回时,轮询循环在 ctx.Done 立即醒来抢先清扫,取消前已成功的动作被误标。修复:清扫只埋未启动节点,在跑节点等自身终态(Action 收已取消 ctx 会尽快返回,等待有界)。+50 次取消竞态回归锚,5 连跑 250 次全绿。
+- 发布树净化:docs/launch(发帖剧本)与 PROMOTION_PLAN(增长策略)移出公开树,私存仓外。
+
 ## [v4.9.1] — 2026-10-27 task run 脚本语言按目标 OS 自动选择
 
 - **改进(2026-10-27 WSL 实测发现)**:裸 `task run -t script -s <文件>` 此前恒默认 `lang=ps1`,发给 linux agent 被 Agent 拒绝("lang=ps1 仅在 Windows 上可用")才知要手动传 lang——现在 CLI 查询目标 Agent OS 自动选 `sh`(linux/macOS),失败回退 ps1 旧行为(向后兼容)。
