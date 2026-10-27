@@ -32,9 +32,29 @@ It is an open-source alternative to Teleport (access plane) and MeshCentral/Tact
 |---|---|
 | **Self-hosted, single binary** | Relay is one static Go binary (Docker/Helm/systemd also provided). No database required — bbolt by default, Redis optional for horizontal scale. |
 | **Zero inbound ports** | Agents dial *out* over WebSocket/wss. Your hosts stay unreachable from the internet; NAT and home/office networks just work. |
+| **Windows remote operations, first-class** | PowerShell execution, interactive shell, service/process control, scheduled tasks, screenshots, GUI & browser automation, power ops — see the [Windows capability map](#windows-fleets-first-class) below. |
 | **Enterprise security primitives** | mTLS with built-in CA, per-device client certs, CRL revocation, `tenant:role:secret` RBAC tokens, command black/allow-lists enforced on both Relay and Agent, append-only audit hash chain, session recording (asciinema v2), secrets with TTL + one-time use. |
 | **Ops, not just remote desktop** | Batch dispatch with retries & live progress, DAG orchestration (dependency graphs, concurrency caps, failure cascade skip), deploy playbooks, process watchdog, cron, snapshots, network diagnostics, log aggregation. |
 | **AI-agent native** | A Go SDK exposes 30+ ops tools, and `.reins/rules.md` gates machine operations: automation must *read the project's operation rules and carry a content-fingerprint ack* before executing — stale acks are rejected when rules change. |
+
+## Windows fleets, first-class
+
+Windows is where Reins was born. The agent installs as a **native Windows service** (auto-start on boot, crash auto-restart via SCM) and ships executors Linux-first tools don't have:
+
+| Windows capability | What you get |
+|---|---|
+| **Remote PowerShell** | `-EncodedCommand` (UTF-16LE) execution with mojibake-safe output; local `.ps1` files auto-BOM'd, uploaded and run remotely in one step (`task run -t script -s app.ps1`) |
+| **Interactive shell** | live PowerShell session from your terminal — every session recorded (asciinema v2, replayable) |
+| **Service & process control** | list/start/stop Windows services (SCM); kill process **trees** via Job Objects — grandchildren don't survive timeouts and become zombie port-squatters |
+| **Scheduled tasks** | manage `Register-ScheduledTask` jobs (incl. `-LogonType Interactive` guidance for desktop-session restarts) |
+| **Screenshot** | PrintWindow capture for visual verification of remote UIs |
+| **GUI automation** | vision-located clicks via SendInput — authorized deployments only, session-recorded and audit-logged |
+| **Browser automation** | chromedp-driven remote browser control (login flows, web checks) |
+| **Power** | shutdown / restart / sleep with tag whitelist + audit trail |
+| **Self-update** | in-place binary swap (two-step rename + SCM restart) with health-check auto-rollback — survives running-exe locks and Defender scans |
+| **One-line install** | `iex (irm 'http://your-relay:7780/install.ps1')` — auto UAC elevation, token probing, online confirmation; no pre-setup on the target machine |
+
+Run all of it across a fleet: `exec -a kiosk1,kiosk2,kiosk3 -c "Get-Service App"` or DAG-orchestrate backup → upgrade → health-check with failure cascade skip.
 
 ## Quickstart
 

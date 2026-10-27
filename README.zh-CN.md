@@ -13,7 +13,7 @@
 
 ![demo](./docs/demo/demo-overview.svg)
 
-远程运维 Windows/Linux 主机:命令执行、文件传输、交互式 Shell、端口转发、多步编排、批量分发、系统监控、告警、自更新。通过**反向 WebSocket** 中继穿透 NAT——被控端**零入站端口**,Relay 单二进制自托管,mTLS + 内置 CA + 多租户 RBAC + 防篡改审计链,并为 AI 代理提供**规则门禁**(操作前必读项目运维规则)。
+远程运维 **Windows(一等公民)** 与 Linux 主机:命令执行、文件传输、交互式 Shell、端口转发、多步编排、批量分发、系统监控、告警、自更新。通过**反向 WebSocket** 中继穿透 NAT——被控端**零入站端口**,Relay 单二进制自托管,mTLS + 内置 CA + 多租户 RBAC + 防篡改审计链,并为 AI 代理提供**规则门禁**(操作前必读项目运维规则)。
 
 ---
 
@@ -76,6 +76,27 @@
 **数据流**:CLI/Web → HTTP REST → Relay 路由 → 命令策略校验 → RBAC 多租户鉴权 → 审计 hash chain → EventBus 投递 → 反向 WS → Agent 执行 → 结果回流(SSE/轮询)。
 
 **水平扩展**:多 Relay 通过 Redis 共享 `TaskStore` + Pub/Sub 事件联邦,Agent 多 Relay 故障切换。
+
+---
+
+## Windows 远程操作 · 一等公民
+
+Reins 从 Windows 运维场景中长出来:Agent 注册为**原生 Windows 服务**(开机自启、崩溃自动重启),自带一整套 Linux 优先工具没有的 Windows 执行能力:
+
+| Windows 能力 | 说明 |
+|---|---|
+| **远程 PowerShell** | `-EncodedCommand`(UTF-16LE)执行,输出防乱码;本地 `.ps1` 自动 BOM+上传+远端执行一步到位(`task run -t script -s app.ps1`) |
+| **交互式 Shell** | 终端里开远程 PowerShell 会话,全程录屏(asciinema v2 可回放) |
+| **服务与进程管控** | 服务 list/start/stop(SCM);**Job Object 进程树击杀**——超时连孙进程一起终止,不留占端口的僵尸 |
+| **计划任务** | `Register-ScheduledTask` 全流程管理(含 `-LogonType Interactive` 落桌面会话的指引) |
+| **屏幕截图** | PrintWindow 定窗捕获,远程 UI 目视核验 |
+| **GUI 自动化** | 视觉定位 + SendInput 点击——仅限授权部署,全程录屏+审计 |
+| **浏览器自动化** | chromedp 驱动的远端浏览器控制(登录流/网页检查) |
+| **电源操作** | shutdown/restart/sleep,标签白名单+审计 |
+| **自更新** | 两步 rename 换 exe + SCM 重启,健康自检失败自动回滚——扛运行中文件锁与 Defender 扫描 |
+| **一行安装** | `iex (irm 'http://relay:7780/install.ps1')`——自动 UAC 提权、Token 探测、上线确认,目标机零预置 |
+
+舰队级使用:`exec -a kiosk1,kiosk2,kiosk3 -c "Get-Service App"` 多机并行;或 DAG 编排"备份→升级→健康检查",失败整枝跳过。
 
 ---
 
