@@ -2,11 +2,19 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
-## [未发布] — 2026-11-13 UI 打磨与打包分发(工作区待审)
+## [未发布] — 2026-11-13 UI 打磨与打包分发 + 发布纪律收口(工作区待审)
 
 完整推进实录见 `docs/UI-PACKAGING-2026-11-13.md`。
 
-### 修复
+### 发布纪律收口:checksum + Linux agent 包 + tag 脚本(收掉 UI 轮诚实清单 ③④)
+
+- **SHA256SUMS.txt 随产物自动生成**:`release-package.ps1` 打包完成后对全部 zip/tar.gz 出校验和(小写十六进制+双空格,`sha256sum -c` 兼容;ASCII 落盘防 BOM/宽字符破坏校验)。INSTALL.md 增"第零步:校验产物完整性"(PowerShell Get-FileHash 逐行比对 / certutil / sha256sum -c 三环境)。
+- **Linux Agent 交付包** `reins-agent-linux-<ver>.tar.gz`:GOOS=linux GOARCH=amd64 CGO=0 交叉编译,内含 reins-agent + `reins-agent-linux.service`(systemd 单元样例)+ `AGENT-LINUX-SETUP.md`(一页安装+**能力分账表**)+ config.example.json。能力分账如实标注:script(sh)/file/monitor(/proc)/update/shell(bash)/传输全链在 Linux 可用;powershell/screenshot/guiclick/watchdog 不可用(执行器按平台注册,Relay 据能力路由不误派);**power 执行器代码内有 Linux 分支但注册仅 Windows——如实标注不硬编**,Linux 电源操作走 script。验证边界如实声明:交叉编译+SHA256+WSL2 Ubuntu-24.04 真机 loopback 冒烟,未做裸机发行版矩阵端到端。
+- **`scripts/release-tag.ps1` tag 纪律脚本**:CHANGELOG `[未发布]` 节 → release notes(不另写一份,防两处漂移)+ 产物 SHA256SUMS 并入 → annotated tag(`git tag -a -F`)。**默认 dry-run 零 git 写操作**,所有者加 `-Apply` 才真打;即使 -Apply 也只打本地 tag 绝不 push。tag 冲突/版本号形状/工作区脏三项前置检查。
+- **`scripts/tarpack.go` 交付 tar 打包辅助(根治执行位坑)**:Windows 侧 tar 打出的 Linux 包所有条目 0644——二进制解压后无执行位,`systemctl start` 直接 permission denied(上轮 relay 包靠 deploy 脚本 chmod 兜住,agent 包无此层)。System32 bsdtar 不支持 `--mode`,Git Bash GNU tar 又有 `D:\` 冒号坑——tarpack 纯标准库 archive/tar,模式位定死(二进制/.sh 0755,其余 0644,ustar 最广兼容,gzip 零 mtime 重打包字节稳定)。两个 linux tar 全部改走 tarpack,WSL 解压实测:无需 chmod,`./reins-agent version` 直接执行。
+- `release-package.ps1` 七步化:Linux relay/agent 同块交叉编译;tar 失败由 WARN 升级为 ERROR(防"静默半套产物"过 checksum 关);汇总清单含 SHA256SUMS.txt 并指路 release-tag.ps1。
+
+### 修复(UI 打磨轮)
 - **Web 控制台在 `-token` 模式下完全不可用**(生产标准形态即灭):前端从未实现凭证传递,所有 API/SSE 401 静默。修复:URL `?token=` 引导(消费后从地址栏抹掉)+ localStorage + 401 提示重试;SSE/下载/导出走新增的**同源 cookie `reins_token` 鉴权回退**——EventSource 无法带 Authorization header,而 query token 已被 H4 有意拒绝(防日志/Referer 泄漏);`authorize` 与 `authorizeRBAC` 两处统一为 header > cookie,后者顺带移除遗留的 query 回退泄漏面。+2 测试(含"header 错误时不得回落 cookie");原 H4 锚定测试保持通过。
 - 审计注释承诺的 `/api/audit/tail` SSE 从未注册(文档承诺未兑现)——注释修正,由新查询端点接棒。
 - 侧栏版本号双 v 显示;三份 web 拷贝漂移(`web/`、`console/web/` 落后 `relay/web/`)统一同步。
@@ -20,6 +28,8 @@
 ### 已知坑位(打包脚本实录)
 - Windows PowerShell 5.1 把无 BOM UTF-8 .ps1 按 GBK 解析,中文字符串切碎致命令解析错误——三个 .ps1 加 UTF-8 BOM(与 installscript.go 记录的 PS 5.1 双坑同源)。
 - Git Bash GNU tar 把 `D:\…` 解析为远程主机(host:file 语法)——Windows 下显式调用 System32 bsdtar。
+- **`WriteAllLines` 在 Windows 写 CRLF,GNU `sha256sum -c` 不剥 `\r`——首版 SHA256SUMS.txt 四条全 "FAILED open or read"**(声称"sha256sum -c 兼容"实为假绿,真机校验逮住);改 `WriteAllText` 显式 LF。
+- System32 bsdtar(Windows 自带)不支持 `--mode`,Windows 打的 tar 全条目 0644(见 tarpack 条目);WSL `systemd-analyze verify` 对 /mnt/d(DrvFs)上的 unit 会误报 executable/world-writable(挂载属性,非文件真实属性,拷到 Linux 文件系统即消失)。
 
 ## [v4.9.2] — 2026-10-27 dagflow 取消竞态根治 + 发布树净化
 

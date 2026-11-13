@@ -1,0 +1,42 @@
+# reins Agent systemd 服务模板(Linux 被控端)
+#
+# 安装(假设包解压到 /opt/reins-agent,config.json 已就位):
+#   sudo cp reins-agent-linux.service /etc/systemd/system/reins-agent.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now reins-agent
+#
+# 日志: journalctl -u reins-agent -f
+# 升级: sudo systemctl stop reins-agent && sudo cp 新reins-agent /opt/reins-agent/ && sudo systemctl start reins-agent
+#       (Agent 也有内置 update 任务通道;手动换文件走上面三步)
+
+[Unit]
+Description=reins Agent (远程自动化被控端)
+Documentation=https://github.com/V-T-V/reins
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# RMM 被控端天然要执行全机任务,默认 root 不加沙箱(与 Windows 服务跑
+# SYSTEM 同语义)。最小权限替代方案:专用用户 + config.json 收紧
+# allowed_roots/allow_all_roots=false,只放行它需要的工作目录。
+User=root
+Group=root
+
+# 二进制路径(按实际安装位置修改)。无参数启动 = 服务模式,
+# 从二进制同目录读 config.json(relay_url/token 等)。
+ExecStart=/opt/reins-agent/reins-agent
+WorkingDirectory=/opt/reins-agent
+
+# 崩溃自动重启(反向 WS 断线由 Agent 内部重连,这里只兜进程崩溃)
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+# 日志到 journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=reins-agent
+
+[Install]
+WantedBy=multi-user.target

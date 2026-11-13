@@ -1,16 +1,41 @@
 # reins 快速安装指南(从零到能用 · 一页)
 
-> 适用于 `reins-server-windows-<版本>.zip`。被控端(Windows Agent)安装见同目录分发的
-> `reins-agent-windows-<版本>.zip` 内的 `AGENT-SETUP.md`。
+> 适用于 `reins-server-windows-<版本>.zip`。被控端安装见同目录分发的两个 Agent 包:
+> Windows 机器用 `reins-agent-windows-<版本>.zip`(内含 AGENT-SETUP.md);
+> Linux 机器用 `reins-agent-linux-<版本>.tar.gz`(内含 AGENT-LINUX-SETUP.md,含能力分账)。
 
 ## 架构 30 秒
 
 ```
 你的浏览器 ──HTTP──► reins-relay(服务器,本包) ◄──反向 WS 长连接── reins-agent(被控 Windows 机器)
+                                                            ◄──反向 WS 长连接── reins-agent(被控 Linux 机器)
 ```
 
 Relay 是唯一需要暴露端口的组件;Agent 主动外连,被控机器不需要任何入站端口。
 Web 控制台内嵌在 Relay 里(浏览器打开即用),CLI(`reins.exe`)也在本包。
+
+## 第零步:校验产物完整性(拿到包后第一件事)
+
+每个发布目录都带 `SHA256SUMS.txt`(全部 zip/tar.gz 的 SHA256,小写十六进制,
+`sha256sum -c` 兼容格式)。分发/接收任何一环都先校验,防传输损坏与掉包:
+
+```powershell
+# Windows(PowerShell,与 SHA256SUMS.txt 逐行比对)
+Get-Content .\SHA256SUMS.txt | ForEach-Object {
+    $hash, $name = $_ -split '  ', 2
+    $actual = (Get-FileHash -Algorithm SHA256 $name).Hash.ToLower()
+    if ($actual -eq $hash) { "OK    $name" } else { "FAIL  $name" }
+}
+
+# Windows(无 PowerShell 的环境)
+certutil -hashfile reins-server-windows-<版本>.zip SHA256
+
+# Linux / macOS / WSL
+sha256sum -c SHA256SUMS.txt          # 校验目录内全部条目
+sha256sum -c SHA256SUMS.txt reins-agent-linux-<版本>.tar.gz   # 只校单个
+```
+
+任一 `FAIL` 即停止分发/安装,重新获取。
 
 ## 第一步:起 Relay(2 分钟)
 
