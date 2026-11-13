@@ -1,0 +1,244 @@
+# go-rmm Web 控制台主链路（-token 生产模式，loopback）：
+#   relay(-token) ←反向WS- agent(前台真实装机流) + Playwright 浏览器
+#
+# 覆盖（对照 docs/UI-PACKAGING-2026-11-13.md 的手工验证清单）：
+#   1. ?token= URL 引导：token 消费入 localStorage+同源 cookie，地址栏抹掉
+#   2. SSE 经 cookie 鉴权连接（Relay: 已连接 ✓）
+#   3. Agent 上线出现在侧栏（装机流闭环：ws 注册 → /api/agents → UI）
+#   4. 四 Tab（概览/任务执行/任务历史/审计日志）逐个切换渲染
+#   5. UI 提交 powershell 任务 → loopback agent 真实执行 → SSE 实时结果流
+#   6. 任务历史页：行展开拉 /api/tasks/{id} 真实结果按类型渲染
+#   7. 审计日志页：行展开可见 hash chain 字段 + prev/this 衔接核对（页内 fetch 逐位比对）
+#
+# 数据口径：relay dataDir 为 exe 同目录（bin/e2e/data，跨用例共享持久化）——
+# 断言因此不用精确计数（如"共 1 条"），锚定本用例唯一 marker `e2e-console-ok`
+# 与 newest-first 顺序（CreatedAt 降序，首行恒为本用例任务）。
+name: go-rmm-01-console-token-flow
+project: go-rmm
+mode: data-flow
+env: go-rmm-local
+description: -token 模式凭证引导 + 四 Tab 渲染 + 真实任务执行 + 任务历史行展开 + 审计 hash chain
+tags: [go-rmm, console, web, token]
+
+targets:
+  relay:
+    type: cli
+    launch:
+      command: "${GO_RMM_RELAY_BIN}"
+      args: ["-addr", "127.0.0.1:${PORT}", "-token", "${GO_RMM_E2E_TOKEN}"]
+      cwd: "${RUN_DIR}"
+      readyWhen:
+        kind: http
+        url: "${API_URL}/healthz"
+        status: 200
+        timeoutMs: 20000
+  agent:
+    # 前台模式 = AGENT-SETUP.md「手动方式」：reins-agent run -relay … -token …（服务安装的等价链路）
+    # 就绪不在启动期断言（Go log 走 stderr），由 web 端侧栏 waitForCondition 做功能性就绪判定
+    type: cli
+    launch:
+      command: "${GO_RMM_AGENT_BIN}"
+      args: ["run", "-relay", "ws://127.0.0.1:${PORT}/agent", "-token", "${GO_RMM_E2E_TOKEN}", "-id", "e2e-agent-01"]
+      cwd: "${RUN_DIR}"
+      readyWhen: { kind: immediate }
+  web:
+    type: web
+    connect:
+      # 启动即带 ?token= 引导参数——页面脚本消费后 history.replaceState 抹掉
+      url: "${API_URL}/?token=${GO_RMM_E2E_TOKEN}"
+
+steps:
+  # ---- 1. Token 引导：地址栏已抹掉 + localStorage 落位 ----
+  - target: web
+    action:
+      type: evaluate
+      name: token 引导后地址栏无 token
+      script: "location.pathname === '/' && location.search === '' && !location.href.includes('token=')"
+      expectTruthy: true
+  - target: web
+    action:
+      type: evaluate
+      name: token 已入 localStorage(reins_token)
+      script: "localStorage.getItem('reins_token') === 'e2e-tok-gormm-console-2026'"
+      expectTruthy: true
+  - target: web
+    action:
+      type: evaluate
+      name: 同源 cookie reins_token 已写入(SSE 凭证通道)
+      script: "document.cookie.includes('reins_token=')"
+      expectTruthy: true
+
+  # ---- 2. SSE 经 cookie 鉴权连接（401 会走 onerror 显示"连接断开"）----
+  - target: web
+    action:
+      type: waitForCondition
+      name: SSE 已连接(hello 事件到达)
+      script: "document.getElementById('relay-info') && document.getElementById('relay-info').textContent.indexOf('已连接') >= 0"
+      timeoutMs: 15000
+
+  # ---- 3. Agent 上线（装机流闭环：ws 注册→/api/agents→侧栏渲染，SSE+10s 轮询双通道）----
+  - target: web
+    action:
+      type: waitForCondition
+      name: 侧栏出现 e2e-agent-01
+      script: "document.querySelector('#agent-list .agent-item .agent-id') && document.querySelector('#agent-list .agent-item .agent-id').textContent.trim() === 'e2e-agent-01'"
+      timeoutMs: 30000
+
+  # ---- 4. 四 Tab 存在性 ----
+  - target: web
+    action:
+      type: evaluate
+      name: 四 Tab 按钮齐全(概览/任务执行/任务历史/审计日志)
+      script: "['page-overview','page-ops','page-history','page-audit'].every(function(p){ return !!document.querySelector('.tab[data-page=\"' + p + '\"]'); })"
+      expectTruthy: true
+  - target: web
+    action:
+      type: evaluate
+      name: 概览页默认激活且指标面板有实数
+      script: "document.getElementById('page-overview').classList.contains('active') && document.querySelectorAll('#metrics-panel .metric').length >= 6"
+      expectTruthy: true
+
+  # ---- 5. 任务执行：选中 Agent → 填命令 → 下发 ----
+  - target: web
+    action:
+      type: click
+      name: 选中侧栏 Agent
+      selector: "#agent-list .agent-item"
+  - target: web
+    action:
+      type: click
+      name: 切到任务执行 Tab
+      selector: ".tab[data-page=\"page-ops\"]"
+  - target: web
+    action:
+      type: waitFor
+      name: 任务表单已渲染
+      selector: "#f-command"
+      state: visible
+      timeoutMs: 10000
+  - target: web
+    action:
+      type: fill
+      name: 填入 powershell 命令(唯一 marker)
+      selector: "#f-command"
+      value: "Write-Output e2e-console-ok"
+  - target: web
+    action:
+      type: click
+      name: 下发任务(loopback agent 真实执行)
+      selector: "#task-form-host button"
+      effect: create
+  - target: web
+    action:
+      type: recordData
+      page: tasks
+      operation: create
+      dataId: "go-rmm-console-task-${builtin:UUID}"
+      retention: manual-review
+      onlyIfPreviousStepPassed: true
+      note: "UI 下发的 powershell 任务落在 relay 本地 e2e 数据目录(bin/e2e/data，gitignore)，无外部副作用，人工复核即可"
+
+  # ---- 6. 实时结果流：SSE task_result 推送渲染(marker + 成功徽章) ----
+  - target: web
+    action:
+      type: waitForCondition
+      name: 结果流出现真实执行输出
+      script: "var s = document.getElementById('result-stream'); !!(s && s.textContent.indexOf('e2e-console-ok') >= 0 && s.textContent.indexOf('成功') >= 0)"
+      timeoutMs: 45000
+
+  # ---- 7. 任务历史：首行(最新)展开详情拉真实结果按类型渲染 ----
+  - target: web
+    action:
+      type: click
+      name: 切到任务历史 Tab
+      selector: ".tab[data-page=\"page-history\"]"
+  - target: web
+    action:
+      type: waitFor
+      name: 历史表出现行(惰性加载)
+      selector: "#hist-tbody tr.rowclick"
+      timeoutMs: 15000
+  - target: web
+    action:
+      type: click
+      name: 点击最新一行展开详情
+      selector: "#hist-tbody tr.rowclick"
+  - target: web
+    action:
+      type: waitForCondition
+      name: 展开详情含 stdout 按类型渲染
+      script: "var d = document.getElementById('hist-detail-row'); !!(d && d.textContent.indexOf('stdout') >= 0 && d.textContent.indexOf('e2e-console-ok') >= 0 && d.textContent.indexOf('e2e-agent-01') >= 0)"
+      timeoutMs: 15000
+
+  # ---- 8. 审计日志：行展开可见 hash chain 字段 ----
+  - target: web
+    action:
+      type: click
+      name: 切到审计日志 Tab
+      selector: ".tab[data-page=\"page-audit\"]"
+  - target: web
+    action:
+      type: waitForCondition
+      name: 审计表至少 2 行(task_submitted+task_result)
+      script: "document.querySelectorAll('#audit-tbody tr.rowclick').length >= 2"
+      timeoutMs: 15000
+  - target: web
+    action:
+      type: click
+      name: 点击最新审计行展开完整记录
+      selector: "#audit-tbody tr.rowclick"
+  - target: web
+    action:
+      type: waitForCondition
+      name: 展开记录含 prev_hash 与 this_hash 字段
+      script: "var d = document.getElementById('audit-detail-row'); !!(d && d.textContent.indexOf('prev_hash') >= 0 && d.textContent.indexOf('this_hash') >= 0)"
+      timeoutMs: 15000
+
+  # ---- 9. hash chain 衔接核对：页内带凭证 fetch /api/audit/query，逐位比对最新两条 ----
+  #    entries[0]=task_result(最新)、entries[1]=task_submitted：
+  #    同一 task_id 且 entries[0].prev_hash === entries[1].this_hash（HMAC 链衔接）
+  - target: web
+    action:
+      type: waitForCondition
+      name: hash chain prev/this 衔接一致(apiFetch 同源鉴权)
+      script: |
+        (async function () {
+          var r = await fetch('/api/audit/query?limit=10', {
+            headers: { 'Authorization': 'Bearer ' + localStorage.getItem('reins_token') }
+          });
+          if (!r.ok) return false;
+          var d = await r.json();
+          var e = d.entries || [];
+          return e.length >= 2
+            && e[0].event === 'task_result'
+            && e[1].event === 'task_submitted'
+            && e[0].task_id === e[1].task_id
+            && typeof e[0].prev_hash === 'string' && e[0].prev_hash.length >= 32
+            && e[0].prev_hash === e[1].this_hash;
+        })()
+      timeoutMs: 20000
+
+  # ---- 10. 留证截图（审计页终态）----
+  - target: web
+    action:
+      type: screenshot
+      name: audit-final
+      fullPage: true
+
+assertions:
+  - type: ui
+    name: SSE 连接徽章(已连接)
+    target: web
+    selector: "#relay-info"
+  - type: ui
+    name: 侧栏 Agent 在线
+    target: web
+    selector: "#agent-list .agent-item"
+  - type: ui
+    name: 审计页处于激活态
+    target: web
+    selector: "#page-audit.active"
+  - type: process
+    name: 无未捕获 JS 错误
+    target: web
+    logNotContains: "Uncaught"

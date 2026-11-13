@@ -1,0 +1,46 @@
+# go-rmm 自签证书工具链（打包分发三产物之一，docs/UI-PACKAGING-2026-11-13.md §二.12）：
+#   cmd/gencert 纯标准库生成 ECDSA P-256 自签证书（SAN 自动含本机全部网卡 IP + 127.0.0.1），
+#   生成后走 tls.LoadX509KeyPair 自检（与 relay 同一加载路径）。
+# 产物落 ${RUN_DIR} 每用例独立；PEM 头逐文件断言。
+name: go-rmm-02-gencert-selfsigned
+project: go-rmm
+mode: data-flow
+env: go-rmm-local
+description: gencert 自签证书生成——退出码 0 + PEM 产物 + IP SAN 含 loopback
+tags: [go-rmm, cli, tls]
+
+targets:
+  cli:
+    type: cli
+
+steps:
+  - target: cli
+    action:
+      type: run
+      command: "${GO_RMM_GENCERT_BIN}"
+      args: ["-out-cert", "${RUN_DIR}/relay-e2e.crt", "-out-key", "${RUN_DIR}/relay-e2e.key", "-days", "30"]
+      cwd: "${RUN_DIR}"
+      expectExitCode: 0
+      name: gencert 生成自签证书
+  - target: cli
+    action:
+      type: readFile
+      path: "${RUN_DIR}/relay-e2e.crt"
+      expect: "BEGIN CERTIFICATE"
+      name: 证书 PEM 头
+  - target: cli
+    action:
+      type: readFile
+      path: "${RUN_DIR}/relay-e2e.key"
+      expect: "BEGIN EC PRIVATE KEY"
+      name: 私钥 PEM 头
+
+assertions:
+  - type: process
+    name: 生成成功提示(SAN 含 127.0.0.1)
+    target: cli
+    logContains: "自签证书已生成"
+  - type: process
+    name: IP SAN 含 loopback
+    target: cli
+    logContains: "127.0.0.1"

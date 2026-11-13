@@ -1,0 +1,26 @@
+# go-rmm 接入声明：reins 零信任远程访问平台 Web 控制台的 E2E。
+#
+# 被测物：relay（-token 生产模式，loopback HTTP）+ 前台 agent（真实装机流：
+# `reins-agent run -relay ws://…/agent -token …`，与 docs/AGENT-SETUP.md 手动方式等价）
+# + 内嵌 Web 控制台（Playwright chromium）。
+# 断言口径：web 断言原语（waitForCondition/evaluate expectTruthy）覆盖
+# token 引导 → 四 Tab → 任务执行 → 任务历史行展开 → 审计 hash chain。
+name: go-rmm
+description: go-rmm Web 控制台 E2E——-token 模式凭证引导/四 Tab/真实任务执行/审计 hash chain + gencert 自签证书
+
+runtime:
+  cwd: ../
+  build:
+    command: go
+    args: [build, -o, bin/e2e/, ./relay, ./agent, ./cmd/gencert]
+
+sources:
+  requirements:
+    - ../README.md
+    - ../docs/UI-PACKAGING-2026-11-13.md
+
+suites:
+  console:
+    cases: cases
+    environment: env.local.yaml
+    level: smoke
