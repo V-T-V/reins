@@ -39,8 +39,8 @@ func TestAuditQueryFilterAndPaging(t *testing.T) {
 	var seeds []AuditEntry
 	for i := 0; i < 5; i++ {
 		seeds = append(seeds, AuditEntry{
-			TS:    now - int64(i)*1000,
-			Event: "task_submitted",
+			TS:      now - int64(i)*1000,
+			Event:   "task_submitted",
 			AgentID: fmt.Sprintf("agent-%d", i%2),
 		})
 	}
