@@ -108,14 +108,26 @@ paths:
 
   /api/tasks:
     get:
-      summary: 列出任务历史
+      summary: 列出任务历史(过滤+分页)
       parameters:
         - name: limit
           in: query
-          schema: { type: integer, default: 50 }
+          schema: { type: integer, default: 50, maximum: 500 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+        - name: status
+          in: query
+          schema: { type: string, description: "状态过滤,逗号分隔多值(pending/dispatched/acknowledged/completed/failed/cancelled)" }
+        - name: agent_id
+          in: query
+          schema: { type: string }
+        - name: type
+          in: query
+          schema: { type: string }
       responses:
         "200":
-          description: 任务列表
+          description: 任务列表(新的在前;tasks/count=本页,total=匹配总数)
 
   /api/tasks/cancel:
     post:
@@ -578,6 +590,29 @@ paths:
           schema: { type: string, enum: [cef, syslog, json] }
       responses:
         "200": { description: 审计流 }
+
+  /api/audit/query:
+    get:
+      summary: 审计 JSON 查询(控制台审计面板:过滤+分页,新的在前)
+      parameters:
+        - name: event
+          in: query
+          schema: { type: string, description: "精确匹配,逗号分隔多值" }
+        - name: agent_id
+          in: query
+          schema: { type: string }
+        - name: since
+          in: query
+          schema: { type: string, description: "Go duration(如 24h)或毫秒时间戳" }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 500 }
+      responses:
+        "200": { description: "entries/count=本页,total=匹配总数(含 hash chain 字段)" }
+        "503": { description: 审计未启用 }
 
   /api/events:
     get:

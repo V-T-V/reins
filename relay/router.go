@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/V-T-V/reins/internal/taskstore"
 	"github.com/V-T-V/reins/proto"
 )
 
@@ -81,6 +83,8 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/secrets/", r.RequireRole("secret.delete", r.handleSecretDelete))
 	// XL4:审计 SIEM 导出(CEF/JSON/Syslog)
 	mux.HandleFunc("GET /api/audit/export", r.handleAuditExport)
+	// 审计 JSON 查询(控制台审计浏览面板:过滤+分页)
+	mux.HandleFunc("GET /api/audit/query", r.handleAuditQuery)
 	// XL6:智能调度(负载均衡选择最优 Agent)
 	mux.HandleFunc("GET /api/scheduler/best", r.handleSelectBest)
 	// D2:工具发现(供 AI Agent)
@@ -139,28 +143,108 @@ func (r *Relay) handleHealthz(w http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(w).Encode(status)
 }
 
-// GET /api/tasks —— 任务历史（最新在前，?limit=N，默认 50）。
+// GET /api/tasks —— 任务历史（最新在前）。
+//
+// 查询参数(均可选,组合生效):
+//
+//	limit=N      返回条数(默认 50,上限 500)
+//	offset=N     分页偏移(默认 0;与 limit 配合翻页)
+//	status=S     状态过滤,逗号分隔多值(completed,failed);非空时走状态索引
+//	agent_id=A   目标 Agent 过滤(精确匹配)
+//	type=T       任务类型过滤(精确匹配)
+//
+// 响应: {"tasks":[…], "count":N(本页), "total":M(匹配总数), "offset":O, "enabled":true}
 func (r *Relay) handleListTasks(w http.ResponseWriter, req *http.Request) {
 	if err := r.authorize(req); err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
 	if r.store == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"tasks": []any{}, "count": 0, "enabled": false})
+		writeJSON(w, http.StatusOK, map[string]any{"tasks": []any{}, "count": 0, "total": 0, "offset": 0, "enabled": false})
 		return
 	}
+	q := req.URL.Query()
 	limit := 50
-	if l := req.URL.Query().Get("limit"); l != "" {
+	if l := q.Get("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	tasks, err := r.store.ListTasks(limit)
+	if limit > 500 {
+		limit = 500
+	}
+	offset := 0
+	if o := q.Get("offset"); o != "" {
+		if n, err := strconv.Atoi(o); err == nil && n > 0 {
+			offset = n
+		}
+	}
+	agentFilter := q.Get("agent_id")
+	typeFilter := q.Get("type")
+
+	// status 非空走状态索引(F1);否则全量(上限多拉,再过滤)
+	var tasks []taskstore.StoredTask
+	var err error
+	if s := q.Get("status"); s != "" {
+		var statuses []string
+		for _, part := range strings.Split(s, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				statuses = append(statuses, part)
+			}
+		}
+		tasks, err = r.store.ListTasksByStatus(statuses...)
+	} else {
+		tasks, err = r.store.ListTasks(20000)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errMap(err))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks, "count": len(tasks), "enabled": true})
+
+	// agent/type 过滤(内存态;两个 Store 的 ByStatus 返回序不确定,统一在此排序)
+	if agentFilter != "" || typeFilter != "" {
+		var filtered []taskstore.StoredTask
+		for _, t := range tasks {
+			if agentFilter != "" && t.Request.AgentID != agentFilter {
+				continue
+			}
+			if typeFilter != "" && t.Request.Type != typeFilter {
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		tasks = filtered
+	}
+
+	// 统一排序:CreatedAt 降序(新在前),同毫秒按 taskID 降序保证稳定分页
+	sort.SliceStable(tasks, func(i, j int) bool {
+		if tasks[i].CreatedAt != tasks[j].CreatedAt {
+			return tasks[i].CreatedAt > tasks[j].CreatedAt
+		}
+		return tasks[i].Request.TaskID > tasks[j].Request.TaskID
+	})
+
+	total := len(tasks)
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	// 空页保持 [] 而非 null(Go nil 切片 marshal 成 null,前端/脚本消费不友好)
+	page := tasks[start:end]
+	if page == nil {
+		page = []taskstore.StoredTask{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tasks":   page,
+		"count":   end - start,
+		"total":   total,
+		"offset":  offset,
+		"enabled": true,
+	})
 }
 
 // POST /api/tasks/batch —— 按标签批量下发任务（C10）。

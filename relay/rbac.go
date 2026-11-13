@@ -56,10 +56,14 @@ func (r *Relay) authorizeRBAC(req *http.Request) (Identity, error) {
 	if r.cfg.Token == "" {
 		return Identity{Role: RoleAdmin}, nil // 无 token 配置 = 全权限
 	}
-	// 从 header 提取 token
+	// 从 header 提取 token;缺省回退同源 cookie(EventSource 场景,与 authorize 对齐)。
+	// UI-P3:移除原 query token 回退——与 authorize 的 H4 语义对齐(query 会进日志/Referer 泄漏),
+	// 两处鉴权行为不一致本身是漂移面。
 	raw := req.Header.Get("Authorization")
 	if raw == "" {
-		raw = "Bearer " + req.URL.Query().Get("token")
+		if c, err := req.Cookie("reins_token"); err == nil {
+			raw = "Bearer " + c.Value
+		}
 	}
 	raw = strings.TrimPrefix(raw, "Bearer ")
 	// 解析请求方的 token

@@ -18,18 +18,29 @@
   .agent-meta { font-size: 12px; color: #8b949e; margin-top: 4px; }
   .caps { margin-top: 6px; }
   .cap { display: inline-block; background: #238636; color: #fff; padding: 1px 6px; border-radius: 3px; font-size: 11px; margin-right: 4px; }
+  .agent-tag { display: inline-block; background: #1f6feb33; color: #79c0ff; border: 1px solid #1f6feb66; padding: 0 6px; border-radius: 10px; font-size: 11px; margin: 2px 4px 0 0; }
+  .agent-uptime { font-size: 11px; color: #3fb950; margin-top: 3px; }
   .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #3fb950; margin-right: 6px; }
   .empty { padding: 40px 16px; text-align: center; color: #6e7681; }
+  .empty.small { padding: 18px 16px; font-size: 13px; }
 
   /* 主区 */
   .main { display: flex; flex-direction: column; overflow: hidden; }
-  .toolbar { padding: 12px 20px; background: #161b22; border-bottom: 1px solid #30363d; display: flex; align-items: center; gap: 12px; }
-  .toolbar h1 { font-size: 16px; font-weight: 600; }
+  .toolbar { padding: 0 20px; background: #161b22; border-bottom: 1px solid #30363d; display: flex; align-items: center; gap: 12px; }
+  .toolbar h1 { font-size: 16px; font-weight: 600; padding: 12px 0; }
   .relay-badge { background: #21262d; padding: 4px 10px; border-radius: 4px; font-size: 12px; color: #8b949e; }
+  /* Tab 导航 */
+  .tabs { display: flex; gap: 4px; margin-left: 16px; height: 100%; }
+  .tab { background: transparent; border: none; border-bottom: 2px solid transparent; color: #8b949e; padding: 0 14px; font: inherit; cursor: pointer; height: 100%; display: flex; align-items: center; }
+  .tab:hover { color: #c9d1d9; background: transparent; }
+  .tab.active { color: #58a6ff; border-bottom-color: #58a6ff; background: transparent; }
 
   .content { flex: 1; overflow-y: auto; padding: 20px; }
+  .tab-page { display: none; }
+  .tab-page.active { display: block; }
   .panel { background: #161b22; border: 1px solid #30363d; border-radius: 6px; margin-bottom: 20px; }
-  .panel-header { padding: 12px 16px; border-bottom: 1px solid #30363d; font-weight: 600; color: #58a6ff; }
+  .panel-header { padding: 12px 16px; border-bottom: 1px solid #30363d; font-weight: 600; color: #58a6ff; display: flex; align-items: center; gap: 10px; }
+  .panel-header .sub { font-weight: 400; font-size: 12px; opacity: .7; }
   .panel-body { padding: 16px; }
 
   /* 任务表单 */
@@ -39,6 +50,8 @@
   button { background: #238636; color: #fff; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font: inherit; }
   button:hover { background: #2ea043; }
   button:disabled { background: #21262d; color: #6e7681; cursor: not-allowed; }
+  button.ghost { background: #21262d; color: #c9d1d9; }
+  button.ghost:hover { background: #30363d; }
   .row { display: flex; gap: 12px; }
   .row > div { flex: 1; }
 
@@ -60,6 +73,37 @@
   /* D6 取消按钮 */
   .cancel-btn { background: #da3633; color: #fff; border: none; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 11px; margin-left: 8px; }
   .cancel-btn:hover { background: #f85149; }
+
+  /* 数据表(任务历史/审计日志) */
+  table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.data th { text-align: left; color: #8b949e; font-weight: 600; font-size: 12px; padding: 8px 10px; border-bottom: 1px solid #30363d; white-space: nowrap; }
+  table.data td { padding: 8px 10px; border-bottom: 1px solid #21262d; vertical-align: top; }
+  table.data tr.rowclick { cursor: pointer; }
+  table.data tr.rowclick:hover { background: #1f242b; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
+  .badge.completed { background: #23863633; color: #3fb950; }
+  .badge.failed { background: #f8514933; color: #f85149; }
+  .badge.cancelled { background: #8b949e33; color: #8b949e; }
+  .badge.running { background: #d2992233; color: #d29922; }
+  .badge.info { background: #1f6feb33; color: #79c0ff; }
+  .badge.warn { background: #d2992233; color: #d29922; }
+  .badge.crit { background: #f8514933; color: #f85149; }
+  .cell-id { font-family: monospace; font-size: 12px; }
+  .cell-detail { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #8b949e; }
+  tr.detail-row td { background: #0d1117; padding: 12px 16px; }
+  .detail-pre { background: #161b22; border: 1px solid #30363d; border-radius: 4px; padding: 10px; white-space: pre-wrap; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; max-height: 320px; overflow-y: auto; }
+  .detail-img { max-width: 100%; border: 1px solid #30363d; border-radius: 4px; }
+  .kv { font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+  .kv b { color: #c9d1d9; font-weight: 600; }
+
+  /* 筛选行 */
+  .filter-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 14px; }
+  .filter-bar .f { min-width: 130px; }
+  .filter-bar .f.wide { flex: 1; min-width: 200px; }
+  .filter-bar label { margin: 0 0 4px; }
+  .pager { display: flex; align-items: center; gap: 10px; justify-content: flex-end; margin-top: 12px; font-size: 13px; color: #8b949e; }
+  .pager button { padding: 4px 12px; }
+
   /* P2 安装引导覆盖层 */
   .setup-overlay {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -86,15 +130,16 @@
     <p style="color:#8b949e">还没有 Agent 连接。按以下步骤部署：</p>
 
     <div class="step">
-      <span class="step-num">1</span><strong>在 Windows 被控机器上，管理员 PowerShell 运行：</strong>
+      <span class="step-num">1</span><strong>在目标 Windows 机器上打开 PowerShell,粘贴这一行(非管理员会自动弹 UAC 提权):</strong>
       <div class="cmd" onclick="navigator.clipboard.writeText(this.querySelector('code').textContent);this.querySelector('.copy-hint').textContent='已复制!'">
-        <code id="install-cmd">reins-agent.exe install -relay <span id="relay-ip">IP</span></code>
+        <code id="install-cmd">iex (((irm 'http://<span id="relay-ip">IP:7780</span>/install.ps1') -replace '^\uFEFF') -replace '^\u00EF\u00BB\u00BF')</code>
         <span class="copy-hint">点击复制</span>
       </div>
+      <p style="color:#6e7681;font-size:12px;margin-top:6px">这一行会自动:下载 Agent → 注册 Windows 服务 → 启动并连接 Relay</p>
     </div>
 
     <div class="step">
-      <span class="step-num">2</span><strong>安装完成后自动启动，刷新本页面即可看到 Agent。</strong>
+      <span class="step-num">2</span><strong>看到 "✅ reins Agent 部署成功!" 后,刷新本页面即可看到 Agent。</strong>
     </div>
 
     <div style="margin-top:24px">
@@ -116,66 +161,220 @@
   <main class="main">
     <div class="toolbar">
       <h1>reins 控制台</h1>
-      <span class="relay-badge" id="relay-info">Relay: 连接中...</span>
+      <nav class="tabs">
+        <button class="tab active" data-page="page-overview" onclick="window.__switchTab('page-overview', this)">概览</button>
+        <button class="tab" data-page="page-ops" onclick="window.__switchTab('page-ops', this)">任务执行</button>
+        <button class="tab" data-page="page-history" onclick="window.__switchTab('page-history', this)">任务历史</button>
+        <button class="tab" data-page="page-audit" onclick="window.__switchTab('page-audit', this)">审计日志</button>
+      </nav>
+      <span class="relay-badge" id="relay-info" style="margin-left:auto">Relay: 连接中...</span>
     </div>
     <div class="content">
-      <!-- 任务下发 -->
-      <div class="panel">
-        <div class="panel-header">下发任务</div>
-        <div class="panel-body" id="task-form-host">
-          <div class="empty" id="no-agent-hint">请先在左侧选择一个 Agent</div>
+
+      <!-- ===== 概览 ===== -->
+      <section class="tab-page active" id="page-overview">
+        <div class="panel">
+          <div class="panel-header">运行指标</div>
+          <div class="panel-body" id="metrics-panel" style="display:flex;flex-wrap:wrap;gap:16px"></div>
         </div>
-      </div>
-      <!-- 运行指标 (D6) -->
-      <div class="panel">
-        <div class="panel-header">运行指标</div>
-        <div class="panel-body" id="metrics-panel" style="display:flex;flex-wrap:wrap;gap:16px"></div>
-      </div>
-      <!-- 实时结果 -->
-      <div class="panel">
-        <div class="panel-header">实时结果流</div>
-        <div class="panel-body" id="result-stream" style="padding:0">
-          <div class="empty" style="padding:24px">暂无结果</div>
+        <div class="panel">
+          <div class="panel-header">实时结果流 <span class="sub">(SSE 实时推送,页面刷新后可在「任务历史」回看)</span></div>
+          <div class="panel-body" id="result-stream" style="padding:0">
+            <div class="empty small">暂无结果——在「任务执行」页下发第一个任务</div>
+          </div>
         </div>
-      </div>
-      <!-- H5 交互式终端 -->
-      <div class="panel">
-        <div class="panel-header">交互式终端 <button id="shell-open-btn" onclick="window.__openShell()">打开终端</button></div>
-        <div class="panel-body" id="shell-panel" style="padding:0;display:none">
-          <div id="terminal" style="background:#0d1117;padding:8px;min-height:300px;font-family:monospace;font-size:13px;color:#c9d1d9"></div>
+      </section>
+
+      <!-- ===== 任务执行 ===== -->
+      <section class="tab-page" id="page-ops">
+        <div class="panel">
+          <div class="panel-header">下发任务</div>
+          <div class="panel-body" id="task-form-host">
+            <div class="empty" id="no-agent-hint">请先在左侧选择一个 Agent</div>
+          </div>
         </div>
-      </div>
-      <!-- J3 大文件传输 -->
-      <div class="panel">
-        <div class="panel-header">大文件传输</div>
-        <div class="panel-body">
-          <div class="row">
-            <div>
-              <label>上传到 Agent（绝对路径）</label>
-              <input id="xfer-upload-path" placeholder="C:\Users\test\big.bin">
+        <!-- P2-8 批量分发(按 tag 一对多,异步批次+实时进度) -->
+        <div class="panel">
+          <div class="panel-header">批量分发 <span class="sub">(按标签一对多 · 指数退避重试)</span></div>
+          <div class="panel-body">
+            <div class="row">
+              <div><label>目标标签</label><input id="batch-tag" placeholder="env=prod"></div>
+              <div><label>命令</label><input id="batch-cmd" placeholder="Get-Date" style="flex:1;min-width:240px"></div>
+            </div>
+            <div class="row">
+              <div><label>超时(秒)</label><input id="batch-timeout" type="number" value="60" style="width:90px"></div>
+              <div><label>重试次数</label><input id="batch-retries" type="number" value="2" style="width:90px"></div>
+              <div style="align-self:end"><button onclick="window.__submitBatch()">批量下发</button></div>
+            </div>
+            <div id="batch-progress" style="display:none;margin-top:12px">
+              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                <span id="batch-summary">—</span><span id="batch-eta"></span>
+              </div>
+              <div style="background:#21262d;border-radius:6px;height:10px;overflow:hidden">
+                <div id="batch-bar" style="background:#2f81f7;height:100%;width:0%;transition:width .5s"></div>
+              </div>
+              <div id="batch-targets" style="margin-top:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:6px;font-size:12px"></div>
             </div>
           </div>
-          <div class="row" style="margin-top:8px">
-            <div>
-              <label>选择文件</label>
-              <input type="file" id="xfer-file-input">
-            </div>
-            <div>
-              <button onclick="window.__uploadFile()" style="margin-top:24px">上传</button>
-            </div>
-          </div>
-          <div class="row" style="margin-top:12px">
-            <div>
-              <label>从 Agent 下载（绝对路径）</label>
-              <input id="xfer-download-path" placeholder="C:\Users\test\report.pdf">
-            </div>
-            <div>
-              <button onclick="window.__downloadFile()" style="margin-top:24px">下载</button>
-            </div>
-          </div>
-          <div id="xfer-progress" style="margin-top:12px"></div>
         </div>
-      </div>
+        <!-- H5 交互式终端 -->
+        <div class="panel">
+          <div class="panel-header">交互式终端 <button id="shell-open-btn" onclick="window.__openShell()">打开终端</button></div>
+          <div class="panel-body" id="shell-panel" style="padding:0;display:none">
+            <div id="terminal" style="background:#0d1117;padding:8px;min-height:300px;font-family:monospace;font-size:13px;color:#c9d1d9"></div>
+          </div>
+        </div>
+        <!-- J3 大文件传输 -->
+        <div class="panel">
+          <div class="panel-header">大文件传输</div>
+          <div class="panel-body">
+            <div class="row">
+              <div>
+                <label>上传到 Agent（绝对路径）</label>
+                <input id="xfer-upload-path" placeholder="C:\Users\test\big.bin">
+              </div>
+            </div>
+            <div class="row" style="margin-top:8px">
+              <div>
+                <label>选择文件</label>
+                <input type="file" id="xfer-file-input">
+              </div>
+              <div>
+                <button onclick="window.__uploadFile()" style="margin-top:24px">上传</button>
+              </div>
+            </div>
+            <div class="row" style="margin-top:12px">
+              <div>
+                <label>从 Agent 下载（绝对路径）</label>
+                <input id="xfer-download-path" placeholder="C:\Users\test\report.pdf">
+              </div>
+              <div>
+                <button onclick="window.__downloadFile()" style="margin-top:24px">下载</button>
+              </div>
+            </div>
+            <div id="xfer-progress" style="margin-top:12px"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 任务历史 ===== -->
+      <section class="tab-page" id="page-history">
+        <div class="panel">
+          <div class="panel-header">任务历史 <span class="sub">持久化任务记录 · 点击行查看结果详情</span></div>
+          <div class="panel-body">
+            <div class="filter-bar">
+              <div class="f">
+                <label>状态</label>
+                <select id="hist-status" onchange="window.__loadTasks(0)">
+                  <option value="">全部</option>
+                  <option value="completed">已完成</option>
+                  <option value="failed">失败</option>
+                  <option value="pending,dispatched,acknowledged">执行中</option>
+                  <option value="cancelled">已取消</option>
+                </select>
+              </div>
+              <div class="f">
+                <label>任务类型</label>
+                <select id="hist-type" onchange="window.__loadTasks(0)">
+                  <option value="">全部</option>
+                  <option value="powershell">powershell</option>
+                  <option value="script">script</option>
+                  <option value="file">file</option>
+                  <option value="screenshot">screenshot</option>
+                  <option value="browse">browse</option>
+                  <option value="guiclick">guiclick</option>
+                  <option value="update">update</option>
+                  <option value="power">power</option>
+                  <option value="monitor">monitor</option>
+                </select>
+              </div>
+              <div class="f wide">
+                <label>Agent ID</label>
+                <input id="hist-agent" list="hist-agent-list" placeholder="留空=全部" onchange="window.__loadTasks(0)">
+                <datalist id="hist-agent-list"></datalist>
+              </div>
+              <div>
+                <button class="ghost" onclick="window.__loadTasks(0)">刷新</button>
+              </div>
+            </div>
+            <div style="overflow-x:auto">
+              <table class="data" id="hist-table">
+                <thead><tr><th>时间</th><th>任务 ID</th><th>类型</th><th>Agent</th><th>状态</th><th>提交参数</th></tr></thead>
+                <tbody id="hist-tbody"><tr><td colspan="6" class="empty small">暂无任务记录</td></tr></tbody>
+              </table>
+            </div>
+            <div class="pager">
+              <button class="ghost" id="hist-prev" onclick="window.__histPrev()">上一页</button>
+              <span id="hist-pageinfo">—</span>
+              <button class="ghost" id="hist-next" onclick="window.__histNext()">下一页</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 审计日志 ===== -->
+      <section class="tab-page" id="page-audit">
+        <div class="panel">
+          <div class="panel-header">审计日志 <span class="sub">hash chain 防篡改 · 点击行查看完整记录</span></div>
+          <div class="panel-body">
+            <div class="filter-bar">
+              <div class="f">
+                <label>时间范围</label>
+                <select id="audit-since" onchange="window.__loadAudit(0)">
+                  <option value="1h">最近 1 小时</option>
+                  <option value="24h" selected>最近 24 小时</option>
+                  <option value="168h">最近 7 天</option>
+                  <option value="0s">全部</option>
+                </select>
+              </div>
+              <div class="f">
+                <label>事件</label>
+                <select id="audit-event" onchange="window.__loadAudit(0)">
+                  <option value="">全部</option>
+                  <option value="task_submitted">task_submitted 任务提交</option>
+                  <option value="task_result">task_result 任务结果</option>
+                  <option value="task_failed">task_failed 任务失败</option>
+                  <option value="task_blocked">task_blocked 策略拦截</option>
+                  <option value="task_max_attempts">task_max_attempts 重试上限</option>
+                  <option value="agent_online">agent_online 上线</option>
+                  <option value="agent_revoked">agent_revoked 证书撤销</option>
+                  <option value="power_executed">power_executed 电源操作</option>
+                  <option value="secret_stored">secret_stored</option>
+                  <option value="secret_accessed">secret_accessed</option>
+                  <option value="shell_opened">shell_opened</option>
+                  <option value="shell_blocked">shell_blocked</option>
+                  <option value="file_upload">file_upload</option>
+                  <option value="file_download">file_download</option>
+                  <option value="cron_added">cron_added</option>
+                  <option value="script_run">script_run</option>
+                </select>
+              </div>
+              <div class="f wide">
+                <label>Agent ID</label>
+                <input id="audit-agent" list="hist-agent-list" placeholder="留空=全部" onchange="window.__loadAudit(0)">
+              </div>
+              <div>
+                <button class="ghost" onclick="window.__loadAudit(0)">刷新</button>
+              </div>
+              <div>
+                <button class="ghost" onclick="window.__exportAudit()">SIEM 导出</button>
+              </div>
+            </div>
+            <div style="overflow-x:auto">
+              <table class="data" id="audit-table">
+                <thead><tr><th>时间</th><th>事件</th><th>Agent</th><th>任务</th><th>操作者</th><th>详情</th></tr></thead>
+                <tbody id="audit-tbody"><tr><td colspan="6" class="empty small">暂无审计记录</td></tr></tbody>
+              </table>
+            </div>
+            <div class="pager">
+              <button class="ghost" id="audit-prev" onclick="window.__auditPrev()">上一页</button>
+              <span id="audit-pageinfo">—</span>
+              <button class="ghost" id="audit-next" onclick="window.__auditNext()">下一页</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
     </div>
   </main>
 </div>

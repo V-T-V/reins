@@ -366,13 +366,21 @@ func (r *Relay) WithScheduler(s *Scheduler) *Relay {
 // 鉴权：校验 Bearer token（配置为空则放行）。
 //
 // S6 修复：token 比较用 crypto/subtle.ConstantTimeCompare，消除计时侧信道。
+// H4 修复：token 不经 query 传递(防日志/Referer 泄漏)。
+// UI-P3 补充：浏览器 EventSource 无法携带自定义 header,补同源 cookie 回退
+// (reins_token;cookie 不进访问日志/Referer,安全性等同 header;query 依旧拒绝)。
 func (r *Relay) authorize(req *http.Request) error {
 	if r.cfg.Token == "" {
 		return nil
 	}
-	// H4:仅 Authorization 头(query token 会进日志/Referer 泄漏);
+	// H4:仅 Authorization 头 + 同源 cookie(query token 会进日志/Referer 泄漏);
 	// 短1:比较 Secret 部分(支持 tenant:role:secret 格式,纯 secret 行为不变)
 	token := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+	if token == "" {
+		if c, err := req.Cookie("reins_token"); err == nil {
+			token = c.Value
+		}
+	}
 	ident := ParseToken(token)
 	want := ParseToken(r.cfg.Token).Secret
 	if subtle.ConstantTimeCompare([]byte(ident.Secret), []byte(want)) != 1 {

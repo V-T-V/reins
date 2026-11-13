@@ -14,12 +14,67 @@
   if (basePath === "/" || basePath === ".") basePath = "";
   function api(path) { return basePath + path; }
 
-  const state = { agents: new Map(), selected: null, evtSource: null };
+  const state = { agents: new Map(), selected: null, evtSource: null, seenAgentIds: [], token: "" };
+
+  // --- Token 鉴权(Relay -token 模式下控制台必须携带;否则全部 401) ---
+  // 优先级:URL ?token= 引导(用后即从地址栏抹掉)> localStorage > 401 时提示输入。
+  function getToken() {
+    if (state.token) return state.token;
+    try { state.token = localStorage.getItem("reins_token") || ""; } catch (e) { state.token = ""; }
+    return state.token;
+  }
+  function setToken(t) {
+    state.token = t || "";
+    try {
+      if (state.token) localStorage.setItem("reins_token", state.token);
+      else localStorage.removeItem("reins_token");
+    } catch (e) { /* 隐私模式等无 localStorage 环境,仅内存态 */ }
+    // 同源 cookie:EventSource(SSE)无法携带 Authorization header,服务端authorize
+    // 支持 reins_token cookie 回退(UI-P3;query token 因 H4 安全红线被服务端拒绝)。
+    try {
+      document.cookie = "reins_token=" + encodeURIComponent(state.token) + "; path=/; SameSite=Strict";
+    } catch (e) { /* 非 http(s) 环境等 */ }
+  }
+  (function consumeUrlToken() {
+    try {
+      var q = new URLSearchParams(location.search);
+      var t = q.get("token");
+      if (t) {
+        setToken(t);
+        q.delete("token");
+        var rest = q.toString();
+        history.replaceState(null, "", location.pathname + (rest ? "?" + rest : "") + location.hash);
+      }
+    } catch (e) { /* 老浏览器无 URLSearchParams,跳过 */ }
+  })();
+
+  // 统一 API 请求:自动带 Authorization;401 时提示输入 Token 后重试一次。
+  // (SSE 不走这里——EventSource 由 setToken 写的同源 cookie 携带凭证。)
+  async function apiFetch(path, opts) {
+    opts = opts || {};
+    var t = getToken();
+    if (t) {
+      opts.headers = Object.assign({}, opts.headers || {}, { "Authorization": "Bearer " + t });
+    }
+    var r = await fetch(api(path), opts);
+    if (r.status === 401 && !opts.__retriedAuth) {
+      var input = window.prompt("鉴权失败:请输入 Relay Token(Relay 启动时 -token 参数)");
+      if (input !== null && input !== "") {
+        setToken(input);
+        opts.__retriedAuth = true;
+        return apiFetch(path, opts);
+      }
+    }
+    return r;
+  }
+
+  // SSE 地址:凭证由 setToken 写入的同源 cookie 自动携带(无需 query——H4 红线服务端拒绝 query token)。
+  function sseURL(path) { return api(path); }
 
   // --- Agent 列表 ---
   async function refreshAgents() {
     try {
-      const r = await fetch(api("/api/agents"));
+      const r = await apiFetch("/api/agents");
       const data = await r.json();
       // 标记：列表里没有的视为离线
       const onlineIds = new Set();
@@ -34,7 +89,26 @@
         overlay.style.display = "flex";
         // 自动检测 Relay IP（用当前页面的 hostname）
         var relayIP = location.hostname + (location.port ? ":" + location.port : "");
-        document.getElementById("relay-ip").textContent = relayIP;
+        // 填充 IP 占位符(命令中仅 1 处)
+        var ipEl = document.getElementById("relay-ip");
+        if (ipEl) ipEl.textContent = relayIP;
+        // 从 /api/bootstrap 拉取一行安装命令:安装命令已由服务端烘焙地址,
+        // 直接用 bootstrap 返回的一行命令整条替换(Token 场景含 scriptblock 形式);
+        // 失败时保留上面的占位命令。
+        if (!state.bootstrapLoaded) {
+          state.bootstrapLoaded = true;
+          apiFetch("/api/bootstrap?host=" + location.hostname + "&port=" + (location.port || "7780"))
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (info) {
+              var cmdEl = document.getElementById("install-cmd");
+              if (cmdEl && info && info.one_line_cmd) {
+                cmdEl.textContent = info.one_line_cmd;
+              } else if (cmdEl && info && info.one_line_dev_cmd) {
+                cmdEl.textContent = info.one_line_dev_cmd;
+              }
+            })
+            .catch(function () { /* dev 模式或无 Token,忽略 */ });
+        }
       } else if (overlay && state.agents.size > 0) {
         overlay.style.display = "none";
       }
@@ -59,13 +133,38 @@
       const caps = (a.capabilities || [])
         .map((c) => `<span class="cap">${c}</span>`)
         .join("");
+      const tags = Object.entries(a.tags || {})
+        .map(([k, v]) => `<span class="agent-tag">${esc(k)}=${esc(v)}</span>`)
+        .join("");
+      const uptime = a.online_since ? `<div class="agent-uptime">● 在线 ${fmtUptime(Date.now() - a.online_since)}</div>` : "";
+      const ver = a.version ? (String(a.version).startsWith("v") ? a.version : "v" + a.version) : "?";
       div.innerHTML = `
         <div class="agent-id"><span class="status-dot"></span>${esc(a.agent_id)}</div>
-        <div class="agent-meta">${esc(a.hostname || "")} · ${esc(a.os || "")} · v${esc(a.version || "?")}</div>
+        <div class="agent-meta">${esc(a.hostname || "")} · ${esc(a.os || "")} · ${esc(ver)}</div>
+        ${uptime}
         <div class="caps">${caps}</div>
+        ${tags ? `<div>${tags}</div>` : ""}
       `;
       list.appendChild(div);
     });
+    // Agent ID datalist 供历史/审计筛选
+    const dl = document.getElementById("hist-agent-list");
+    if (dl) {
+      const ids = new Set(Array.from(state.agents.keys()));
+      (state.seenAgentIds || []).forEach((id) => ids.add(id));
+      dl.innerHTML = Array.from(ids).map((id) => `<option value="${esc(id)}">`).join("");
+    }
+  }
+
+  // 在线时长格式化(ms → "3 分"/"2 小时 15 分"/"5 天 3 小时")
+  function fmtUptime(ms) {
+    if (ms < 0 || ms === undefined || ms === null) return "—";
+    const min = Math.floor(ms / 60000);
+    if (min < 1) return "不到 1 分钟";
+    if (min < 60) return min + " 分钟";
+    const h = Math.floor(min / 60);
+    if (h < 24) return h + " 小时 " + (min % 60) + " 分";
+    return Math.floor(h / 24) + " 天 " + (h % 24) + " 小时";
   }
 
   function selectAgent(id) {
@@ -161,7 +260,7 @@
     const taskId = "t-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
     const body = { task_id: taskId, type, agent_id: state.selected, payload, timeout };
     try {
-      const r = await fetch(api("/api/tasks"), {
+      const r = await apiFetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -210,7 +309,7 @@
   // --- SSE 订阅（D6: 加自动重连）---
   function subscribeSSE() {
     if (state.evtSource) state.evtSource.close();
-    const es = new EventSource(api("/api/events"));
+    const es = new EventSource(sseURL("/api/events"));
     state.evtSource = es;
     es.addEventListener("hello", () => {
       document.getElementById("relay-info").textContent = "Relay: 已连接 ✓";
@@ -237,6 +336,8 @@
     es.addEventListener("task_result", (e) => {
       const data = JSON.parse(e.data).data;
       updatePending(data.task_id, { result: data });
+      // 任务历史/审计页打开时实时跟进
+      maybeRefreshTables();
     });
     // D6 P2-4 修复：onerror 检测连接关闭后主动重连
     es.onerror = () => {
@@ -249,7 +350,7 @@
   // D6：重连后补拉近期任务结果（防 SSE 丢事件）
   async function fetchRecentResults() {
     try {
-      const r = await fetch(api("/api/tasks?limit=10"));
+      const r = await apiFetch("/api/tasks?limit=10");
       const data = await r.json();
       (data.tasks || []).forEach((t) => {
         if (t.status === "completed" || t.status === "failed") {
@@ -264,7 +365,7 @@
     if (!confirm("确认取消任务 " + taskId + "？")) return;
     const agentID = state.selected || "";
     try {
-      await fetch(api("/api/tasks/cancel"), {
+      await apiFetch("/api/tasks/cancel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ task_id: taskId, agent_id: agentID, reason: "用户手动取消" }),
@@ -277,7 +378,7 @@
   // D6：metrics 面板轮询
   async function refreshMetrics() {
     try {
-      const r = await fetch(api("/api/metrics"));
+      const r = await apiFetch("/api/metrics");
       const m = await r.json();
       const el = document.getElementById("metrics-panel");
       if (el) {
@@ -396,7 +497,7 @@
     term.innerHTML = '<span style="color:#8b949e">正在开启终端...</span>';
 
     try {
-      const r = await fetch(api("/api/shell/open"), {
+      const r = await apiFetch("/api/shell/open", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agent_id: state.selected, cols: 80, rows: 24 }),
@@ -432,7 +533,7 @@
   window.__sendInput = async function (text) {
     if (!state.shellSession) return;
     try {
-      await fetch(api("/api/shell/input"), {
+      await apiFetch("/api/shell/input", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -449,7 +550,7 @@
     var sid = state.shellSession;
     state.shellSession = null;
     try {
-      await fetch(api("/api/shell/close"), {
+      await apiFetch("/api/shell/close", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sid, agent_id: state.selected }),
@@ -504,6 +605,7 @@
     var xhr = new XMLHttpRequest();
     xhr.open("POST", api("/api/transfer/upload?agent_id=" + encodeURIComponent(state.selected) +
       "&path=" + encodeURIComponent(path) + "&transfer_id=" + transferID));
+    if (getToken()) xhr.setRequestHeader("Authorization", "Bearer " + getToken());
     xhr.upload.onprogress = function (ev) {
       if (ev.lengthComputable) {
         var pct = Math.round(ev.loaded * 100 / ev.total);
@@ -539,6 +641,7 @@
     // B1 修复：用隐藏 <a> 让浏览器原生流式落盘，不用 blob() 全载内存
     var url = api("/api/transfer/download?agent_id=" + encodeURIComponent(state.selected) +
       "&path=" + encodeURIComponent(path) + "&transfer_id=" + transferID);
+    // 凭证由同源 cookie(reins_token)自动携带——<a> 下载与 SIEM 导出同此
     var a = document.createElement("a");
     a.href = url;
     a.download = path.split("\\").pop().split("/").pop();
@@ -577,5 +680,360 @@
       if (content) { content.innerHTML += '<span style="color:#8b949e">\n[会话已关闭]</span>\n'; }
       state.shellSession = null;
     });
+  }
+
+  // === P2-8 批量分发(POST /api/batch 异步批次 + 轮询进度可视化) ===
+  let batchTimer = null;
+
+  window.__submitBatch = async function () {
+    const tag = (document.getElementById("batch-tag") || {}).value || "";
+    const cmd = (document.getElementById("batch-cmd") || {}).value || "";
+    const timeout = parseInt((document.getElementById("batch-timeout") || {}).value, 10) || 60;
+    const retries = parseInt((document.getElementById("batch-retries") || {}).value, 10) || 0;
+    if (!tag || !cmd) { alert("目标标签与命令必填"); return; }
+    try {
+      const r = await apiFetch("/api/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tag, type: "powershell", payload: { command: cmd }, timeout, max_retries: retries }),
+      });
+      const data = await r.json();
+      if (!r.ok) { alert("批量下发失败: " + (data.error || r.status)); return; }
+      document.getElementById("batch-progress").style.display = "block";
+      document.getElementById("batch-summary").textContent = "批次 " + data.batch_id.slice(0, 16) + "… 已提交,目标 " + data.total + " 个";
+      document.getElementById("batch-bar").style.width = "0%";
+      document.getElementById("batch-targets").innerHTML = "";
+      if (batchTimer) clearInterval(batchTimer);
+      const poll = async function () {
+        try {
+          const pr = await apiFetch("/api/batch/" + encodeURIComponent(data.batch_id));
+          if (!pr.ok) { clearInterval(batchTimer); return; }
+          const snap = await pr.json();
+          renderBatchProgress(snap);
+          if (snap.status === "finished") clearInterval(batchTimer);
+        } catch (e) { /* 网络抖动,下轮重试 */ }
+      };
+      poll();
+      batchTimer = setInterval(poll, 1000);
+    } catch (e) { alert("批量下发异常: " + e.message); }
+  };
+
+  function renderBatchProgress(snap) {
+    const summary = document.getElementById("batch-summary");
+    const bar = document.getElementById("batch-bar");
+    const eta = document.getElementById("batch-eta");
+    if (!summary || !bar) return;
+    const done = (snap.done || 0), total = (snap.total || 0);
+    summary.textContent = "✓ " + snap.succeeded + " 成功 · ✗ " + snap.failed + " 失败 · ⋯ " + snap.pending + " 待投 · " + done + "/" + total;
+    bar.style.width = (snap.percent || 0).toFixed(1) + "%";
+    bar.style.background = snap.status === "finished"
+      ? ((snap.failed || 0) > 0 ? "#d29922" : "#3fb950")
+      : "#2f81f7";
+    eta.textContent = snap.status === "finished"
+      ? ("完成 · 成功率 " + Math.round((snap.success_rate || 0) * 100) + "% · 耗时 " + ((snap.elapsed_ms || 0) / 1000).toFixed(1) + "s")
+      : (snap.eta_ms ? "ETA " + (snap.eta_ms / 1000).toFixed(0) + "s" : "");
+    const box = document.getElementById("batch-targets");
+    if (box && Array.isArray(snap.states)) {
+      const color = { succeeded: "#3fb950", failed: "#f85149", running: "#2f81f7", pending: "#8b949e" };
+      box.innerHTML = snap.states.map(function (st) {
+        return '<div style="border:1px solid #30363d;border-radius:6px;padding:6px 8px;overflow:hidden">' +
+          '<span style="color:' + (color[st.Status] || "#8b949e") + '">●</span> <b>' + st.AgentID.slice(0, 28) + "</b>" +
+          '<span style="float:right;opacity:.75">' + st.Status + (st.Attempt > 1 ? " (第" + st.Attempt + "次)" : "") + "</span>" +
+          (st.Error ? '<div style="opacity:.7;white-space:nowrap;text-overflow:ellipsis;overflow:hidden" title="' + st.Error.replace(/"/g, "&quot;") + '">' + st.Error + "</div>" : "") +
+          "</div>";
+      }).join("");
+    }
+  }
+
+  // ===================================================================
+  // Tab 导航 + 任务历史 + 审计日志(UI 打磨:任务/审计可视化)
+  // ===================================================================
+
+  const PAGE_SIZE = 20;
+
+  // --- Tab 切换 ---
+  window.__switchTab = function (pageId, btn) {
+    document.querySelectorAll(".tab-page").forEach(function (p) { p.classList.remove("active"); });
+    document.querySelectorAll(".tab").forEach(function (t) { t.classList.remove("active"); });
+    var page = document.getElementById(pageId);
+    if (page) page.classList.add("active");
+    if (btn) btn.classList.add("active");
+    // 惰性加载:首次切到历史/审计页时拉数据
+    if (pageId === "page-history" && !state.histLoaded) window.__loadTasks(0);
+    if (pageId === "page-audit" && !state.auditLoaded) window.__loadAudit(0);
+  };
+
+  // SSE task_result 到达时,若对应页可见则刷新(30s 节流防批量任务刷屏)
+  var lastTableRefresh = 0;
+  function maybeRefreshTables() {
+    var now = Date.now();
+    if (now - lastTableRefresh < 30000) return;
+    var histActive = document.getElementById("page-history") && document.getElementById("page-history").classList.contains("active");
+    var auditActive = document.getElementById("page-audit") && document.getElementById("page-audit").classList.contains("active");
+    if (histActive) { lastTableRefresh = now; window.__loadTasks(state.histOffset || 0, true); }
+    if (auditActive) { lastTableRefresh = now; window.__loadAudit(state.auditOffset || 0, true); }
+  }
+
+  // --- 状态徽章 ---
+  function statusBadge(status) {
+    var cls = { completed: "completed", failed: "failed", cancelled: "cancelled" }[status] || "running";
+    var label = { pending: "待投递", dispatched: "已投递", acknowledged: "执行中", completed: "已完成", failed: "失败", cancelled: "已取消" }[status] || status;
+    return '<span class="badge ' + cls + '">' + label + "</span>";
+  }
+
+  function fmtTime(ms) {
+    if (!ms) return "—";
+    return new Date(ms).toLocaleString();
+  }
+
+  // --- 任务历史 ---
+  window.__loadTasks = async function (offset, silent) {
+    try {
+      var status = (document.getElementById("hist-status") || {}).value || "";
+      var type = (document.getElementById("hist-type") || {}).value || "";
+      var agent = (document.getElementById("hist-agent") || {}).value || "";
+      var q = "/api/tasks?limit=" + PAGE_SIZE + "&offset=" + (offset || 0);
+      if (status) q += "&status=" + encodeURIComponent(status);
+      if (type) q += "&type=" + encodeURIComponent(type);
+      if (agent) q += "&agent_id=" + encodeURIComponent(agent);
+      var r = await apiFetch(q);
+      if (!r.ok) {
+        document.getElementById("hist-tbody").innerHTML =
+          '<tr><td colspan="6" class="empty small">' + (r.status === 503 ? "持久化未启用" : "加载失败 HTTP " + r.status) + "</td></tr>";
+        return;
+      }
+      var data = await r.json();
+      state.histLoaded = true;
+      state.histOffset = offset || 0;
+      state.histTotal = data.total || 0;
+      var seen = state.seenAgentIds;
+      (data.tasks || []).forEach(function (t) {
+        var id = t.request && t.request.agent_id;
+        if (id && seen.indexOf(id) < 0) { seen.push(id); if (seen.length > 200) seen.shift(); }
+      });
+      renderTaskRows(data.tasks || []);
+      renderPager("hist", state.histOffset, data.count || 0, data.total || 0);
+    } catch (e) {
+      if (!silent) alert("任务历史加载失败: " + e.message);
+    }
+  };
+
+  function renderTaskRows(tasks) {
+    var tbody = document.getElementById("hist-tbody");
+    if (!tasks.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty small">当前筛选条件下没有任务记录</td></tr>';
+      return;
+    }
+    tbody.innerHTML = "";
+    tasks.forEach(function (t) {
+      var tr = document.createElement("tr");
+      tr.className = "rowclick";
+      tr.onclick = function () { toggleTaskDetail(tr, t); };
+      var payloadDesc = "";
+      try {
+        var p = typeof t.request.payload === "string" ? JSON.parse(t.request.payload || "{}") : (t.request.payload || {});
+        payloadDesc = p.command || p.path || p.url || p.intent || (p.content ? "脚本 " + p.content.length + " 字符" : "");
+      } catch (e) { payloadDesc = ""; }
+      tr.innerHTML =
+        "<td>" + esc(fmtTime(t.created_at)) + "</td>" +
+        '<td class="cell-id">' + esc(t.request.task_id) + "</td>" +
+        "<td>" + esc(t.request.type) + "</td>" +
+        '<td class="cell-id">' + esc(t.request.agent_id || "") + "</td>" +
+        "<td>" + statusBadge(t.status) + "</td>" +
+        '<td class="cell-detail" title="' + esc(payloadDesc).replace(/"/g, "&quot;") + '">' + esc(payloadDesc) + "</td>";
+      tbody.appendChild(tr);
+    });
+  }
+
+  // 行详情:拉 /api/tasks/{id} 取结果,按类型渲染
+  var openDetailTaskId = null;
+  function toggleTaskDetail(tr, t) {
+    var taskId = t.request.task_id;
+    var existing = document.getElementById("hist-detail-row");
+    if (existing) existing.remove();
+    if (openDetailTaskId === taskId) { openDetailTaskId = null; return; }
+    openDetailTaskId = taskId;
+    var row = document.createElement("tr");
+    row.className = "detail-row";
+    row.id = "hist-detail-row";
+    var cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.innerHTML = '<div class="kv">加载结果中…</div>';
+    row.appendChild(cell);
+    tr.after(row);
+    apiFetch("/api/tasks/" + encodeURIComponent(taskId))
+      .then(function (r) { return r.ok ? r.json() : { task: t, result: null, error: "HTTP " + r.status }; })
+      .then(function (d) {
+        if (openDetailTaskId !== taskId) return; // 已切到别的行
+        cell.innerHTML = renderTaskDetail(t, d.result);
+      })
+      .catch(function (e) {
+        cell.innerHTML = '<div class="kv">结果加载失败: ' + esc(e.message) + "</div>";
+      });
+  }
+
+  // 按任务类型渲染结果详情(截图/文件内容/命令输出)
+  function renderTaskDetail(t, result) {
+    var head = '<div class="kv">任务 <b>' + esc(t.request.task_id) + "</b> · 类型 <b>" + esc(t.request.type) +
+      "</b> · Agent <b>" + esc(t.request.agent_id || "") + "</b> · 状态 <b>" + esc(t.status) + "</b> · 创建 " + esc(fmtTime(t.created_at)) + "</div>";
+    // 请求 payload 摘要
+    var payloadPre = "";
+    try {
+      var p = typeof t.request.payload === "string" ? JSON.parse(t.request.payload || "{}") : (t.request.payload || {});
+      var shown = Object.assign({}, p);
+      // 长内容截断展示(完整内容在审计/结果里)
+      ["command", "content", "content_b64", "intent"].forEach(function (k) {
+        if (shown[k] && String(shown[k]).length > 400) shown[k] = String(shown[k]).slice(0, 400) + "…(" + String(shown[k]).length + " 字符)";
+      });
+      payloadPre = '<div class="kv">请求参数</div><div class="detail-pre">' + esc(JSON.stringify(shown, null, 2)) + "</div>";
+    } catch (e) { /* payload 展示失败不致命 */ }
+    if (!result) return head + payloadPre + '<div class="kv">暂无结果(任务未到终态或结果已被清理)</div>';
+    var body = "";
+    if (result.error) body += '<div class="kv" style="color:#f85149">错误: ' + esc(result.error) + "</div>";
+    if (result.stdout) body += '<div class="kv">stdout</div><div class="detail-pre">' + esc(result.stdout) + "</div>";
+    if (result.stderr) body += '<div class="kv" style="color:#f85149">stderr</div><div class="detail-pre">' + esc(result.stderr) + "</div>";
+    if (result.data) {
+      var dataObj = typeof result.data === "string" ? safeParse(result.data) : result.data;
+      if (dataObj) {
+        if (dataObj.image || dataObj.screenshot) {
+          body += '<div class="kv">截图</div><img class="detail-img" src="' + esc(dataObj.image || dataObj.screenshot) + '">';
+        }
+        if (dataObj.content_b64) {
+          var decoded;
+          try { decoded = atob(dataObj.content_b64); } catch (e) { decoded = "(base64 解码失败)"; }
+          body += '<div class="kv">文件内容 (' + (dataObj.bytes || decoded.length) + " bytes)</div><div class=\"detail-pre\">" + esc(decoded) + "</div>";
+        }
+        if (dataObj.steps) {
+          body += '<div class="kv">交互步骤 (' + dataObj.steps.length + ")</div><div class=\"detail-pre\">" + esc(JSON.stringify(dataObj.steps, null, 2)) + "</div>";
+        }
+        // 其余结构化数据兜底展示(坐标/URL/版本号等)
+        var rest = Object.assign({}, dataObj);
+        delete rest.image; delete rest.screenshot; delete rest.content_b64; delete rest.steps;
+        if (Object.keys(rest).length) {
+          body += '<div class="kv">结构化数据</div><div class="detail-pre">' + esc(JSON.stringify(rest, null, 2)) + "</div>";
+        }
+      }
+    }
+    var dur = result.duration_ms ? " · 耗时 " + result.duration_ms + "ms" : "";
+    var outcome = result.success
+      ? '<span class="badge completed">✓ 成功' + dur + "</span>"
+      : '<span class="badge failed">✗ 失败' + dur + "</span>";
+    return head + '<div class="kv">结果 ' + outcome + " · 退出码 " + (result.exit_code !== undefined ? result.exit_code : "?") + "</div>" + body + payloadPre;
+  }
+
+  window.__histPrev = function () { if ((state.histOffset || 0) > 0) window.__loadTasks(Math.max(0, (state.histOffset || 0) - PAGE_SIZE)); };
+  window.__histNext = function () {
+    var off = (state.histOffset || 0) + PAGE_SIZE;
+    if (off < (state.histTotal || 0)) window.__loadTasks(off);
+  };
+
+  // --- 审计日志 ---
+  var AUDIT_EVENT_CLASS = {
+    task_blocked: "crit", agent_revoked: "crit", task_max_attempts: "crit",
+    task_failed: "warn", power_executed: "warn", shell_blocked: "warn", cron_blocked: "warn", dag_rejected: "warn",
+    agent_online: "info",
+  };
+
+  window.__loadAudit = async function (offset, silent) {
+    try {
+      var ev = (document.getElementById("audit-event") || {}).value || "";
+      var agent = (document.getElementById("audit-agent") || {}).value || "";
+      var since = (document.getElementById("audit-since") || {}).value || "24h";
+      var q = "/api/audit/query?limit=" + PAGE_SIZE + "&offset=" + (offset || 0) + "&since=" + encodeURIComponent(since);
+      if (ev) q += "&event=" + encodeURIComponent(ev);
+      if (agent) q += "&agent_id=" + encodeURIComponent(agent);
+      var r = await apiFetch(q);
+      if (!r.ok) {
+        document.getElementById("audit-tbody").innerHTML =
+          '<tr><td colspan="6" class="empty small">' + (r.status === 503 ? "审计未启用(Relay 需开启审计)" : "加载失败 HTTP " + r.status) + "</td></tr>";
+        state.auditLoaded = true;
+        renderPager("audit", offset || 0, 0, 0);
+        return;
+      }
+      var data = await r.json();
+      state.auditLoaded = true;
+      state.auditOffset = offset || 0;
+      state.auditTotal = data.total || 0;
+      renderAuditRows(data.entries || []);
+      renderPager("audit", state.auditOffset, data.count || 0, data.total || 0);
+    } catch (e) {
+      if (!silent) alert("审计加载失败: " + e.message);
+    }
+  };
+
+  function renderAuditRows(entries) {
+    var tbody = document.getElementById("audit-tbody");
+    if (!entries.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty small">当前筛选条件下没有审计记录</td></tr>';
+      return;
+    }
+    tbody.innerHTML = "";
+    entries.forEach(function (e) {
+      var tr = document.createElement("tr");
+      tr.className = "rowclick";
+      tr.onclick = function () { toggleAuditDetail(tr, e); };
+      var cls = AUDIT_EVENT_CLASS[e.event] || "running";
+      tr.innerHTML =
+        "<td>" + esc(fmtTime(e.ts)) + "</td>" +
+        '<td><span class="badge ' + cls + '">' + esc(e.event) + "</span></td>" +
+        '<td class="cell-id">' + esc(e.agent_id || "—") + "</td>" +
+        '<td class="cell-id">' + esc(e.task_id || "—") + "</td>" +
+        "<td>" + esc(e.operator || "—") + "</td>" +
+        '<td class="cell-detail" title="' + esc(e.detail || "").replace(/"/g, "&quot;") + '">' + esc(e.detail || "") + "</td>";
+      tbody.appendChild(tr);
+    });
+  }
+
+  var openAuditDetailTS = null;
+  function toggleAuditDetail(tr, e) {
+    var existing = document.getElementById("audit-detail-row");
+    if (existing) existing.remove();
+    if (openAuditDetailTS === e.ts + e.event) { openAuditDetailTS = null; return; }
+    openAuditDetailTS = e.ts + e.event;
+    var row = document.createElement("tr");
+    row.className = "detail-row";
+    row.id = "audit-detail-row";
+    var cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.innerHTML =
+      '<div class="kv">完整记录(hash chain 防篡改——prev_hash 应与上一条 this_hash 衔接)</div>' +
+      '<div class="detail-pre">' + esc(JSON.stringify(e, null, 2)) + "</div>";
+    row.appendChild(cell);
+    tr.after(row);
+  }
+
+  window.__auditPrev = function () { if ((state.auditOffset || 0) > 0) window.__loadAudit(Math.max(0, (state.auditOffset || 0) - PAGE_SIZE)); };
+  window.__auditNext = function () {
+    var off = (state.auditOffset || 0) + PAGE_SIZE;
+    if (off < (state.auditTotal || 0)) window.__loadAudit(off);
+  };
+
+  // SIEM 导出(新窗口下载 JSON Lines;format 可改 cef/syslog)
+  window.__exportAudit = function () {
+    var since = (document.getElementById("audit-since") || {}).value || "24h";
+    var ev = (document.getElementById("audit-event") || {}).value || "";
+    var agent = (document.getElementById("audit-agent") || {}).value || "";
+    var url = api("/api/audit/export?format=json&since=" + encodeURIComponent(since));
+    if (ev) url += "&event=" + encodeURIComponent(ev); // export 未实现 event 过滤时被忽略,行为无损
+    if (agent) url += "&agent_id=" + encodeURIComponent(agent);
+    // 凭证由同源 cookie 携带
+    window.open(url, "_blank");
+  };
+
+  // --- 分页条渲染(hist/audit 共用) ---
+  function renderPager(prefix, offset, count, total) {
+    var info = document.getElementById(prefix + "-pageinfo");
+    var prev = document.getElementById(prefix + "-prev");
+    var next = document.getElementById(prefix + "-next");
+    if (!info) return;
+    if (total === 0) {
+      info.textContent = "无记录";
+    } else {
+      var page = Math.floor(offset / PAGE_SIZE) + 1;
+      var pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      info.textContent = "第 " + page + "/" + pages + " 页 · 共 " + total + " 条";
+    }
+    if (prev) prev.disabled = offset <= 0;
+    if (next) next.disabled = offset + count >= total;
   }
 })();

@@ -6,7 +6,7 @@
 //   - Syslog(RFC 5424):传统 SIEM
 //
 // GET /api/audit/export?format=cef&since=1h —— 导出审计日志
-// GET /api/audit/tail —— SSE 实时推审计事件
+// GET /api/audit/query?event=&since=&offset=&limit= —— JSON 查询(过滤+分页,见 audit_query.go)
 package main
 
 import (

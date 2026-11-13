@@ -87,6 +87,15 @@ func (a *AuditLog) writeLoop() {
 	}
 }
 
+// Path 返回审计日志文件路径(查询端点读文件用)。
+// 未启用(file 为 nil)返回空串。
+func (a *AuditLog) Path() string {
+	if a == nil || a.file == nil {
+		return ""
+	}
+	return a.file.Name()
+}
+
 // writeEntry 写入单条记录(含 hash chain 计算)。
 func (a *AuditLog) writeEntry(entry AuditEntry) {
 	if entry.TS == 0 {

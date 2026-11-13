@@ -2,6 +2,25 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [未发布] — 2026-11-13 UI 打磨与打包分发(工作区待审)
+
+完整推进实录见 `docs/UI-PACKAGING-2026-11-13.md`。
+
+### 修复
+- **Web 控制台在 `-token` 模式下完全不可用**(生产标准形态即灭):前端从未实现凭证传递,所有 API/SSE 401 静默。修复:URL `?token=` 引导(消费后从地址栏抹掉)+ localStorage + 401 提示重试;SSE/下载/导出走新增的**同源 cookie `reins_token` 鉴权回退**——EventSource 无法带 Authorization header,而 query token 已被 H4 有意拒绝(防日志/Referer 泄漏);`authorize` 与 `authorizeRBAC` 两处统一为 header > cookie,后者顺带移除遗留的 query 回退泄漏面。+2 测试(含"header 错误时不得回落 cookie");原 H4 锚定测试保持通过。
+- 审计注释承诺的 `/api/audit/tail` SSE 从未注册(文档承诺未兑现)——注释修正,由新查询端点接棒。
+- 侧栏版本号双 v 显示;三份 web 拷贝漂移(`web/`、`console/web/` 落后 `relay/web/`)统一同步。
+
+### 新增
+- **任务历史/审计日志控制台页**:Tab 布局(概览/任务执行/任务历史/审计日志),任务历史支持状态/类型/Agent 筛选+分页+行展开详情(结果按类型渲染:screenshot 出图/file 解内容/命令出 stdout·stderr);审计日志支持时间范围/事件/Agent 筛选+分页+行展开(hash chain 字段可核对)+SIEM 导出;侧栏 Agent 增 tags/在线时长。
+- **`GET /api/audit/query`**:审计 JSON 查询端点(过滤+分页+新的在前+hash chain 透出);**`GET /api/tasks` 增强**:status(状态索引)/agent_id/type 过滤+offset 分页+total。OpenAPI 同步。+4 测试。
+- **打包分发**:`scripts/release-package.ps1`(版本化构建+打包前全量测试门禁→server/agent zip+linux tar.gz)、`scripts/start-relay.ps1`(前台/开机自启计划任务+防火墙+-UseTLS 自签 HTTPS)、`scripts/service-install.ps1`(Agent 服务 install/uninstall/start/stop/restart/status/**upgrade 探活回滚**/rollback)、`cmd/reins-gencert`(纯标准库自签证书工具,SAN 自动枚举网卡,+3 测试)、`docs/INSTALL.md`+`docs/AGENT-SETUP.md`(客户从零到能用一页说明,随包分发)。
+- 打包产物验收:zip 原样解压→relay 起服务→agent 连上→CLI 任务真实执行→审计 hash chain 完整(2026-11-13 本机 loopback 实录)。
+
+### 已知坑位(打包脚本实录)
+- Windows PowerShell 5.1 把无 BOM UTF-8 .ps1 按 GBK 解析,中文字符串切碎致命令解析错误——三个 .ps1 加 UTF-8 BOM(与 installscript.go 记录的 PS 5.1 双坑同源)。
+- Git Bash GNU tar 把 `D:\…` 解析为远程主机(host:file 语法)——Windows 下显式调用 System32 bsdtar。
+
 ## [v4.9.2] — 2026-10-27 dagflow 取消竞态根治 + 发布树净化
 
 - **引擎修复(CI 两次 flake 的根因)**:Run 的取消清扫曾把 running 中、Action 已返回但 finish() 未落账的节点一并埋成 skipped——Action 内 cancel() 先于返回时,轮询循环在 ctx.Done 立即醒来抢先清扫,取消前已成功的动作被误标。修复:清扫只埋未启动节点,在跑节点等自身终态(Action 收已取消 ctx 会尽快返回,等待有界)。+50 次取消竞态回归锚,5 连跑 250 次全绿。
