@@ -19,6 +19,19 @@ import (
 	"github.com/coder/websocket"
 )
 
+// donePool 复用 WriteControl/WriteData 每消息的同步 done channel
+// (性能轮 2026-11-14:心跳/任务分发高频路径上 make(chan error,1) 是稳定分配)。
+//
+// 池化纪律(防迟到写污染):
+//   - 调用方 取→投递→收→还;只有真正收到 writer 回值才还池
+//   - ctx 先到期未收到则不还——writer goroutine 仍持有该 channel 引用,
+//     还池后迟到的 err 写入会污染下一个使用者(假错误),宁可整只丢给 GC
+//   - 投递失败(ctx 抢先)也还池:writer 从未见过它,安全
+var donePool = sync.Pool{New: func() any { ch := make(chan error, 1); return &ch }}
+
+func acquireDone() chan error   { return *donePool.Get().(*chan error) }
+func releaseDone(ch chan error) { donePool.Put(&ch) }
+
 // Item 一次写请求。
 type Item struct {
 	MsgType websocket.MessageType
@@ -79,31 +92,42 @@ func (w *Writer) Start(ctx context.Context) {
 
 // WriteControl 投 P0(高优先:心跳/ack)+ 同步等 Write 结果。
 func (w *Writer) WriteControl(ctx context.Context, msgType websocket.MessageType, data []byte) error {
-	done := make(chan error, 1)
+	done := acquireDone()
 	select {
 	case w.controlCh <- Item{msgType, data, done}:
-		return waitDone(ctx, done)
+		if err, received := waitDone(ctx, done); received {
+			releaseDone(done)
+			return err
+		}
+		return ctx.Err() // 未收到不还池(writer 迟到写入防污染,见 donePool)
 	case <-ctx.Done():
+		releaseDone(done) // 未投递,writer 不会触碰,安全还池
 		return ctx.Err()
 	}
 }
 
 // WriteData 投 P1(低优先:数据帧)+ 同步等 Write 结果。
 func (w *Writer) WriteData(ctx context.Context, msgType websocket.MessageType, data []byte) error {
-	done := make(chan error, 1)
+	done := acquireDone()
 	select {
 	case w.dataCh <- Item{msgType, data, done}:
-		return waitDone(ctx, done)
+		if err, received := waitDone(ctx, done); received {
+			releaseDone(done)
+			return err
+		}
+		return ctx.Err() // 未收到不还池
 	case <-ctx.Done():
+		releaseDone(done) // 未投递,安全还池
 		return ctx.Err()
 	}
 }
 
-func waitDone(ctx context.Context, done chan error) error {
+// waitDone 同步等待 writer 回值;received=false 表示 ctx 先到期(调用方不得还池)。
+func waitDone(ctx context.Context, done chan error) (error, bool) {
 	select {
 	case err := <-done:
-		return err
+		return err, true
 	case <-ctx.Done():
-		return ctx.Err()
+		return ctx.Err(), false
 	}
 }

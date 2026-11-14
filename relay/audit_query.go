@@ -7,6 +7,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -84,9 +85,8 @@ func (r *Relay) handleAuditQuery(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// 读文件 + 过滤(纯函数,可单测)
-	entries := readAuditFile(r.audit.Path())
-	matched := filterAuditEntries(entries, f)
+	// 读文件 + 过滤(单遍扫描:性能轮 2026-11-14,见 queryAuditFile)
+	matched := queryAuditFile(r.audit.Path(), f)
 
 	// 新的在前
 	sort.SliceStable(matched, func(i, j int) bool {
@@ -119,26 +119,28 @@ func (r *Relay) handleAuditQuery(w http.ResponseWriter, req *http.Request) {
 
 // readAuditFile 读整个审计文件(JSON Lines),坏行跳过。
 // 文件不存在返回 nil(审计刚启用还没落盘是正常态)。
+// 性能轮 2026-11-14:splitLines 零切分行替代 string 转换+逐行二次拷贝。
 func readAuditFile(path string) []auditRecord {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
-	var out []auditRecord
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	lines := splitLines(data)
+	out := make([]auditRecord, 0, len(lines))
+	for _, line := range lines {
+		if len(line) == 0 {
 			continue
 		}
 		var rec auditRecord
-		if json.Unmarshal([]byte(line), &rec) == nil {
+		if json.Unmarshal(line, &rec) == nil {
 			out = append(out, rec)
 		}
 	}
 	return out
 }
 
-// filterAuditEntries 按条件过滤(纯函数)。匹配数超过 auditQueryCap 截断。
+// filterAuditEntries 按条件过滤(纯函数,单测口径保留;handler 热路径走 queryAuditFile)。
+// 匹配数超过 auditQueryCap 截断。
 func filterAuditEntries(entries []auditRecord, f auditQueryFilter) []auditRecord {
 	eventSet := make(map[string]bool, len(f.Events))
 	for _, e := range f.Events {
@@ -161,4 +163,104 @@ func filterAuditEntries(entries []auditRecord, f auditQueryFilter) []auditRecord
 		}
 	}
 	return out
+}
+
+// queryAuditFile 单遍完成"读文件+过滤"(性能轮 2026-11-14)。
+//
+// 旧路径 readAuditFile+filterAuditEntries 三宗罪(20000 条基准 280k allocs/57MB):
+//  1. strings.Split(string(data)) 先整文件转 string(全量拷贝),每行再 []byte(line)
+//     二次拷贝——同一份字节被复制 3 遍
+//  2. 无过滤条件也全量 unmarshal——checkValid+decode 占实测 CPU ~45%
+//  3. append 无预分配,20000 条翻倍重分配
+//
+// 优化(过滤语义与 filterAuditEntries 逐位等价,含 auditQueryCap 截断):
+//   - splitLines(audit.go,VerifyChain 同款)零切分行,不发生拷贝
+//   - 必要条件子串预筛:精确匹配 agent_id/event 的行,其 JSON 文本必含该值子串
+//     (仅对 JSON 安全串生效,见 jsonSafePlain);子串不命中直接跳过整行 unmarshal
+//   - 结果按行数预分配
+func queryAuditFile(path string, f auditQueryFilter) []auditRecord {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	lines := splitLines(data)
+
+	var eventSet map[string]bool
+	var eventNeedles [][]byte
+	if len(f.Events) > 0 {
+		eventSet = make(map[string]bool, len(f.Events))
+		allSafe := true // 任一值 JSON 不安全即整体禁用预筛(等价性测试逮住:混合安全/不安全值时,不安全值的行必不含安全 needle)
+		for _, e := range f.Events {
+			eventSet[e] = true
+			if !jsonSafePlain(e) {
+				allSafe = false
+			}
+		}
+		if allSafe {
+			for _, e := range f.Events {
+				eventNeedles = append(eventNeedles, []byte(e))
+			}
+		}
+	}
+	var agentNeedle []byte
+	if f.AgentID != "" && jsonSafePlain(f.AgentID) {
+		agentNeedle = []byte(f.AgentID)
+	}
+
+	out := make([]auditRecord, 0, len(lines))
+	for _, line := range lines {
+		if len(line) == 0 {
+			continue
+		}
+		// 预筛(必要条件):子串不命中必不匹配,免 unmarshal
+		if agentNeedle != nil && !bytes.Contains(line, agentNeedle) {
+			continue
+		}
+		if len(eventNeedles) > 0 && !containsAnyBytes(line, eventNeedles) {
+			continue
+		}
+		var rec auditRecord
+		if json.Unmarshal(line, &rec) != nil {
+			continue // 坏行跳过(与 readAuditFile 一致)
+		}
+		// 精确过滤(预筛只是必要条件,这里才是判据)
+		if f.SinceMs != 0 && rec.TS < f.SinceMs {
+			continue
+		}
+		if len(eventSet) > 0 && !eventSet[rec.Event] {
+			continue
+		}
+		if f.AgentID != "" && rec.AgentID != f.AgentID {
+			continue
+		}
+		out = append(out, rec)
+		if len(out) >= auditQueryCap {
+			break
+		}
+	}
+	return out
+}
+
+// jsonSafePlain 判断 s 的 JSON 编码是否与原串逐字节相同
+// (可打印 ASCII 且不含 '"' 与 '\\')。仅此时"行内必含 s 子串"才成立——
+// 含转义字符的值(如 quote/反斜杠/非 ASCII)编码后会变形,子串预筛会漏匹配,
+// 必须回退全量 unmarshal(正确性优先,性能其次)。
+func jsonSafePlain(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c > 0x7e || c == '"' || c == '\\' {
+			return false
+		}
+	}
+	return true
+}
+
+// containsAnyBytes line 含任意一个 needle 即 true。
+func containsAnyBytes(line []byte, needles [][]byte) bool {
+	for _, n := range needles {
+		if bytes.Contains(line, n) {
+			return true
+		}
+	}
+	return false
 }

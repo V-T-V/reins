@@ -1,6 +1,7 @@
 package taskstore
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -198,5 +199,151 @@ func TestStatusIndexMultipleTasks(t *testing.T) {
 	}
 	if len(completed) != 1 || completed[0].Request.TaskID != "t3" {
 		t.Fatalf("completed 应只有 t3，得到 %+v", completed)
+	}
+}
+
+// TestListTasksQueryEquivalence ListTasksQuery(子串预筛)与
+// "全量取出+调用方过滤"逐位等价(性能轮 2026-11-14)。
+// 含 JSON 非安全过滤值回退路径(含转义字符的值必须走全量解析)。
+func TestListTasksQueryEquivalence(t *testing.T) {
+	// JSON 安全与不安全的 agent/type 各一组
+	agents := []string{"agent-1", "agent-2", `ag"quote\`}
+	types := []string{proto.TaskPowerShell, proto.TaskScript, `ty"pe\`}
+	statuses := []string{StatusCompleted, StatusDispatched}
+
+	seed := func(s TaskStore) {
+		for i, ag := range agents {
+			for j, ty := range types {
+				st := StatusCompleted
+				if (i+j)%2 == 1 {
+					st = StatusDispatched
+				}
+				if err := s.SaveTask(StoredTask{
+					Request: proto.TaskRequest{
+						TaskID:  fmt.Sprintf("t-%d-%d", i, j),
+						Type:    ty,
+						AgentID: ag,
+					},
+					Status: st, CreatedAt: int64(1000 + i*10 + j), UpdatedAt: int64(1000 + i*10 + j),
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	refFilter := func(all []StoredTask, q TaskQuery) []StoredTask {
+		statusSet := map[string]bool{}
+		for _, st := range q.Statuses {
+			statusSet[st] = true
+		}
+		var out []StoredTask
+		for _, t := range all {
+			if len(statusSet) > 0 && !statusSet[t.Status] {
+				continue
+			}
+			if q.AgentID != "" && t.Request.AgentID != q.AgentID {
+				continue
+			}
+			if q.Type != "" && t.Request.Type != q.Type {
+				continue
+			}
+			out = append(out, t)
+		}
+		return out
+	}
+
+	impls := map[string]TaskStore{}
+	if s, err := OpenStore(filepath.Join(t.TempDir(), "q.db")); err != nil {
+		t.Fatal(err)
+	} else {
+		defer s.Close()
+		impls["bolt"] = s
+	}
+	impls["mem"] = NewMemoryStore()
+
+	queries := []TaskQuery{
+		{},
+		{AgentID: "agent-1"},
+		{Type: proto.TaskScript},
+		{AgentID: "agent-2", Type: proto.TaskPowerShell},
+		{Statuses: statuses[:1]},
+		{Statuses: statuses, AgentID: "agent-1"},
+		{AgentID: `ag"quote\`}, // JSON 不安全:预筛须回退
+		{Type: `ty"pe\`},       // JSON 不安全:预筛须回退
+		{Statuses: statuses, Type: proto.TaskScript, AgentID: `ag"quote\`},
+	}
+	for name, s := range impls {
+		seed(s)
+		all, err := s.ListTasks(0)
+		if err != nil {
+			t.Fatalf("%s: ListTasks: %v", name, err)
+		}
+		for i, q := range queries {
+			got, err := s.ListTasksQuery(q)
+			if err != nil {
+				t.Fatalf("%s query#%d: %v", name, i, err)
+			}
+			want := refFilter(all, q)
+			if len(got) != len(want) {
+				t.Fatalf("%s query#%d: got=%d want=%d (q=%+v)", name, i, len(got), len(want), q)
+			}
+			gotSet := map[string]StoredTask{}
+			for _, tk := range got {
+				gotSet[tk.Request.TaskID] = tk
+			}
+			for _, tk := range want {
+				g, ok := gotSet[tk.Request.TaskID]
+				if !ok || g.Status != tk.Status || g.Request.AgentID != tk.Request.AgentID || g.Request.Type != tk.Request.Type {
+					t.Fatalf("%s query#%d: 记录 %s 不等价: got=%+v want=%+v", name, i, tk.Request.TaskID, g, tk)
+				}
+			}
+		}
+	}
+}
+
+// TestListTasksQueryLimit Limit 按已收录(匹配)数计数,两实现口径一致。
+func TestListTasksQueryLimit(t *testing.T) {
+	newSeeded := func(s TaskStore) {
+		for i := 0; i < 10; i++ {
+			ag := "agent-1"
+			if i >= 5 {
+				ag = "agent-2"
+			}
+			if err := s.SaveTask(StoredTask{
+				Request: proto.TaskRequest{TaskID: fmt.Sprintf("lt-%02d", i), AgentID: ag},
+				Status:  StatusCompleted,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	boltS, err := OpenStore(filepath.Join(t.TempDir(), "limit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer boltS.Close()
+	memS := NewMemoryStore()
+	for _, s := range []TaskStore{boltS, memS} {
+		newSeeded(s)
+		// 无过滤 Limit=3
+		got, err := s.ListTasksQuery(TaskQuery{Limit: 3})
+		if err != nil || len(got) != 3 {
+			t.Fatalf("Limit=3 got=%d err=%v", len(got), err)
+		}
+		// agent 过滤下 Limit=4:匹配 5 条,取 4(全量扫 10 条不止步于第 4 条记录)
+		got, err = s.ListTasksQuery(TaskQuery{AgentID: "agent-2", Limit: 4})
+		if err != nil || len(got) != 4 {
+			t.Fatalf("agent 过滤 Limit=4 got=%d err=%v", len(got), err)
+		}
+		for _, tk := range got {
+			if tk.Request.AgentID != "agent-2" {
+				t.Fatalf("过滤泄漏: %+v", tk)
+			}
+		}
+		// Statuses+Limit
+		got, err = s.ListTasksQuery(TaskQuery{Statuses: []string{StatusCompleted}, Limit: 2})
+		if err != nil || len(got) != 2 {
+			t.Fatalf("status Limit=2 got=%d err=%v", len(got), err)
+		}
 	}
 }

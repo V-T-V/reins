@@ -639,44 +639,7 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			}
 
 		case proto.TypeTaskResult:
-			// 任务结果回流：持久化 + 审计 + 广播给控制台
-			var res proto.TaskResult
-			if err := env.Decode(&res); err == nil {
-				if r.store != nil {
-					_ = r.store.SaveResult(res.TaskID, res)
-					// D5：用状态机校验更新（终态不可变更，防 cancel/result 竞态）
-					newStatus := StatusFailed
-					if res.Success {
-						newStatus = StatusCompleted
-					}
-					if err := r.store.UpdateTaskStatus(res.TaskID, newStatus); err == nil {
-						if res.Success {
-							metrics.Inc("completed")
-						} else {
-							metrics.Inc("failed")
-						}
-					}
-				}
-				// C9 审计：记录任务结果
-				if r.audit != nil {
-					r.audit.Log(AuditEntry{
-						Event:   "task_result",
-						AgentID: agentID,
-						TaskID:  res.TaskID,
-						Detail:  fmt.Sprintf("success=%v exit=%d duration=%dms", res.Success, res.ExitCode, res.Duration),
-					})
-				}
-				// F11:webhook 告警(任务失败)
-				if !res.Success {
-					notifyTaskFailed(agentID, res.TaskID, res.Error)
-				}
-				r.console.Broadcast(Event{
-					Kind:    proto.TypeTaskResult,
-					AgentID: agentID,
-					Payload: mustMarshal(res),
-					TS:      time.Now().UnixMilli(),
-				})
-			}
+			r.onTaskResult(agentID, &env)
 
 		case proto.TypeTaskProgress:
 			var p proto.TaskProgress
@@ -797,6 +760,51 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 			log.Printf("[agent-read] 未知消息类型 %s from %s", env.Type, agentID)
 		}
 	}
+}
+
+// onTaskResult 处理一条 task_result 回流:持久化 + 审计 + 广播给控制台。
+// 性能轮 2026-11-14 从 serveAgent 抽出(单入口,基准测真实代码不测镜像):
+// 广播载荷改用 env.Payload 原始字节(与 TaskProgress/ShellOutput 同语义),
+// 消除 Decode 后 mustMarshal(res) 的重复序列化——stdout 大时可省一次全量 marshal。
+func (r *Relay) onTaskResult(agentID string, env *proto.Envelope) {
+	var res proto.TaskResult
+	if err := env.Decode(&res); err != nil {
+		return
+	}
+	if r.store != nil {
+		_ = r.store.SaveResult(res.TaskID, res)
+		// D5：用状态机校验更新（终态不可变更，防 cancel/result 竞态）
+		newStatus := StatusFailed
+		if res.Success {
+			newStatus = StatusCompleted
+		}
+		if err := r.store.UpdateTaskStatus(res.TaskID, newStatus); err == nil {
+			if res.Success {
+				metrics.Inc("completed") // D7
+			} else {
+				metrics.Inc("failed")
+			}
+		}
+	}
+	// C9 审计：记录任务结果
+	if r.audit != nil {
+		r.audit.Log(AuditEntry{
+			Event:   "task_result",
+			AgentID: agentID,
+			TaskID:  res.TaskID,
+			Detail:  fmt.Sprintf("success=%v exit=%d duration=%dms", res.Success, res.ExitCode, res.Duration),
+		})
+	}
+	// F11:webhook 告警(任务失败)
+	if !res.Success {
+		notifyTaskFailed(agentID, res.TaskID, res.Error)
+	}
+	r.console.Broadcast(Event{
+		Kind:    proto.TypeTaskResult,
+		AgentID: agentID,
+		Payload: env.Payload,
+		TS:      time.Now().UnixMilli(),
+	})
 }
 
 // handleConsoleWS 处理控制台的 WS 连接（P0 控制台用 SSE+REST，此端点预留兼容）。

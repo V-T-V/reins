@@ -2,6 +2,58 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [未发布] — 2026-11-14 性能优化轮(基准驱动 5 热路径)
+
+前兵遗留 `relay/perf_bench_test.go`(写到一半)续跑收口:修复编译(`ackCtx` declared-and-not-used)后成套。基准落盘 `build/perf/`(baseline/opt1..5/A-B/final)。
+
+### 基准套件(9 基准 × 5 热路径,全真实代码路径)
+
+1. **WS 中继转发吞吐**(真实环回:httptest+websocket.Dial,agent→serveAgent→EventBus;预 marshal 单帧重复发送剥离 agent 侧噪声;事件丢失即 Fatal 防假绿)
+2. **心跳全路径环回 RTT**(agent→TouchWithStats→ack 回读)+ **纯管线**(marshal 口径)两口径
+3. **task_result 处理管线**(直调真实 `onTaskResult`,非镜像)
+4. **审计 hash chain 追加**(writeEntry 全工作量:双 marshal+sha256+落盘)
+5. **tasks/audit 查询过滤分页**(handler 全路径,2000 任务/20000 审计规模)
+
+### 基准表(前=首轮基线,后=收尾轮;allocs/B 确定性,ns 受环境噪声见坑位)
+
+| 基准 | ns/op 前→后 | B/op 前→后 | allocs/op 前→后 |
+|---|---|---|---|
+| WSForwardLoopback(对照,路径未改) | 171µs→178µs | 1890→1890 | 28→28 |
+| HeartbeatLoopback | 2.02ms→1.37ms | 3877→**3766** | 55→**54** |
+| TaskResultPipeline | 127µs→(净轮 74µs) | 4281→**2952** | 22→**18** |
+| AuditHashChainAppend | 78µs→(A/B min 341→84µs) | 897→**609** | 8→**7** |
+| TasksQueryFilterPage | 43.0ms→**12.4ms** | 2.77MB→**226KB** | 26082→**2645** |
+| TasksQueryStatusPage | 54.3ms→噪声带内 | 2.99MB→2.98MB | 31758→31751 |
+| AuditQueryFilterPage | 421ms→**225ms** | 46.8MB→**13.9MB** | 280131→**52113** |
+| AuditQueryNoFilter | 574ms→噪声带内 | 57.0MB→**23.9MB** | 280115→**260091** |
+| HeartbeatPipeline(对照,路径未改) | 35µs→62µs | 1603→1603 | 27→27 |
+
+### 优化账(5 项全部实测保留,无回退)
+
+1. **审计查询单遍扫描** `queryAuditFile`(audit_query.go):旧 readAuditFile 三宗罪——`strings.Split(string(data))` 整文件转 string+逐行 `[]byte(line)` 双拷贝、无过滤也全量 unmarshal(profile:checkValid+decode ~45% CPU)、append 无预分配。新路径 splitLines 零切分行+**必要条件子串预筛**(精确匹配 agent_id/event 的行必含该值子串→子串不命中免整行 unmarshal,20000 条只解 4000)+结果预分配。**FilterPage allocs -81%/B -70%**;NoFilter B -58%(纯拷贝消除)。**预筛只对 JSON 安全串生效**(可打印 ASCII 无引号反斜杠)——等价性测试当场逮住首版 bug:混合安全/不安全 event 值时,不安全值的行必不含安全 needle,整体禁用该维预筛才是正确回退。
+2. **task_result 重复 marshal 消除**(server.go):广播载荷 `mustMarshal(res)` 改 `env.Payload` 原始字节(与 TaskProgress 同语义)——Decode 后不必再全量 marshal 一遍 stdout。顺带把 case 体抽成 `onTaskResult` 单入口,**基准从镜像改直调真实代码**(防基准与实现漂移的假绿)。B/op -31%(4281→2952),allocs 22→18。
+3. **tasks 查询下推存储层** `ListTasksQuery`(taskstore 接口+bbolt/MemoryStore 双实现+handler):agent/type 过滤在存储层用同款必要条件子串预筛——非命中记录免 json.Unmarshal,handler 内存过滤块删除。**FilterPage allocs -90%(26k→2.6k)/B -92%/ns -78%(43ms→9-12ms)**。Limit 语义按"已收录匹配数"计(与 ListTasks 的解析成功数上限同义,内存上界不变)。顺带修 MemoryStore.ListTasks(0) 返回 1 条的口径漂移(与 bbolt "0=不限"对齐;生产无调用方,仅测试口径)。
+4. **wsx done channel 池化**(internal/wsx):WriteControl/WriteData 每消息 `make(chan error,1)` 改 sync.Pool 复用。**池化纪律:取→投递→收→还;ctx 先到期未收到不还池**(writer goroutine 迟到写入会污染下一个使用者——宁可丢给 GC);投递失败(writer 没见过)安全还池。心跳 RTT allocs 55→54、-111B/op(任务分发路径同受益,基准未覆盖如实注明)。
+5. **审计 writeEntry 锁整合+缓冲复用**(audit.go):两段锁(读 prev→算 hash→写 prev)合并整条单锁——**修复理论链分叉**(两并发 writeEntry 可读到同一 prev 各自成链;现唯一调用方 writeLoop 串行不触发,单锁后并发也不可能分叉);sha256 实例+行编码缓冲(持久 json.Encoder,输出与 Marshal+`\n` 逐字节一致,hash 输入不变链校验兼容)复用。B/op -32%(897→609),allocs 8→7;同会话 A/B min 341µs→84µs。
+
+### 调查不修(如实)
+
+- **心跳环回 RTT 1.3-2ms**:profile 56% runtime.cgocall(websocket writeFrame 的写 syscall)——OS/库层延迟,应用侧无可修项(coder/websocket 依赖不动)。alloc 侧已由 wsx 池化收 1。
+- **TasksQueryStatusPage allocs 持平(31.7k)**:status 索引路径 1980 条全命中,预筛无从跳过,unmarshal bound——该路径的优化(F1 状态索引)是前一轮的功,本轮如实记"无增量"。
+- **NoFilter 审计查询 ns 带内**:无过滤时预筛不生效,剩余成本=全量 unmarshal+文件读,方向性优化已到"换缓存架构"的门槛(mtime 缓存),收益/风险比不划算,未做。
+
+### 坑位实录
+
+- **本机 ns/op 噪声 ±2-5x**(Ryzen 4750U/Win11,疑似 Defender/文件系统):两条**未改代码的对照基准**同会话波动 2.3x(WSForward min 389µs vs 169µs)。对策:结论以 allocs/op·B/op(确定性)为准;ns 只报同会话 A/B(git stash 定向回退 audit.go/wsx.go 同状态对拍)的 min-of-5;跨时段基线 ns 仅参考。
+- git stash 往返把工作区改写 CRLF→gofmt 全线假红,`gofmt -w` 收口;stash -u 会把未跟踪的基准文件一并收走,定向 A/B 用 `git checkout HEAD -- <path>` 替代。
+- **并发跑测试+基准互相污染**:全套测试曾假绿红(executors PowerShell 10s 超时×2)——重跑即绿;本机验证必须串行。
+- 临时备份 .go 副本放进 build/ 会让 `go vet ./...` 报"两 package main"(vet 扫全部目录)——备份要么删要么改非 .go 后缀。
+
+### 测试
+
+- +4 测试:审计单遍扫描等价性(9 组过滤器×含 JSON 非安全值回退)+截断语义;ListTasksQuery 等价性(bbolt/MemoryStore×9 组)+Limit 口径。
+- `go test ./... -count=1` **14 包全绿**;`go vet ./...` 全清;relay -race 28s 绿、wsx/taskstore -race 绿。
+
 ## [未发布] — 2026-11-13 UI 打磨与打包分发 + 发布纪律收口(工作区待审)
 
 完整推进实录见 `docs/UI-PACKAGING-2026-11-13.md`。

@@ -107,7 +107,36 @@ func (s *MemoryStore) ListTasks(limit int) ([]StoredTask, error) {
 	var out []StoredTask
 	for _, t := range s.tasks {
 		out = append(out, *t)
-		if len(out) >= limit {
+		// limit<=0=不限(与 bbolt Store.ListTasks 口径对齐;原版 limit=0 返回 1 条)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// ListTasksQuery 内存版过滤(结构体已在手,无解析可省——直配即可;
+// 语义与 Store.ListTasksQuery 对齐:Statuses 非空按状态过滤,Limit 按收录数计)。
+func (s *MemoryStore) ListTasksQuery(q TaskQuery) ([]StoredTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]StoredTask, 0, 64)
+	statusSet := make(map[string]bool, len(q.Statuses))
+	for _, st := range q.Statuses {
+		statusSet[st] = true
+	}
+	for _, t := range s.tasks {
+		if len(statusSet) > 0 && !statusSet[t.Status] {
+			continue
+		}
+		if q.AgentID != "" && t.Request.AgentID != q.AgentID {
+			continue
+		}
+		if q.Type != "" && t.Request.Type != q.Type {
+			continue
+		}
+		out = append(out, *t)
+		if q.Limit > 0 && len(out) >= q.Limit {
 			break
 		}
 	}

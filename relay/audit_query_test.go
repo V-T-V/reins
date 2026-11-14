@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -175,5 +176,72 @@ func TestFilterAuditEntriesUnit(t *testing.T) {
 	// readAuditFile: 文件不存在= nil(不 panic)
 	if got := readAuditFile(filepath.Join(t.TempDir(), "nope.log")); got != nil {
 		t.Errorf("文件不存在应返回 nil")
+	}
+}
+
+// TestQueryAuditFileEquivalence queryAuditFile(单遍扫描)与
+// readAuditFile+filterAuditEntries(两步)逐位等价——含 JSON 非安全值的回退路径
+// (性能轮 2026-11-14:预筛只对 JSON 安全串生效,含转义字符的过滤值必须走全量解析)。
+func TestQueryAuditFileEquivalence(t *testing.T) {
+	now := time.Now().UnixMilli()
+	seeds := []AuditEntry{
+		{TS: now - 1000, Event: "task_submitted", AgentID: "agent-1", TaskID: "t-1"},
+		{TS: now - 2000, Event: "task_result", AgentID: "agent-2", TaskID: "t-1"},
+		{TS: now - 3000, Event: "task_submitted", AgentID: "agent-1", TaskID: "t-2"},
+		{TS: now - 4000, Event: `ev"quote\`, AgentID: `ag"quote\`}, // JSON 转义值(非安全串)
+	}
+	_, path := openTestAudit(t, seeds)
+	parsed := readAuditFile(path)
+	if len(parsed) != 4 {
+		t.Fatalf("seed 落盘数=%d, 期望 4", len(parsed))
+	}
+
+	filters := []auditQueryFilter{
+		{},
+		{Events: []string{"task_submitted"}},
+		{AgentID: "agent-1"},
+		{Events: []string{"task_result", "task_submitted"}, AgentID: "agent-2"},
+		{SinceMs: now - 2500},
+		{SinceMs: now - 2500, Events: []string{"task_submitted"}, AgentID: "agent-1"},
+		{Events: []string{`ev"quote\`}},                   // 非安全 event:预筛回退
+		{AgentID: `ag"quote\`},                            // 非安全 agent:预筛回退
+		{Events: []string{"task_submitted", `ev"quote\`}}, // 混合:部分 needle
+	}
+	for i, f := range filters {
+		want := filterAuditEntries(readAuditFile(path), f)
+		got := queryAuditFile(path, f)
+		if len(got) != len(want) {
+			t.Fatalf("filter#%d: 单遍=%d 两步=%d, 期望等价", i, len(got), len(want))
+		}
+		for j := range want {
+			if got[j] != want[j] {
+				t.Fatalf("filter#%d 第 %d 条不等: 单遍=%+v 两步=%+v", i, j, got[j], want[j])
+			}
+		}
+	}
+
+	// 文件不存在:与两步路径一致返回空(不 panic)
+	if got := queryAuditFile(filepath.Join(t.TempDir(), "nope.log"), auditQueryFilter{}); got != nil {
+		t.Errorf("文件不存在应返回 nil")
+	}
+}
+
+// TestQueryAuditFileCapTruncation 截断语义:匹配数超 auditQueryCap 时停在 cap
+// (与 filterAuditEntries 的截断行为一致,_total 如实反映截断值)。
+func TestQueryAuditFileCapTruncation(t *testing.T) {
+	// 直接构造超量行文件(绕过 AuditLog,精确控制行数)
+	var buf []byte
+	for i := 0; i < auditQueryCap+50; i++ {
+		rec := auditRecord{AuditEntry: AuditEntry{TS: int64(i), Event: "e"}}
+		b, _ := json.Marshal(rec)
+		buf = append(buf, b...)
+		buf = append(buf, '\n')
+	}
+	path := filepath.Join(t.TempDir(), "cap.jsonl")
+	if err := os.WriteFile(path, buf, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := queryAuditFile(path, auditQueryFilter{}); len(got) != auditQueryCap {
+		t.Errorf("截断=%d, 期望 %d", len(got), auditQueryCap)
 	}
 }

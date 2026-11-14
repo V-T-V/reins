@@ -12,10 +12,12 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"log"
 	"os"
 	"path/filepath"
@@ -25,9 +27,12 @@ import (
 
 // AuditLog 任务审计日志(append-only + hash chain + 异步写入)。
 type AuditLog struct {
-	mu        sync.Mutex // 仅保护 prevHash 字段
+	mu        sync.Mutex // 保护 prevHash 与 hash/写缓冲(性能轮 2026-11-14:整条原子)
 	file      *os.File
-	prevHash  string // 上一条记录的 hash(链式)
+	prevHash  string        // 上一条记录的 hash(链式)
+	hash      hash.Hash     // 复用 sha256 实例(writeEntry 持锁使用)
+	lineBuf   bytes.Buffer  // 复用记录行编码缓冲(含尾 \n)
+	lineEnc   *json.Encoder // 绑定 lineBuf 的持久 Encoder(免每条重建)
 	ch        chan AuditEntry
 	closeCh   chan struct{}
 	closeOnce sync.Once // 幂等 close(防重复 close panic,round 6 修复)
@@ -63,9 +68,11 @@ func OpenAuditLog(path string) (*AuditLog, error) {
 	}
 	a := &AuditLog{
 		file:    f,
+		hash:    sha256.New(),
 		ch:      make(chan AuditEntry, 256), // 缓冲 256 条,满则阻塞(背压)
 		closeCh: make(chan struct{}),
 	}
+	a.lineEnc = json.NewEncoder(&a.lineBuf)
 	// 异步写入 goroutine(真异步,不阻塞请求)
 	go a.writeLoop()
 	return a, nil
@@ -97,32 +104,38 @@ func (a *AuditLog) Path() string {
 }
 
 // writeEntry 写入单条记录(含 hash chain 计算)。
+// 性能轮 2026-11-14:
+//   - 两段锁合并为整条单锁——原"读 prev→算 hash→写 prev"分两段加锁,
+//     理论上两个并发 writeEntry 可读到同一 prev 造成链分叉(当前唯一调用方
+//     writeLoop 串行,不触发;单锁后并发调用也不可能在链上分叉)
+//   - sha256 实例与行编码缓冲复用(每条 -3 allocs 左右;hash 输入
+//     json.Marshal(entry) 与 VerifyChain 逐字节一致,链校验兼容不变)
 func (a *AuditLog) writeEntry(entry AuditEntry) {
 	if entry.TS == 0 {
 		entry.TS = time.Now().UnixMilli()
 	}
-	// 计算 hash chain
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	prev := a.prevHash
-	a.mu.Unlock()
 
 	rec := auditRecord{
 		AuditEntry: entry,
 		PrevHash:   prev,
 	}
 	// this_hash = sha256(prev_hash + JSON(record_without_hashes))
-	h := sha256.New()
-	h.Write([]byte(prev))
+	a.hash.Reset()
+	a.hash.Write([]byte(prev))
 	entryData, _ := json.Marshal(entry)
-	h.Write(entryData)
-	rec.ThisHash = hex.EncodeToString(h.Sum(nil))
+	a.hash.Write(entryData)
+	rec.ThisHash = hex.EncodeToString(a.hash.Sum(nil))
 
-	// 写文件
-	data, err := json.Marshal(rec)
-	if err != nil {
+	// 写文件(持久 Encoder 输出与 json.Marshal(rec) 逐字节一致 + 自带 \n;
+	// 缓冲复用免"marshal 精确尺寸切片再 append '\n'"的整条重分配)
+	a.lineBuf.Reset()
+	if err := a.lineEnc.Encode(rec); err != nil {
 		return
 	}
-	data = append(data, '\n')
+	data := a.lineBuf.Bytes()
 	// D8 加固:审计写盘失败必须显式记日志(原 Write 返回值被丢弃,
 	// 磁盘满/权限拒绝时审计记录静默丢失,违背审计可靠性)。
 	if n, werr := a.file.Write(data); werr != nil {
@@ -130,11 +143,7 @@ func (a *AuditLog) writeEntry(entry AuditEntry) {
 	} else if n < len(data) {
 		log.Printf("[audit] 短写(可能丢记录 event=%s): 写入 %d/%d 字节", entry.Event, n, len(data))
 	}
-
-	// 更新 prevHash
-	a.mu.Lock()
 	a.prevHash = rec.ThisHash
-	a.mu.Unlock()
 }
 
 // Log 异步追加一条记录(非阻塞,投入 channel 即返回)。

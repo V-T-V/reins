@@ -182,38 +182,26 @@ func (r *Relay) handleListTasks(w http.ResponseWriter, req *http.Request) {
 	agentFilter := q.Get("agent_id")
 	typeFilter := q.Get("type")
 
-	// status 非空走状态索引(F1);否则全量(上限多拉,再过滤)
-	var tasks []taskstore.StoredTask
-	var err error
+	// status 非空走状态索引(F1);否则全量倒序(上限与旧 ListTasks(20000) 一致)。
+	// 性能轮 2026-11-14:agent/type 过滤下推到存储层(ListTasksQuery),
+	// bbolt 路径对非命中记录跳过 json.Unmarshal(必要条件子串预筛)。
+	var statuses []string
 	if s := q.Get("status"); s != "" {
-		var statuses []string
 		for _, part := range strings.Split(s, ",") {
 			if part = strings.TrimSpace(part); part != "" {
 				statuses = append(statuses, part)
 			}
 		}
-		tasks, err = r.store.ListTasksByStatus(statuses...)
-	} else {
-		tasks, err = r.store.ListTasks(20000)
 	}
+	tasks, err := r.store.ListTasksQuery(taskstore.TaskQuery{
+		Statuses: statuses,
+		AgentID:  agentFilter,
+		Type:     typeFilter,
+		Limit:    20000,
+	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errMap(err))
 		return
-	}
-
-	// agent/type 过滤(内存态;两个 Store 的 ByStatus 返回序不确定,统一在此排序)
-	if agentFilter != "" || typeFilter != "" {
-		var filtered []taskstore.StoredTask
-		for _, t := range tasks {
-			if agentFilter != "" && t.Request.AgentID != agentFilter {
-				continue
-			}
-			if typeFilter != "" && t.Request.Type != typeFilter {
-				continue
-			}
-			filtered = append(filtered, t)
-		}
-		tasks = filtered
 	}
 
 	// 统一排序:CreatedAt 降序(新在前),同毫秒按 taskID 降序保证稳定分页
