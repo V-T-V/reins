@@ -30,12 +30,6 @@ func ExtractCommand(taskType string, payload []byte) string {
 	return fn(payload)
 }
 
-// IsCommandTask 判断某类型是否注册了命令提取器(即命令类任务,需过安全策略)。
-func IsCommandTask(taskType string) bool {
-	_, ok := commandExtractors[taskType]
-	return ok
-}
-
 func init() {
 	RegisterCommandExtractor(TaskPowerShell, func(p []byte) string {
 		var t struct {

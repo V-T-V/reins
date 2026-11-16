@@ -64,9 +64,6 @@ var gatedTaskTypes = map[string]bool{
 	proto.TaskPower:      true,
 }
 
-// IsGatedTaskType 判断任务类型是否受规则门禁约束。
-func IsGatedTaskType(t string) bool { return gatedTaskTypes[t] }
-
 // RuleFileEntry 单个规则文件的读取结果。
 type RuleFileEntry struct {
 	Path   string `json:"path"`            // 远端绝对路径

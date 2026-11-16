@@ -108,20 +108,6 @@ func FindWindowByTitle(titleSub string) (WindowInfo, error) {
 	return best, nil
 }
 
-// FindWindow 精确窗口句柄查找。
-func FindWindow(hwnd uintptr) (WindowInfo, error) {
-	if hwnd == 0 {
-		return WindowInfo{}, fmt.Errorf("hwnd 为 0")
-	}
-	return WindowInfo{
-		Hwnd:      hwnd,
-		Title:     getWindowText(hwnd),
-		ClassName: getClassName(hwnd),
-		PID:       getPid(hwnd),
-		Rect:      getRect(hwnd),
-	}, nil
-}
-
 // Activate 把窗口激活到前台（先恢复最小化）。返回是否成功。
 func Activate(hwnd uintptr) error {
 	if iconic, _, _ := procIsIconic.Call(hwnd); iconic != 0 {

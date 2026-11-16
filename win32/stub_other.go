@@ -18,6 +18,5 @@ func TypeText(string) error                                   { return ErrNotSup
 func EnumWindows(func(WindowInfo) bool) ([]WindowInfo, error) { return nil, ErrNotSupported }
 func FindWindowByProcess(string) (WindowInfo, error)          { return WindowInfo{}, ErrNotSupported }
 func FindWindowByTitle(string) (WindowInfo, error)            { return WindowInfo{}, ErrNotSupported }
-func FindWindow(uintptr) (WindowInfo, error)                  { return WindowInfo{}, ErrNotSupported }
 func Activate(uintptr) error                                  { return ErrNotSupported }
 func CaptureWindow(uintptr, bool) ([]byte, error)             { return nil, ErrNotSupported }

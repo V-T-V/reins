@@ -35,11 +35,6 @@ func NewFile(opts ...func(*FileExecutor)) *FileExecutor {
 	return e
 }
 
-// WithFilePolicy 注入自定义策略。
-func WithFilePolicy(p FilePolicy) func(*FileExecutor) {
-	return func(e *FileExecutor) { e.policy = p }
-}
-
 // WithAllowedRoots 便捷设置允许根目录。
 func WithAllowedRoots(roots ...string) func(*FileExecutor) {
 	return func(e *FileExecutor) {

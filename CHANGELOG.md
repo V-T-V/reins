@@ -2,6 +2,17 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [未发布] — 2026-11-16 死码收口(agent-census 首扫真死桶)
+
+出处:`AGENT_CENSUS_SWEEP_2026-11-16.md`(工作区根,agent-census v0.1.0 首扫)——go-rmm F5 真死 11 处发现/7 函数,本轮收口 4 函数:
+
+- 删 `executors.WithFilePolicy`(file.go):functional option,生产+测试零引用;成对的 `WithAllowedRoots` 有 9 处测试引用保留。
+- 删 `executors.IsGatedTaskType`(rulesgate.go):谓词零引用——门禁本体 rulesgate.go:180 直接读 `gatedTaskTypes` map(走别路),map 本体保留。
+- 删 `proto.IsCommandTask`(payload_policy.go):判型谓词零引用;注册表 map/ExtractCommand/init 注册链不动。
+- 删 `win32.FindWindow`(windows_windows.go+stub_other.go 平台孪生一对):精确 hwnd 查找零引用,消费者全走 ByProcess/ByTitle;其私有辅助 getWindowText/getClassName/getPid/getRect 均有 EnumWindows/screenshot 消费,不孤儿化。
+- **未动(产品裁决留所有者)**:win32 输入注入三件套 `MoveTo`/`GetCursorPos`/`TypeText`(真死但属"能力在库不在链"裁决面——textinput 任务类型半成品能力位,接线或删待定)。
+- 验证:`go build ./...`+`go vet ./...` 清;`go test ./... -count=1` 14 包全绿(577 PASS/0 FAIL/1 SKIP——SKIP 为非 Windows 守卫平台条件跳过,既有)。gofmt -l 告警均为既有 CRLF 假红(AGENTS 已有坑位实录),本轮 5 个编辑文件全 LF 干净。
+
 ## [未发布] — 2026-11-14 性能优化轮(基准驱动 5 热路径)
 
 前兵遗留 `relay/perf_bench_test.go`(写到一半)续跑收口:修复编译(`ackCtx` declared-and-not-used)后成套。基准落盘 `build/perf/`(baseline/opt1..5/A-B/final)。
