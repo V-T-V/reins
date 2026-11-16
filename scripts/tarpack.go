@@ -47,7 +47,8 @@ func main() {
 	gz := gzip.NewWriter(f)
 	defer gz.Close()
 	// 零 mtime:同一组输入重打包字节稳定(SHA256 不因重跑漂移)。
-	gz.Header.ModTime = time.Time{}
+	// (gzip.Writer 内嵌 gzip.Header——直选字段省一层选择器,staticcheck QF1008)
+	gz.ModTime = time.Time{}
 	tw := tar.NewWriter(gz)
 	defer tw.Close()
 
