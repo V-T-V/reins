@@ -290,3 +290,9 @@ reins/
 - `relay/tenant.go` + `relay/rbac.go` — 多租户与 RBAC(round 7)
 - `agent/connection.go` — Agent 主循环(入口)
 - `cmd/reins/main.go` — CLI 路由(入口)
+
+## 验证技能
+
+仓内有 verify-go-rmm（`.zcode/skills/verify-go-rmm/`）。改动 relay 路由/鉴权/任务投递/执行器/审计后用它自证：
+`bash .zcode/skills/verify-go-rmm/verify.sh doctor → launch（loopback relay -token 生产模式 + agent 前台模式反向 WS 上线，功能性就绪=/api/agents 见 agent）→ probe all（healthz 深浅双形状/错 token 401 结构化/Agent 清单/powershell 真实任务 marker 执行/审计 hash chain 衔接 6 断言）→ cleanup（taskkill 双进程树+删 bin 目录）`。
+坑位：relay dataDir=exe 同目录——launch 每次构建到全新 runs/bin-<ts>/ 天然隔离；断言锚唯一 marker 不锚计数（e2e 同款纪律）；curl 一律 --max-time。
