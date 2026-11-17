@@ -12,25 +12,19 @@ import (
 
 var (
 	user32               = syscall.NewLazyDLL("user32.dll")
-	procSetCursorPos     = user32.NewProc("SetCursorPos")
 	procSendInput        = user32.NewProc("SendInput")
 	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
-	procGetCursorPos     = user32.NewProc("GetCursorPos")
 )
 
 // SendInput 输入类型与标志位。
 const (
 	inputMouse          = 0
-	inputKeyboard       = 1
 	mouseEventMove      = 0x0001 // MOUSEEVENTF_MOVE
 	mouseEventLeftDown  = 0x0002
 	mouseEventLeftUp    = 0x0004
 	mouseEventRightDown = 0x0008
 	mouseEventRightUp   = 0x0010
 	mouseEventAbsolute  = 0x8000
-
-	keyeventfKeyup   = 0x0002
-	keyeventfUnicode = 0x0004
 )
 
 type mouseInput struct {
@@ -40,15 +34,6 @@ type mouseInput struct {
 	Flags     uint32
 	Time      uint32
 	Extra     uintptr
-}
-
-type keyboardInput struct {
-	Type  uint32
-	Vk    uint16
-	Scan  uint16
-	Flags uint32
-	Time  uint32
-	Extra uintptr
 }
 
 // 屏幕尺寸（虚拟桌面），用于把绝对坐标归一化到 0..65535。
@@ -95,50 +80,7 @@ func ClickAt(x, y int, action ClickAction) error {
 	return sendInputs(mouseInputsToRaw(inputs))
 }
 
-// MoveTo 移动光标到绝对坐标。
-func MoveTo(x, y int) error {
-	r, _, e := procSetCursorPos.Call(uintptr(x), uintptr(y))
-	if r == 0 {
-		return fmt.Errorf("SetCursorPos 失败: %v", e)
-	}
-	return nil
-}
-
-// GetCursorPos 返回当前光标位置。
-func GetCursorPos() (x, y int, err error) {
-	var pt struct{ X, Y int32 }
-	r, _, e := procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
-	if r == 0 {
-		return 0, 0, fmt.Errorf("GetCursorPos 失败: %v", e)
-	}
-	return int(pt.X), int(pt.Y), nil
-}
-
-// TypeText 用逐字符 Unicode SendInput 输入文本（避免 SendKeys 转义陷阱）。
-func TypeText(s string) error {
-	inputs := make([]keyboardInput, 0, 2*len(s))
-	for _, r := range s {
-		inputs = append(inputs, keyboardInput{
-			Type:  inputKeyboard,
-			Scan:  uint16(r),
-			Flags: keyeventfUnicode,
-		}, keyboardInput{
-			Type:  inputKeyboard,
-			Scan:  uint16(r),
-			Flags: keyeventfUnicode | keyeventfKeyup,
-		})
-	}
-	return sendKeys(inputs)
-}
-
 // --- 底层发送 ---
-
-// inputUnion 用于 SendInput 的联合结构（取最大成员 mouseInput 的大小）。
-type inputUnion struct {
-	Type uint32
-	_    [8]byte // 对齐到 mouseInput 大小（mi 28 字节，ki 16 字节，取大者）
-	Data [28]byte
-}
 
 func mouseInputsToRaw(mis []mouseInput) []byte {
 	// 每个 mouseInput 作为一条 INPUT 记录：Type(4) + mouseInput(28)
@@ -172,27 +114,6 @@ func sendInputs(buf []byte) error {
 	r, _, e := procSendInput.Call(uintptr(n), uintptr(unsafe.Pointer(&buf[0])), uintptr(4+28))
 	if r != uintptr(n) {
 		return fmt.Errorf("SendInput 失败: 注入 %d/%d: %v", r, n, e)
-	}
-	return nil
-}
-
-func sendKeys(inputs []keyboardInput) error {
-	if len(inputs) == 0 {
-		return nil
-	}
-	const kiSize = 4 + 16 // Type(4) + keyboardInput body(16)
-	buf := make([]byte, kiSize*len(inputs))
-	for i, ki := range inputs {
-		off := i * kiSize
-		*(*uint32)(unsafe.Pointer(&buf[off])) = ki.Type
-		*(*uint16)(unsafe.Pointer(&buf[off+4])) = ki.Vk
-		*(*uint16)(unsafe.Pointer(&buf[off+6])) = ki.Scan
-		*(*uint32)(unsafe.Pointer(&buf[off+8])) = ki.Flags
-		*(*uint32)(unsafe.Pointer(&buf[off+12])) = ki.Time
-	}
-	r, _, e := procSendInput.Call(uintptr(len(inputs)), uintptr(unsafe.Pointer(&buf[0])), uintptr(kiSize))
-	if r != uintptr(len(inputs)) {
-		return fmt.Errorf("SendInput(key) 失败: %d/%d: %v", r, len(inputs), e)
 	}
 	return nil
 }
