@@ -1,5 +1,7 @@
 # Reins MCP Server 接入指南
 
+> **另见**：TypeScript 参考实现（npm 可安装、Claude/Cursor 生态入口）——见 [github.com/V-T-V/reins-mcp](https://github.com/V-T-V/reins-mcp)。
+
 `reins-mcp` 把 Reins 的远程运维能力暴露为 [Model Context Protocol](https://modelcontextprotocol.io) 工具(14 个,带 JSON Schema 输入描述),让 Claude Desktop、Cursor、ZCode 等支持 MCP 的 AI 客户端**原生驱动远程舰队**——不是解析 CLI 文本,是标准工具调用协议。
 
 ## 安装
