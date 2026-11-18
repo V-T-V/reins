@@ -17,12 +17,17 @@ check() { # $1=描述 $2=条件(0=通过)
   if [ "$2" -eq 0 ]; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi
 }
 
+# 注:set -e 下裸 grep/[ ] 失败会在 check 打印 FAIL 前杀掉脚本——门禁静默死,
+# 失败了却零输出(2026-11-18 徽章漂移时逮住:exit 1 无任何 FAIL 行)。
+# 因此判失败一律走 if/else 收集退出码,再交给 check 汇总。
 for f in README.md README.zh-CN.md; do
-  grep -qF "tests-$tests" "$f"; check "$f tests 徽章 == 实测 $tests" $?
+  if grep -qF "tests-$tests" "$f"; then rc=0; else rc=1; fi
+  check "$f tests 徽章 == 实测 $tests" $rc
 done
 
 hdr=$(grep -cF "(v${latest#v})" AGENTS.md || true)
-[ "$hdr" -ge 1 ]; check "AGENTS.md 当前状态章节头含版本 ${latest#v}" $?
+if [ "$hdr" -ge 1 ]; then rc=0; else rc=1; fi
+check "AGENTS.md 当前状态章节头含版本 ${latest#v}" $rc
 
 # 提示性(不挡门):AGENTS 指标表 Go 文件数
 if grep -qF "| Go 文件 | $go_files |" AGENTS.md; then

@@ -3,6 +3,10 @@
 > v3.9.0 · 基于 go test -bench 基准测试 + 实际端到端验证
 >
 > 环境：AMD Ryzen 7 PRO 4750U (8C16T), Windows 11, Go 1.25.6
+>
+> **更新(2026-11-18)**:本文停留在 v3.9.0 口径,仅作历史基线。最新一轮基准驱动的性能优化
+> (2026-11-14,9 基准 × 5 热路径,含 tasks/audit 查询 allocs -81%~-90%)账目见 CHANGELOG.md
+> `[未发布] — 2026-11-14` 节;基准本体入库 `relay/perf_bench_test.go`,原始档案在 `build/perf/`(不入库)。
 
 ---
 

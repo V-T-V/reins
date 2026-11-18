@@ -2,6 +2,26 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [未发布] — 2026-11-18 债务收口战役(文档口径 + 门禁修复 + 补账)
+
+### 补账(v4.9.2 之后三笔提交未入 CHANGELOG)
+
+- **F5 批 C 真死收口**(6ad06a7,2026-11-17):删 win32 三对零消费输入 API——`MoveTo`/`GetCursorPos`/`TypeText`(Windows 实现+非 Windows stub 两份),guiclick 执行器只消费 `ClickAt`;连带收走其私用机械(sendKeys/keyboardInput/inputKeyboard/keyeventf* 常量/两 proc 变量/inputUnion)。**修正下方 2026-11-16 节的「未动(产品裁决留所有者)」口径**——三件套已于次日按 owner 裁决删除,textinput 半成品能力位一并消失。
+- docs/mcp.md 顶部「另见」行指向 TypeScript 参考实现 reins-mcp(41159ff,2026-11-17)。
+- verify-go-rmm 仓内验证技能入库(bd1c2ac,2026-11-17):loopback relay+agent 真实回路探针,doctor/launch/probe all/cleanup 四步自证。
+
+### 修复(本轮)
+
+- **check-docs.sh 门禁静默死**:`set -e` 下裸 `grep -qF`/`[ ]` 失败会在 `check` 打印 FAIL **之前**杀掉脚本——徽章漂移被逮住时表现为 exit 1 且**零输出**,门禁形同虚设还误导排查。判失败一律改走 if/else 收集退出码再交 `check` 汇总。
+- **README 双语 tests 徽章漂移 13**:569 → 582(门禁 grep `^func Test` 全仓实测口径;运行口径 577 PASS + 1 既有 SKIP=非 Windows 守卫,见下)。v4.9.2 后四轮(商业化深推 +13/性能优化轮 +4/死码收口/F5 批 C)只记提交未回写徽章——正是 B8 门禁要防的「README 停在旧测试数」事故复发,而门禁自身静默死没拦住。
+- AGENTS.md 口径刷新:Go 文件 256→264、测试 569→582、代码行 49K→50.8K、各包测试分布表重测、BENCHMARK.md 头部补「最新一轮见 CHANGELOG」指针(本文停在 v3.9.0 仅作历史基线)。
+
+### 验证
+
+- `go test ./... -count=1` 14 包全绿:577 PASS + 1 SKIP(`TestScriptNonWindowsGuard` 非 Windows 守卫,既有)+ 0 FAIL;`go vet ./...` 全清;`gofmt -l` 仅既有 CRLF 假红,本轮编辑文件全干净。
+- `scripts/check-docs.sh` 修复后四项全 ok、exit 0(修复前:exit 1 零输出)。
+- `scripts/release-tag.ps1 -Version v5.0.0` dry-run 验证:CHANGELOG 多节 `[未发布]` 全量并入 notes(脚本对每个未发布头 continue、只在版本化头 break——多轮堆叠不丢节),零 git 写操作。
+
 ## [未发布] — 2026-11-16 死码收口(agent-census 首扫真死桶)
 
 出处:`AGENT_CENSUS_SWEEP_2026-11-16.md`(工作区根,agent-census v0.1.0 首扫)——go-rmm F5 真死 11 处发现/7 函数,本轮收口 4 函数:

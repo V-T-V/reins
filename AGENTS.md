@@ -137,15 +137,17 @@ reins/
 └── Makefile            # 世界级构建系统(15 targets)
 ```
 
-## 指标(v4.9.2)
+## 指标(v4.9.2,2026-11-18 债务收口战役口径刷新)
+
+> v4.9.2 tag 后的未发布轮次(2026-11-13 UI 打磨+打包分发+发布纪律 / 11-14 性能优化轮 / 11-16 死码收口 / 11-17 F5 批 C+verify 技能 / 11-18 本轮)账目见 CHANGELOG.md 各 `[未发布]` 节;下一版候选 v5.0.0(产物已预打包于 dist/release/v5.0.0/,tag 未打)。
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 256 |
-| 代码行 | 49,000+ |
+| Go 文件 | 264 |
+| 代码行 | 50,800+ |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 569 |
-| 基准测试 | 26 |
+| 测试用例 | 582(函数口径,门禁/徽章同源;运行口径 577 PASS + 1 既有 SKIP=非 Windows 守卫) |
+| 基准测试 | 35 |
 | CLI 命令 | 50+ |
 | API 端点 | 40+ |
 | 任务类型 | 9 |
@@ -188,21 +190,26 @@ reins/
 
 ---
 
-## 测试覆盖(v4.9.2)
+## 测试覆盖(v4.9.2,2026-11-18 复测)
 
-555 测试 + 26 基准(2026-10-23 SDK Update 服务后口径,`go test ./... -list '.*'` 实测)。按包分布与重点验证场景:
+582 测试函数(grep `^func Test` 全仓口径,check-docs 门禁与 README 徽章同源)+ 35 基准;运行口径 `go test ./... -count=1` 14 包全绿 = 577 PASS + 1 SKIP(`TestScriptNonWindowsGuard` 非 Windows 守卫,既有)——函数口径与运行口径的差 = 平台构建标签孪生文件(`//go:build linux` 的 monitor_procfs 3 函数、`!windows` 的 job_unix 孪生)+TestMain 助手行。按包分布与重点验证场景:
 
-| 包 | 测试数 | 文件数 | 重点场景 |
+| 包 | 测试数 | _test 文件 | 重点场景 |
 |----|--------|--------|----------|
-| **relay** | 243 | 66 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10];transfer upload sha256 透传 E2E(真 WS fake Agent 全链路)[2026-09-13];webhook 收口(5 事件接线+flag/env 配置+通知体结构+真 handler 403/失败 result/证书撤销 E2E)+离线缓存策略绕过回归(P1-7)[2026-09-14];tls_watcher(CheckCertExpiry 正常/过期/三错误路径+CertDaysLeftMetric 双口径+LoadCertForRelay)[2026-09-14];智能调度负载接线(monitor 采样回流评分/TTL 过期无视/真 WS progress E2E)[2026-09-14] |
-| **agent** | 87 | 33 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9];单片 SHA 校验防线(匹配成功 rename/不匹配删 .part 防续传死循环)[2026-09-13] |
-| **executors** | 57 | 25 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控;rules 门禁(发现去重/指纹组合/Dispatcher 校验/op=rules/变更失效闭环)[v4.4.0] |
-| **proto** | 46 | 9 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
-| **internal/wsx** | 5 | 1 | 优先级写引擎(P0 控制帧不被 P1 数据饿死——阻塞 socket 写+积压构造确定性验证/写错误经 Done 回传/ctx 契约两段分层断言(调用方 ctx 已取消=确定性 ctx.Err;writer ctx 取消=只锚定不挂死,nil/err 均合法——原"必须报错"断言与"可能迟到但不会丢"设计语义冲突,调度偏置下稳定翻车,2026-09-14 修订)/Start 幂等)[2026-09-12]
-| **internal/dagflow** | 13 | 1 | 图校验 8 类非法图逐一拒绝+环点名;串行启动序列 50 次重跑逐位一致;并发峰值恰守上限 3;失败级联(health/watch 跳过+alert 软依赖照跑+跳过者从未启动);软依赖仍须等终态;ctx 取消 skipped 收尾;带环图不死锁 [v4.5.0];v4.6.0 relay 端到端:3 节点失败级联剧场(start_order 确定 prep→deploy/verify 零投递)+软依赖照跑+策略拦截 403+提交期校验 |
-| **client** | 22 | 9 | SDK 方法/流式/工具发现 |
-| **console** | 14 | 4 | 反向代理/事件转发 |
-| **cmd** | 49 | 31 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3];rules read E2E/ack 缓存/-s 防呆/deploy 模板[v4.4.0];per-chunk SHA256(computeSectionSHA 段 hash/分片 query 下发/非分片预计算 E2E/Agent 拒绝冒泡)[2026-09-13] |
+| **relay** | 252 | 44 | 多客户端路由/断线重连/心跳[round2];6 类执行器[round3];console 转发[round4];mTLS 双向认证[round5];审计查询/导出[round6];多租户隔离[round7];批量分发/重试/进度[round8];SecretStore(TTL/一次性/并发防重放)/ScriptLibrary(路径穿越拒绝)/buffer_pool/审计错误路径/Prom 命名空间一致性[round9-10];transfer upload sha256 透传 E2E(真 WS fake Agent 全链路)[2026-09-13];webhook 收口(5 事件接线)+离线缓存策略绕过回归(P1-7)+tls_watcher+智能调度负载接线[2026-09-14];审计 JSON 查询端点(过滤/分页/hash chain 透出)+单遍扫描等价性 9 组[2026-11-13/14];9 基准热路径环回(事件丢失即 Fatal)[2026-11-14] |
+| **agent** | 86 | 20 | 连接主循环/文件传输(续传+hash)/shell 会话/录屏/自更新/健康自检/可靠性(path互斥/已满快路径/sweep/watchdog);rQueue 可靠投递(FIFO/drain/requeue/flushTo 写失败保留)[round9];单片 SHA 校验防线(匹配成功 rename/不匹配删 .part 防续传死循环)[2026-09-13] |
+| **executors** | 57 | 12 | PowerShell(中文乱码修复)/脚本 BOM/截图/浏览器/GUI 点击/电源/监控;rules 门禁(发现去重/指纹组合/Dispatcher 校验/op=rules/变更失效闭环)[v4.4.0];平台孪生测试文件(procfs=linux/job=windows与unix 各一份,Windows 跑 windows 侧) |
+| **proto** | 46 | 5 | 消息编解码/边界/二进制帧/tunnel;Envelope(ID 唯一/错误路径/宽容解码)+Heartbeat omitempty 向后兼容+多消息类型往返[round9] |
+| **internal/wsx** | 5 | 1 | 优先级写引擎(P0 控制帧不被 P1 数据饿死/写错误经 Done 回传/ctx 契约两段分层断言/Start 幂等)+done channel 池化纪律[2026-11-14] |
+| **internal/dagflow** | 14 | 1 | 图校验 8 类非法图逐一拒绝+环点名;串行启动序列 50 次重跑逐位一致;并发峰值恰守上限 3;失败级联+软依赖;ctx 取消 skipped 收尾;带环图不死锁 [v4.5.0];v4.6.0 relay 端到端失败级联剧场 |
+| **internal/taskstore** | 14 | 2 | 存储层任务读写/ListTasksQuery 下推过滤等价性(bbolt/MemoryStore×9 组)+Limit 口径[2026-11-14] |
+| **internal/cmdpolicy** | 4 | 2 | 命令策略黑/白名单交集语义/hints 指引 |
+| **internal/ca** | 7 | 1 | 内置 CA/enrollment/CRL |
+| **client** | 22 | 5 | SDK 方法/流式/工具发现/Update 服务(List/Latest/Push/DownloadStream)+Version()[2026-10-23] |
+| **console** | 14 | 3 | 反向代理/事件转发 |
+| **cmd/reins** | 50 | 13 | CLI 工具函数(flag 解析/大小解析/strip 剥离)[v4.3.3];rules read E2E/ack 缓存/-s 防呆/deploy 模板[v4.4.0];per-chunk SHA256(computeSectionSHA 段 hash/分片 query 下发/非分片预计算 E2E/Agent 拒绝冒泡)[2026-09-13];-o json task run 终态/task list[2026-08-18] |
+| **cmd/reins-mcp** | 8 | 1 | MCP stdio 握手/schema 校验/-32601/通知无响应/成败两路假 relay 投递链[v4.9.0] |
+| **cmd/gencert** | 3 | 1 | 自签证书工具(SAN 枚举)[2026-11-13] |
 
 **深度测试(rounds 1-10)**:round 1 修复 `TestMultiAgentRoutingE2E` 永久失败;rounds 2-7 逐层加深(relay 路由 → 执行器 → console → mTLS → 审计 → 多租户);round 8 覆盖批量分发不变量(并发投递/聚合/退避重试/幂等/ctx 取消/进度状态机);rounds 9-10 工作区深度推进——补 SecretStore/ScriptLibrary/buffer_pool/rQueue/Envelope 等弱测模块,修复空闲 Agent 掉线循环(S7 heartbeat_ack)、脚本库路径穿越漏洞、Prom 指标前缀 typo、审计写盘静默丢记录。
 
@@ -223,6 +230,8 @@ reins/
 ## 下一步(Next Steps)
 
 按优先级排序的演进方向:
+
+> **2026-11-18 欠条复核(债务收口战役)**:未划掉的三项——①水平扩展 Redis 联邦实测(待环境:本机无 Docker/Redis)、②Linux 执行器补齐(systemd/包管理/journalctl,大特性)、③控制台租户/组织管理 UI+审计回放(大特性)——均需 owner 决策或环境,维持原状。仓内文档承诺扫描:审计 tail 注释承诺已由 `/api/audit/query` 接棒收口(2026-11-13,CHANGELOG 有账)、三份 web 拷贝(web//console/web//relay/web/)实测逐位同步、OpenAPI 含全部审计端点、非测试 Go 代码 TODO/FIXME 零标记。
 
 ### P0 — 生产硬化
 
