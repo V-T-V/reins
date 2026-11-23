@@ -1,6 +1,6 @@
 # Reins
 
-> **Take the reins of your fleet.** Self-hosted zero-trust remote operations platform — one Go binary, zero inbound ports, your data never leaves your network. And your AI agents touch a server only after reading the rules.
+> **Take the reins — then hand them to your AI agent, safely.** Self-hosted remote operations for Windows/Linux fleets: one Go binary, zero inbound ports, your data never leaves your network. Your AI agent reaches a server only after passing the rules gate.
 
 [![Go](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
@@ -12,7 +12,7 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-**Start with a Windows Agent:** bring up a Relay, install the Agent on an authorized Windows test machine, then run `hostname` remotely from your workstation. The Agent connects outbound to the Relay, so the Windows machine needs no inbound port. [Try the quickstart](#quickstart) · [Watch the demo](https://v-t-v.github.io/reins/)
+**Put your AI agent on a real Windows box:** bring up a Relay, install the Agent on an authorized Windows machine (outbound-only — no inbound port, NAT just works), add `reins-mcp` to Claude Desktop or Cursor, then ask your agent to run `hostname` on it. [AI-agent quickstart](#ai-agent-quickstart--claude-on-a-real-windows-box) · [Ops quickstart](#quickstart) · [Watch the demo](https://v-t-v.github.io/reins/)
 
 ![demo](./docs/demo/demo-overview.svg)
 
@@ -23,7 +23,7 @@ It is an open-source alternative to Teleport (access plane) and MeshCentral/Tact
 ```
    CLI (50+ cmds) ──HTTPS/SSE──►  Relay (single Go binary)  ◄──reverse WS (NAT traversal)──  Agent (Windows service / Linux)
    Web console (embedded)        mTLS + CA + CRL            wss://, agent dials out         9 task executors:
-   Go SDK (AI agents)            RBAC multi-tenant                                         powershell · script · file · screenshot
+   Go SDK + MCP (AI agents)      RBAC multi-tenant                                         powershell · script · file · screenshot
                                  audit hash chain + SIEM                                   browse (chromedp) · guiclick · update
                                  Prometheus /metrics + pprof                               power · monitor (TUI)
 ```
@@ -37,7 +37,50 @@ It is an open-source alternative to Teleport (access plane) and MeshCentral/Tact
 | **Windows remote operations, first-class** | PowerShell execution, interactive shell, service/process control, scheduled tasks, screenshots, GUI & browser automation, power ops — see the [Windows capability map](#windows-fleets-first-class) below. |
 | **Enterprise security primitives** | mTLS with built-in CA, per-device client certs, CRL revocation, `tenant:role:secret` RBAC tokens, command black/allow-lists enforced on both Relay and Agent, append-only audit hash chain, session recording (asciinema v2), secrets with TTL + one-time use. |
 | **Ops, not just remote desktop** | Batch dispatch with retries & live progress, DAG orchestration (dependency graphs, concurrency caps, failure cascade skip), deploy playbooks, process watchdog, cron, snapshots, network diagnostics, log aggregation. |
-| **AI-agent native** | A Go SDK exposes 30+ ops tools, and `.reins/rules.md` gates machine operations: automation must *read the project's operation rules and carry a content-fingerprint ack* before executing — stale acks are rejected when rules change. |
+| **AI-agent native** | An MCP server (14 tools) plus a Go SDK (30+ tools) drive the whole platform from Claude Desktop / Cursor / any MCP client — and `.reins/rules.md` gates machine operations: automation must *read the project's operation rules and carry a content-fingerprint ack* before executing; stale acks are rejected when rules change. |
+
+## AI-agent quickstart — Claude on a real Windows box
+
+The fastest way to feel what reins is for: put Claude (or Cursor, or any MCP client) behind the wheel of an actual Windows machine — behind NAT, zero inbound ports, gated by rules.
+
+![mcp demo](./docs/demo/mcp-demo.svg)
+
+**1. Start the Relay** on a host with Docker Compose (private test network is fine for this HTTP setup; replace the token placeholder with a unique trial token):
+
+```sh
+git clone https://github.com/V-T-V/reins && cd reins
+echo "REINS_TOKEN=REPLACE_WITH_A_UNIQUE_TRIAL_TOKEN" > .env
+docker compose up -d          # Relay on http://localhost:7780 (web console included)
+```
+
+**2. Install the Agent** on a Windows machine you own or are authorized to manage — PowerShell, auto UAC elevation:
+
+```powershell
+iex (((irm 'http://<relay-host>:7780/install.ps1') -replace '^\uFEFF'))
+```
+
+The Agent dials *out* to the Relay over WebSocket, so the Windows machine needs no inbound port — home and office networks just work.
+
+**3. Wire your AI client.** Download `reins-mcp` from the [latest release](https://github.com/V-T-V/reins/releases/latest) (six platforms) or `go install github.com/V-T-V/reins/cmd/reins-mcp@latest`; an npm-installable TypeScript reference implementation lives at [V-T-V/reins-mcp](https://github.com/V-T-V/reins-mcp). Add it to Claude Desktop / Cursor / any MCP client:
+
+```json
+{
+  "mcpServers": {
+    "reins": {
+      "command": "reins-mcp",
+      "env": { "REINS_RELAY": "http://<relay-host>:7780", "REINS_TOKEN": "your-token" }
+    }
+  }
+}
+```
+
+Then just ask your agent:
+
+> *"List my machines, then run `hostname` and `Get-Service App*` on the Windows one."*
+
+14 curated tools (`reins_run_command`, `reins_task_run` covering all 9 executor types incl. screenshot / browser / GUI-click, `reins_batch_run`, `reins_power`, cron management, …) — full list and per-client configs in [docs/mcp.md](./docs/mcp.md).
+
+**Why this is safe to actually want.** Every mutation request — MCP, SDK or CLI — passes the same execution-layer gate: the agent must first read the managed project's `.reins/rules.md` and carry a content-fingerprint ack; edit the rules and stale acks are rejected instantly (the rejection never echoes the fingerprint, so "skip reading, replay the ack" doesn't work). On top of that: mTLS device identity with CRL revocation, command allow/deny lists enforced on *both* Relay and Agent, and an append-only audit hash chain exportable to your SIEM. Details in [AI agents on your fleet](#ai-agents-on-your-fleet).
 
 ## Windows fleets, first-class
 
@@ -157,7 +200,7 @@ Automation guardrail — `.reins/rules.md` lives in the *managed project's* repo
 }
 ```
 
-14 curated tools (`reins_run_command`, `reins_list_agents`, `reins_batch_run`, `reins_power`, cron, …) with JSON-Schema inputs. The rules gate applies regardless of client — MCP, SDK or CLI hit the same execution-layer checkpoint.
+14 curated tools (`reins_run_command`, `reins_list_agents`, `reins_batch_run`, `reins_power`, cron, …) with JSON-Schema inputs — the [AI-agent quickstart](#ai-agent-quickstart--claude-on-a-real-windows-box) above is this path. Full tool list and per-client configs: [docs/mcp.md](./docs/mcp.md); TypeScript reference implementation: [V-T-V/reins-mcp](https://github.com/V-T-V/reins-mcp). The rules gate applies regardless of client — MCP, SDK or CLI hit the same execution-layer checkpoint.
 
 ## Project stats
 

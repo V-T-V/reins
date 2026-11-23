@@ -1,6 +1,6 @@
 # Reins
 
-> **缰绳在你手里。** 自托管零信任远程运维平台——单个 Go 二进制,零入站端口,数据不出内网;AI 代理先读规则,再碰服务器。
+> **缰绳在你手里——也可以安全地交到 AI 代理手上。** 自托管零信任远程运维平台:单个 Go 二进制,零入站端口,数据不出内网;AI 代理先过规则门禁,再碰服务器。
 
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
@@ -11,7 +11,7 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-**先从 Windows Agent 远程接入开始：**启动 Relay，在一台有权管理的 Windows 测试机上安装 Agent，再从操作端远程执行 `hostname`。[快速开始](#快速开始) · [观看演示](https://v-t-v.github.io/reins/)
+**让 AI 代理操作真实的 Windows 机器：**启动 Relay,在一台有权管理的 Windows 机器上安装 Agent(纯出站、零入站端口,NAT 直接穿透),把 `reins-mcp` 配进 Claude Desktop / Cursor,然后让代理在上面跑 `hostname`。[AI Agent 快速接入](#ai-agent-快速接入) · [快速开始](#快速开始) · [观看演示](https://v-t-v.github.io/reins/)
 
 ![demo](./docs/demo/demo-overview.svg)
 
@@ -22,6 +22,7 @@
 ## 目录
 
 - [架构总览](#架构总览)
+- [AI Agent 快速接入](#ai-agent-快速接入)
 - [与同类项目对比](#与同类项目对比)
 - [核心特性](#核心特性)
 - [快速开始](#快速开始)
@@ -78,6 +79,51 @@
 **数据流**:CLI/Web → HTTP REST → Relay 路由 → 命令策略校验 → RBAC 多租户鉴权 → 审计 hash chain → EventBus 投递 → 反向 WS → Agent 执行 → 结果回流(SSE/轮询)。
 
 **水平扩展**:多 Relay 通过 Redis 共享 `TaskStore` + Pub/Sub 事件联邦,Agent 多 Relay 故障切换。
+
+---
+
+## AI Agent 快速接入
+
+感受 Reins 是为什么而生的最短路径:把 Claude(或 Cursor、任何 MCP 客户端)放到一台**真实的 Windows 机器**跟前——NAT 之后、零入站端口、规则门禁把守。
+
+![mcp demo](./docs/demo/mcp-demo.svg)
+
+**1. 启动 Relay**(任意有 Docker Compose 的主机;HTTP 试验用私网即可,token 占位符换成唯一试验值):
+
+```sh
+git clone https://github.com/V-T-V/reins && cd reins
+echo "REINS_TOKEN=REPLACE_WITH_A_UNIQUE_TRIAL_TOKEN" > .env
+docker compose up -d          # Relay 起在 http://localhost:7780(含 Web 控制台)
+```
+
+**2. 安装 Agent** 到一台你拥有或被授权管理的 Windows 机器——PowerShell 一行,自动 UAC 提权:
+
+```powershell
+iex (((irm 'http://<relay-host>:7780/install.ps1') -replace '^\uFEFF'))
+```
+
+Agent 纯出站反向 WebSocket 拨号,被控 Windows 机器**零入站端口**——家庭/办公网络直接可用。
+
+**3. 接上你的 AI 客户端。** 从[最新 Release](https://github.com/V-T-V/reins/releases/latest) 下载 `reins-mcp`(六平台齐备),或 `go install github.com/V-T-V/reins/cmd/reins-mcp@latest`;npm 可安装的 TypeScript 参考实现在 [V-T-V/reins-mcp](https://github.com/V-T-V/reins-mcp)。配进 Claude Desktop / Cursor / 任何 MCP 客户端:
+
+```json
+{
+  "mcpServers": {
+    "reins": {
+      "command": "reins-mcp",
+      "env": { "REINS_RELAY": "http://<relay-host>:7780", "REINS_TOKEN": "your-token" }
+    }
+  }
+}
+```
+
+然后直接对代理说:
+
+> 「列出我的机器,在那台 Windows 上跑 `hostname` 和 `Get-Service App*`。」
+
+14 个 curated 工具(`reins_run_command`、覆盖全部 9 类执行器的 `reins_task_run`——含截图/浏览器/GUI 点击、`reins_batch_run`、`reins_power`、cron 管理…)——完整清单与各客户端配置见 [docs/mcp.md](./docs/mcp.md)。
+
+**为什么这件事安全到值得你真的去做。** MCP、SDK、CLI 发出的一切变更请求走的是**执行层同一道闸**:代理必须先读被管项目的 `.reins/rules.md` 并携带内容指纹 ack;规则一改,旧 ack 立即失效(拒绝响应不回显指纹——「跳过阅读、重放 ack」走不通)。在此之上还有:mTLS 设备身份 + CRL 吊销、命令黑白名单在 Relay 与 Agent **双侧强制**、可导出 SIEM 的防篡改审计 hash 链。详见 [AI Agent 接入](#ai-agent-接入)。
 
 ---
 
@@ -583,7 +629,7 @@ info, _ := c.Sysinfo("agent-1")
 }
 ```
 
-14 个 curated 工具(`reins_run_command`/`reins_list_agents`/`reins_batch_run`/`reins_power`/cron 族…),全部带 JSON Schema 输入描述。规则门禁与客户端无关——MCP、SDK、CLI 走的都是执行层同一道闸。
+14 个 curated 工具(`reins_run_command`/`reins_list_agents`/`reins_batch_run`/`reins_power`/cron 族…),全部带 JSON Schema 输入描述——[上文的 AI Agent 快速接入](#ai-agent-快速接入)走的就是这条路。完整工具清单与各客户端配置见 [docs/mcp.md](./docs/mcp.md);TypeScript 参考实现见 [V-T-V/reins-mcp](https://github.com/V-T-V/reins-mcp)。规则门禁与客户端无关——MCP、SDK、CLI 走的都是执行层同一道闸。
 
 ---
 

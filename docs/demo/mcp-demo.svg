@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="350" viewBox="0 0 880 350" font-family="Consolas,'Cascadia Code','Courier New',monospace">
+<style>
+  .win{fill:#010409;stroke:#21262d}
+  .bar{fill:#161b22}
+  .ln{opacity:0;animation:in .25s forwards}
+  .k{animation:blink 1s step-end infinite}
+  @keyframes in{to{opacity:1}}
+  @keyframes blink{50%{opacity:0}}
+</style>
+<rect x="1" y="1" width="878" height="348" rx="10" class="win" stroke-width="1"/>
+<rect x="1" y="1" width="878" height="34" rx="10" class="bar"/>
+<circle cx="22" cy="18" r="6" fill="#ff5f57"/><circle cx="42" cy="18" r="6" fill="#febc2e"/><circle cx="62" cy="18" r="6" fill="#28c840"/>
+<text x="440" y="23" text-anchor="middle" font-size="12" fill="#9198a1">Claude Desktop × reins-mcp — AI 代理远程操控真实 Windows 机器(NAT 之后)</text>
+<g font-size="14">
+<text class="ln" x="24" y="68" style="animation-delay:.3s"><tspan fill="#9198a1">你:</tspan> <tspan fill="#e6edf3">列出我的机器,在那台 Windows 上查 App 服务状态,顺便截个屏</tspan></text>
+<text class="ln" x="24" y="94" style="animation-delay:1.4s"><tspan fill="#58a6ff">Claude</tspan> <tspan fill="#9198a1">(reins-mcp)</tspan><tspan fill="#e6edf3">:</tspan></text>
+<text class="ln" x="40" y="120" style="animation-delay:2.4s"><tspan fill="#4cc38a">⚙ reins_list_agents</tspan><tspan fill="#e6edf3">            → agent-WIN-KIOSK-01   windows/amd64   </tspan><tspan fill="#4cc38a">在线</tspan></text>
+<text class="ln" x="40" y="144" style="animation-delay:3.4s"><tspan fill="#4cc38a">⚙ reins_run_command</tspan><tspan fill="#e6edf3">            → Get-Service App      </tspan><tspan fill="#4cc38a">Running</tspan></text>
+<text class="ln" x="40" y="168" style="animation-delay:4.4s"><tspan fill="#4cc38a">⚙ reins_task_run (screenshot)</tspan><tspan fill="#e6edf3">  → </tspan><tspan fill="#4cc38a">✅</tspan><tspan fill="#e6edf3"> screen-1130.png 已回传</tspan></text>
+<text class="ln" x="24" y="204" style="animation-delay:5.6s"><tspan fill="#9198a1">你:</tspan> <tspan fill="#e6edf3">把 kiosk 外壳进程杀掉</tspan></text>
+<text class="ln" x="24" y="230" style="animation-delay:6.8s"><tspan fill="#58a6ff">Claude:</tspan> <tspan fill="#f85149">✖ 被规则门禁拒绝</tspan><tspan fill="#e6edf3">——.reins/rules.md: 「营业时间不得杀 kiosk 外壳进程」</tspan></text>
+<text class="ln" x="24" y="254" style="animation-delay:8s"><tspan fill="#9198a1">规则门禁在执行层:规则一改旧 ack 立即失效;拒绝不回显指纹,重放 ack 走不通</tspan></text>
+<text class="ln" x="24" y="290" style="animation-delay:9.2s"><tspan fill="#9198a1"># MCP / SDK / CLI 同一道闸 · mTLS 一机一证 · 命令黑白名单双侧强制 · hash chain 审计</tspan></text>
+<text class="ln" x="24" y="314" style="animation-delay:10.2s"><tspan fill="#9198a1"># 14 个 MCP 工具:run_command / task_run(9 类执行器) / batch_run / power / cron / …</tspan><tspan class="k" fill="#e6edf3">▊</tspan></text>
+</g>
+</svg>

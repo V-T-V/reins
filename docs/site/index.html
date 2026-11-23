@@ -59,6 +59,7 @@ footer{padding:36px 0 48px;color:var(--dim);font-size:13px;border-top:1px solid 
       <a href="https://github.com/V-T-V/reins">GitHub</a>
       <a href="https://github.com/V-T-V/reins/releases">下载</a>
       <a href="https://github.com/V-T-V/reins/blob/main/README.zh-CN.md">文档</a>
+      <a href="#ai-agent">AI Agent</a>
       <a href="#quickstart">快速开始</a>
     </div>
   </nav></div>
@@ -67,14 +68,15 @@ footer{padding:36px 0 48px;color:var(--dim);font-size:13px;border-top:1px solid 
 <div class="hero wrap">
   <h1>缰绳，在你<em>手里</em>。</h1>
   <div class="en">Take the reins of your fleet.</div>
-  <p class="sub">自托管零信任远程运维平台——单个 Go 二进制，零入站端口，数据不出内网。<br>你的机器、你的连接、你的 AI 代理，缰绳都拴在你自己手里。</p>
+  <p class="sub">自托管零信任远程运维平台——单个 Go 二进制，零入站端口，数据不出内网。<br><strong>把 Claude / Cursor 接上你真实的 Windows 舰队</strong>——AI 代理先过规则门禁，再碰服务器。</p>
   <div class="cta">
-    <a class="btn primary" href="https://github.com/V-T-V/reins/releases">⬇ 下载 v4.8.0</a>
+    <a class="btn primary" href="#ai-agent">🤖 AI Agent 接入</a>
+    <a class="btn ghost" href="https://github.com/V-T-V/reins/releases">⬇ 下载 v4.9.2</a>
     <a class="btn ghost" href="https://github.com/V-T-V/reins">★ GitHub Star</a>
   </div>
   <div class="badges">
     <a href="https://github.com/V-T-V/reins/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/V-T-V/reins/ci.yml" alt="CI"></a>
-    <img src="https://img.shields.io/badge/tests-559-brightgreen" alt="tests">
+    <img src="https://img.shields.io/badge/tests-582-brightgreen" alt="tests">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
   </div>
   <div class="terminal">
@@ -93,6 +95,31 @@ footer{padding:36px 0 48px;color:var(--dim);font-size:13px;border-top:1px solid 
 <span class="g">✅ 成功(1.4s)</span> WS-KIOSK-01</pre>
   </div>
 </div>
+
+<section id="ai-agent">
+  <div class="wrap">
+    <h2>AI Agent 远程操控 Windows<span class="en">AI agents on your fleet · MCP</span></h2>
+    <p class="lead">把 <code>reins-mcp</code> 配进 Claude Desktop / Cursor / 任何 MCP 客户端，你的 AI 代理就能远程操作真实的 Windows 机器：跑 PowerShell、管服务、截图、浏览器自动化、批量分发——14 个 MCP 工具走标准协议，不是解析 CLI 文本。</p>
+    <div class="terminal">
+      <div class="bar">Claude Desktop × reins-mcp — 真实 Windows 机器，NAT 之后</div>
+<pre><span class="c">你:</span> 列出我的机器，在那台 Windows 上查 App 服务状态，顺便截个屏
+<span class="b">Claude</span> <span class="c">(reins-mcp)</span>
+  ⚙ reins_list_agents            → agent-WS-KIOSK-01   windows/amd64   在线
+  ⚙ reins_run_command            → Get-Service App    <span class="g">Running</span>
+  ⚙ reins_task_run (screenshot)  → <span class="g">✅</span> screen.png
+
+<span class="c">你:</span> 把 kiosk 外壳进程杀掉
+<span class="b">Claude</span>  <span style="color:#f85149">✖ 被规则门禁拒绝</span>——.reins/rules.md 写着「营业时间不得杀 kiosk 外壳进程」。
+        规则一改旧 ack 立即失效，我必须重读规则才能继续变更操作。</pre>
+    </div>
+    <div class="grid" style="margin-top:26px">
+      <div class="card"><div class="icon">🔌</div><h3>三步接入</h3><p>起 Relay → Windows 一行装 Agent → mcpServers 配 reins-mcp（六平台二进制随 Release 分发；npm 参考实现 V-T-V/reins-mcp）。</p></div>
+      <div class="card"><div class="icon">🛡️</div><h3>规则门禁，换客户端不换闸</h3><p>.reins/rules.md 内容指纹 ack 在执行层校验——MCP、SDK、CLI 同一道闸；拒绝响应不回显指纹，重放 ack 走不通。</p></div>
+      <div class="card"><div class="icon">👀</div><h3>AI 干的每件事都有账可查</h3><p>mTLS 一机一证 + 命令黑白名单 Relay/Agent 双侧强制 + hash chain 审计链 + 会话录屏。</p></div>
+    </div>
+    <p style="margin-top:18px;color:var(--dim)">完整接入指南（Claude Desktop / Cursor 配置、14 工具清单）见 <a href="https://github.com/V-T-V/reins/blob/main/docs/mcp.md">docs/mcp.md</a>。</p>
+  </div>
+</section>
 
 <section>
   <div class="wrap">
