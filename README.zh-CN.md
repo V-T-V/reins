@@ -11,6 +11,8 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
+**先从 Windows Agent 远程接入开始：**启动 Relay，在一台有权管理的 Windows 测试机上安装 Agent，再从操作端远程执行 `hostname`。[快速开始](#快速开始) · [观看演示](https://v-t-v.github.io/reins/)
+
 ![demo](./docs/demo/demo-overview.svg)
 
 远程运维 **Windows(一等公民)** 与 Linux 主机:命令执行、文件传输、交互式 Shell、端口转发、多步编排、批量分发、系统监控、告警、自更新。通过**反向 WebSocket** 中继穿透 NAT——被控端**零入站端口**,Relay 单二进制自托管,mTLS + 内置 CA + 多租户 RBAC + 防篡改审计链,并为 AI 代理提供**规则门禁**(操作前必读项目运维规则)。
@@ -181,18 +183,28 @@ Reins 从 Windows 运维场景中长出来:Agent 注册为**原生 Windows 服�
 
 ## 快速开始
 
-```bash
-# 1. 服务端(一台机器)——Docker 一键起,或直接跑单二进制(零配置,自动生成 token)
-cp .env.example .env && 编辑 REINS_TOKEN
+Relay 主机、Windows 测试机和操作端是三个角色，不要求三台物理机器，Relay 与 CLI 可以按需共用一台主机。Agent 只安装在你拥有或获准管理的 Windows 机器上。它通过 WebSocket 主动连接 Relay，NAT 环境也无需在 Windows 测试机开放入站端口。成功标志是 Agent 在线，且远程 `hostname` 返回主机名。生产部署请按 [DEPLOYMENT.md](./DEPLOYMENT.md) 配置 TLS、中继入口和部署方式。
+
+**1. 启动 Relay。**在已安装 Docker Compose 的主机上打开兼容 Bash 的 shell。此 HTTP 试用请使用私有测试网络，并在执行前将占位值换成唯一的临时 token。
+
+```sh
+git clone https://github.com/V-T-V/reins && cd reins
+echo "REINS_TOKEN=REPLACE_WITH_A_UNIQUE_TRIAL_TOKEN" > .env
 docker compose up -d        # → http://localhost:7780(内嵌 Web 控制台)
+```
 
-# 2. 被控端 Windows——复制一行命令即可(自动 UAC/Token 探测/上线确认)
-iex (((irm 'http://<relay>:7780/install.ps1') -replace '^\uFEFF'))
+**2. 安装 Agent。**在获准管理的 Windows 测试机上打开 PowerShell，执行以下命令。将 `<relay-host>` 替换为此 Windows 机器可访问的 Relay 主机名或 IP。只有 Relay 就运行在这台 Windows 机器上时才用 `localhost`。安装器询问 token 时，填入 `REINS_TOKEN` 的值。
 
-# 3. 操作(你的电脑)
-reins --relay http://<relay>:7780 --token <token> agent list
-reins --relay http://<relay>:7780 --token <token> task run -a <agent> -c "hostname"
-reins --relay http://<relay>:7780 --token <token> monitor top -a <agent>
+```powershell
+iex (((irm 'http://<relay-host>:7780/install.ps1') -replace '^\uFEFF'))
+```
+
+**3. 在操作端验证。**从[最新 Release](https://github.com/V-T-V/reins/releases/latest)下载并解压适用于操作端系统的 `reins` CLI。将可执行文件加入 PATH，或在以下命令中使用其完整路径。将 `<relay-host>` 替换为操作端可访问的 Relay 地址，将 `<token>` 替换为 `REINS_TOKEN` 的值，将 `<agent-id>` 替换为 `agent list` 显示的 Agent ID。
+
+```sh
+reins --relay http://<relay-host>:7780 --token <token> agent list
+reins --relay http://<relay-host>:7780 --token <token> task run -a <agent-id> -c "hostname"
+reins --relay http://<relay-host>:7780 --token <token> monitor top -a <agent-id>
 ```
 
 > 零配置:Relay 首次启动若未设 `-token` 会自动生成一个并打印;Agent 也可用 `GET /api/bootstrap` 拿到一行 PowerShell 安装命令,复制粘贴到目标机即可。Linux Agent:`./reins-agent run -relay ws://relay:7780/agent -token <token>`。

@@ -12,6 +12,8 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
+**Start with a Windows Agent:** bring up a Relay, install the Agent on an authorized Windows test machine, then run `hostname` remotely from your workstation. The Agent connects outbound to the Relay, so the Windows machine needs no inbound port. [Try the quickstart](#quickstart) · [Watch the demo](https://v-t-v.github.io/reins/)
+
 ![demo](./docs/demo/demo-overview.svg)
 
 reins lets a small team run remote operations on a fleet of Windows/Linux machines from one terminal: command execution, file transfer, interactive shell, port forwarding, multi-step deploy orchestration, batch dispatch, monitoring — over **reverse WebSocket connections** that traverse NAT without opening a single inbound port on your hosts.
@@ -58,18 +60,27 @@ Run all of it across a fleet: `exec -a kiosk1,kiosk2,kiosk3 -c "Get-Service App"
 
 ## Quickstart
 
-```bash
+The Relay host, Windows test machine, and operator workstation describe roles, so the Relay and CLI can share a host. Install the Agent only on a Windows machine you own or are authorized to manage. It connects outbound to the Relay over WebSocket, including across NAT, and needs no inbound port. The trial succeeds when the Agent appears online and a remote `hostname` command returns its name. For production, follow [DEPLOYMENT.md](./DEPLOYMENT.md) for TLS, relay exposure, and deployment options.
+
+**1. Start the Relay** on a host with Docker Compose available. Use a private test network for this HTTP quickstart. Replace the token placeholder with a unique trial token, then run these commands in a Bash-compatible shell:
+
+```sh
 git clone https://github.com/V-T-V/reins && cd reins
-echo "REINS_TOKEN=devtoken-please-change" > .env
+echo "REINS_TOKEN=REPLACE_WITH_A_UNIQUE_TRIAL_TOKEN" > .env
 docker compose up -d          # Relay on http://localhost:7780 (web console included)
+```
 
-# install a Windows agent on a target machine — one line, no pre-setup:
-#   (served by your relay; auto UAC elevation, token probe, online check)
+**2. Install the Agent** in PowerShell on the authorized Windows test machine. Replace `<relay-host>` with the Relay host name or IP reachable from this machine. `localhost` works only when the Relay is on this same machine. If the installer prompts for a token, enter your `REINS_TOKEN` value.
+
+```powershell
 iex (((irm 'http://<relay-host>:7780/install.ps1') -replace '^\uFEFF'))
+```
 
-# from your workstation:
-reins --relay http://<relay-host>:7780 --token devtoken-please-change agent list
-reins --relay http://<relay-host>:7780 --token devtoken-please-change task run -a <agent> -c "hostname"
+**3. Verify from the operator workstation.** Download and extract the `reins` CLI for your OS from the [latest release](https://github.com/V-T-V/reins/releases/latest). Add the executable to your PATH or use its full path in the commands below. Replace `<relay-host>` with an address reachable from the operator workstation, `<token>` with the `REINS_TOKEN` value, and `<agent-id>` with the ID shown by `agent list`.
+
+```sh
+reins --relay http://<relay-host>:7780 --token <token> agent list
+reins --relay http://<relay-host>:7780 --token <token> task run -a <agent-id> -c "hostname"
 ```
 
 Linux agent: `./reins-agent run -relay ws://<relay>:7780/agent -token <token>` (systemd unit in `deploy/`). Binaries for windows/linux/darwin are on the [Releases](../../releases) page. Production notes: [DEPLOYMENT.md](./DEPLOYMENT.md).
