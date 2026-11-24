@@ -56,6 +56,17 @@ func (r *Relay) handleBootstrap(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "需要鉴权: Bootstrap info requires auth token"})
 		return
 	}
+	// 2026 租户加固:只回显调用者**自己出示的那条**凭据(规范形式)。
+	// 原实现回显整个 cfg.Token——多凭据配置下那串里含着 admin secret,
+	// 等于任何一个低权限凭据调一次 bootstrap 就能把它换走。
+	// 单凭据部署下规范形式 == 配置串,行为不变;租户身份拿到的是自己的凭据,
+	// 用它装出来的 Agent 天然归属本租户。
+	ownToken := ""
+	if r.cfg.Token != "" {
+		if entry, ok := r.matchCredential(credentialFromRequest(req)); ok {
+			ownToken = entry.canonical()
+		}
+	}
 
 	// 优先级 1:ExternalURL(显式配置,最可靠)
 	// 例如 https://203.0.113.10/rmm,会自动派生 wss://203.0.113.10/rmm/agent
@@ -72,7 +83,7 @@ func (r *Relay) handleBootstrap(w http.ResponseWriter, req *http.Request) {
 		}
 		relayURL += "/agent"
 
-		r.emitBootstrap(w, serverURL, relayURL)
+		r.emitBootstrap(w, serverURL, relayURL, ownToken)
 		return
 	}
 
@@ -100,11 +111,12 @@ func (r *Relay) handleBootstrap(w http.ResponseWriter, req *http.Request) {
 	serverURL := scheme + "://" + host + ":" + port
 	relayURL := wsScheme + "://" + host + ":" + port + "/agent"
 
-	r.emitBootstrap(w, serverURL, relayURL)
+	r.emitBootstrap(w, serverURL, relayURL, ownToken)
 }
 
 // emitBootstrap 构造并写入 bootstrap 响应(供 handleBootstrap 复用)。
-func (r *Relay) emitBootstrap(w http.ResponseWriter, serverURL, relayURL string) {
+// ownToken = 调用者自己的凭据(规范形式;未启用鉴权时为空)——绝不使用 cfg.Token 整串。
+func (r *Relay) emitBootstrap(w http.ResponseWriter, serverURL, relayURL, ownToken string) {
 	// 检测 dl/ 是否有 agent.exe
 	agentReady := checkAgentBinaryReady()
 
@@ -117,15 +129,15 @@ func (r *Relay) emitBootstrap(w http.ResponseWriter, serverURL, relayURL string)
 	// 配了 InstallToken 时 Token 已服务端烘焙,零参数形态即可(目标机器连 Token 都不用传)。
 	stripBOM := ") -replace '^\\uFEFF') -replace '^\\u00EF\\u00BB\\u00BF'"
 	oneLine := "iex (((irm '" + serverURL + "/install.ps1'" + stripBOM + ")"
-	if r.cfg.Token != "" && !r.cfg.Dev && r.cfg.InstallToken == "" {
-		oneLine = "& ([scriptblock]::Create((((irm '" + serverURL + "/install.ps1'" + stripBOM + "))) -Token '" + r.cfg.Token + "'"
+	if ownToken != "" && !r.cfg.Dev && r.cfg.InstallToken == "" {
+		oneLine = "& ([scriptblock]::Create((((irm '" + serverURL + "/install.ps1'" + stripBOM + "))) -Token '" + ownToken + "'"
 	}
 	devCmd := "iex (((irm '" + serverURL + "/install.ps1'" + stripBOM + ")"
 
 	info := bootstrapInfo{
 		ServerURL:        serverURL,
 		RelayURL:         relayURL,
-		Token:            r.cfg.Token,
+		Token:            ownToken,
 		OneLineCmd:       oneLine,
 		OneLineDevCmd:    devCmd,
 		AgentBinaryReady: agentReady,

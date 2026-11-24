@@ -22,7 +22,36 @@ import (
 )
 
 // registerHTTP 注册 REST 路由（控制台调用）。
+//
+// 2026 角色落地:/api/ 路由整体挂在 enforceRolePolicy 之下(viewer 默认拒绝,
+// 见 rbac.go);/healthz 与 /metrics 不在 /api/ 前缀下,直接注册在外层 mux。
+// 外层若另有更具体的 /api/... 精确注册(测试常见),按 ServeMux 的特异性规则优先,不受影响。
 func (r *Relay) registerHTTP(mux *http.ServeMux) {
+	api := http.NewServeMux()
+	mux.Handle("/api/", r.enforceRolePolicy(api))
+	mux.HandleFunc("GET /healthz", r.handleHealthz) // D8 深度健康检查
+	// S6:Prometheus 文本格式(供 Prometheus scraper)
+	// P1:有 MetricsToken 时校验(独立于主 Token),都空才真无鉴权
+	mux.HandleFunc("GET /metrics", r.handlePromMetrics)
+	r.registerAPIRoutes(api)
+	// 以下不在 /api/ 前缀下,必须注册在**外层** mux(内层只经 /api/ 前缀可达):
+	// D1:Agent 二进制下载（一行安装用）
+	r.registerDownloadDir(mux)
+	// 一行零参数部署:/install.ps1 服务时动态烘焙外部地址(精确匹配优先于 "/" 静态兜底)
+	r.registerInstallScript(mux)
+	// S6:pprof 调试端点。P1 生产硬化:仅 dev 模式或显式 -debug-pprof 才注册,
+	// 默认不注册(防 heap/goroutine/内存侦察泄露)。注册到独立 mux 不污染 DefaultServeMux。
+	if r.cfg.DebugPprof || r.cfg.Dev {
+		mux.Handle("/debug/pprof/", http.DefaultServeMux)
+		mux.Handle("/debug/pprof/cmdline", http.DefaultServeMux)
+		mux.Handle("/debug/pprof/profile", http.DefaultServeMux)
+		mux.Handle("/debug/pprof/symbol", http.DefaultServeMux)
+		mux.Handle("/debug/pprof/trace", http.DefaultServeMux)
+	}
+}
+
+// registerAPIRoutes 在给定的 mux 上注册全部 /api/ 路由(经 enforceRolePolicy 挂载)。
+func (r *Relay) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/agents", r.handleListAgents)
 	mux.HandleFunc("POST /api/tasks", r.handlePostTask)
 	mux.HandleFunc("POST /api/tasks/batch", r.handleBatchTask)                                            // C10 批量下发
@@ -50,7 +79,6 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/transfer/direct", r.handleTransferDirect)                           // Phase1 直连票据
 	mux.HandleFunc("GET /api/events", r.handleSSE)
 	mux.HandleFunc("GET /api/metrics", r.handleMetrics) // C10 可观测性
-	mux.HandleFunc("GET /healthz", r.handleHealthz)     // D8 深度健康检查
 	// 阶段 3.1:隧道(端口转发)
 	mux.HandleFunc("POST /api/tunnel/open", r.handleTunnelOpen)
 	mux.HandleFunc("POST /api/tunnel/data", r.handleTunnelData)
@@ -60,26 +88,17 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/updates", r.handleUpdateList)
 	mux.HandleFunc("GET /api/updates/latest", r.handleUpdateLatest)
 	mux.HandleFunc("GET /api/updates/download", r.handleUpdateDownload)
-	mux.HandleFunc("POST /api/updates/upload", r.handleUpdateUpload)
-	mux.HandleFunc("POST /api/updates/apply", r.handleUpdateApply)
+	// 2026 角色落地:上传 Agent 二进制 / 触发自更新 = 在目标机执行任意代码,
+	// 与 POST /api/tasks 的 update 类型同属 update.push(admin-only)——
+	// 此前这两个端点只验凭据,等于绕过了那道检查。
+	mux.HandleFunc("POST /api/updates/upload", r.RequireRole("update.push", r.handleUpdateUpload))
+	mux.HandleFunc("POST /api/updates/apply", r.RequireRole("update.push", r.handleUpdateApply))
 	mux.HandleFunc("GET /api/version", r.handleVersion)
 	// 电源操作(标签白名单鉴权)
 	mux.HandleFunc("POST /api/power", r.RequireRole("power.shutdown", r.handlePower))
-	// S6:Prometheus 文本格式(供 Prometheus scraper)
-	// P1:有 MetricsToken 时校验(独立于主 Token),都空才真无鉴权
-	mux.HandleFunc("GET /metrics", r.handlePromMetrics)
-	// S6:pprof 调试端点。P1 生产硬化:仅 dev 模式或显式 -debug-pprof 才注册,
-	// 默认不注册(防 heap/goroutine/内存侦察泄露)。注册到独立 mux 不污染 DefaultServeMux。
-	if r.cfg.DebugPprof || r.cfg.Dev {
-		mux.Handle("/debug/pprof/", http.DefaultServeMux)
-		mux.Handle("/debug/pprof/cmdline", http.DefaultServeMux)
-		mux.Handle("/debug/pprof/profile", http.DefaultServeMux)
-		mux.Handle("/debug/pprof/symbol", http.DefaultServeMux)
-		mux.Handle("/debug/pprof/trace", http.DefaultServeMux)
-	}
 	// XL1:Secret Management(凭据下发不落 audit)
 	mux.HandleFunc("POST /api/secrets", r.RequireRole("secret.put", r.handleSecretPut))
-	mux.HandleFunc("GET /api/secrets/", r.handleSecretGet)
+	mux.HandleFunc("GET /api/secrets/", r.RequireRole("secret.get", r.handleSecretGet))
 	mux.HandleFunc("DELETE /api/secrets/", r.RequireRole("secret.delete", r.handleSecretDelete))
 	// XL4:审计 SIEM 导出(CEF/JSON/Syslog)
 	mux.HandleFunc("GET /api/audit/export", r.handleAuditExport)
@@ -97,10 +116,6 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/scripts/", r.handleScriptGet)
 	mux.HandleFunc("DELETE /api/scripts/", r.handleScriptDelete)
 	mux.HandleFunc("POST /api/scripts/", r.handleScriptRun)
-	// D1:Agent 二进制下载（一行安装用）
-	r.registerDownloadDir(mux)
-	// 一行零参数部署:/install.ps1 服务时动态烘焙外部地址(精确匹配优先于 "/" 静态兜底)
-	r.registerInstallScript(mux)
 	// B2:部署引导(一行安装命令)
 	mux.HandleFunc("GET /api/bootstrap", r.handleBootstrap)
 }
@@ -110,15 +125,16 @@ func (r *Relay) registerHTTP(mux *http.ServeMux) {
 // P1-S7 修复:加鉴权(原无鉴权泄漏 agents 数 + store 错误信息)。
 // 浅健康检查(无需鉴权)用 /healthz/simple,深度需鉴权。
 func (r *Relay) handleHealthz(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		// 无鉴权时只返回最基本的 "ok",不泄漏组件信息
+	id, err := r.authenticate(req)
+	if err != nil {
+		// 无鉴权时只返回最基本的 "ok"，不泄漏组件信息
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 		return
 	}
 	status := map[string]any{
 		"relay":    "ok",
 		"store":    "disabled",
-		"agents":   len(r.agents.Snapshot()),
+		"agents":   len(r.agents.SnapshotForTenant(id.Tenant)), // 2026 租户加固:租户只见本租户在线数
 		"uptime_s": int(time.Since(metrics.StartedAt).Seconds()),
 	}
 	// V5:附带文件传输指标(快速判断传输健康度)
@@ -155,7 +171,8 @@ func (r *Relay) handleHealthz(w http.ResponseWriter, req *http.Request) {
 //
 // 响应: {"tasks":[…], "count":N(本页), "total":M(匹配总数), "offset":O, "enabled":true}
 func (r *Relay) handleListTasks(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -197,6 +214,7 @@ func (r *Relay) handleListTasks(w http.ResponseWriter, req *http.Request) {
 		Statuses: statuses,
 		AgentID:  agentFilter,
 		Type:     typeFilter,
+		Tenant:   id.Tenant, // 2026 租户加固:非 admin 只见本租户任务(旧记录 Tenant="" → 仅 admin 可见,fail-closed)
 		Limit:    20000,
 	})
 	if err != nil {
@@ -243,7 +261,8 @@ func (r *Relay) handleListTasks(w http.ResponseWriter, req *http.Request) {
 //
 // 响应: {"dispatched": ["agent-1","agent-2"], "offline": [], "task_ids": {...}}
 func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -278,8 +297,8 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// 找匹配 Agent
-	agentIDs := r.agents.FindByTag(body.Tag)
+	// 找匹配 Agent(2026 租户加固:标签解析收口到本租户可见集——admin 全量)
+	agentIDs := r.agents.FindByTagForTenant(body.Tag, id.Tenant)
 	if len(agentIDs) == 0 {
 		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("无带标签 %s 的在线 Agent", body.Tag)))
 		return
@@ -301,7 +320,7 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 		}
 		metrics.Inc("submitted")
 		if r.store != nil {
-			r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: time.Now().UnixMilli()})
+			r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: time.Now().UnixMilli(), Submitted: id.auditLabel(), Tenant: id.Tenant})
 		}
 		wg.Add(1)
 		go func(agentID, tid string, t proto.TaskRequest) {
@@ -317,7 +336,7 @@ func (r *Relay) handleBatchTask(w http.ResponseWriter, req *http.Request) {
 			}
 		}(aid, taskID, task)
 		if r.audit != nil {
-			r.audit.Log(AuditEntry{Event: "task_submitted", AgentID: aid, TaskID: taskID, Type: body.Type, Detail: "batch:" + body.Tag})
+			r.audit.Log(AuditEntry{Event: "task_submitted", AgentID: aid, TaskID: taskID, Type: body.Type, Operator: id.auditLabel(), Detail: "batch:" + body.Tag, Tenant: id.Tenant})
 		}
 	}
 	wg.Wait() // D2:等所有并行投递完成
@@ -346,7 +365,8 @@ func summarizePayload(taskType string, payload []byte) string {
 
 // POST /api/tasks/cancel —— 取消任务（C6）。转发 task_cancel 到 Agent，并更新状态。
 func (r *Relay) handleCancelTask(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -373,6 +393,10 @@ func (r *Relay) handleCancelTask(w http.ResponseWriter, req *http.Request) {
 	}
 	if agentID == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("无法确定任务的 agent_id")))
+		return
+	}
+	// 2026 租户加固:取消是动作——目标 Agent 必须归属本租户(admin 全量)。
+	if !r.requireAgentAccess(w, id, agentID) {
 		return
 	}
 
@@ -407,7 +431,8 @@ func (r *Relay) handleCancelTask(w http.ResponseWriter, req *http.Request) {
 
 // GET /api/tasks/{id} —— 单任务详情 + 结果。
 func (r *Relay) handleGetTask(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -425,19 +450,39 @@ func (r *Relay) handleGetTask(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("任务不存在")))
 		return
 	}
+	// 2026 租户加固:跨租户任务详情 → 404(不泄漏存在性);admin 域任务(Tenant="")仅 admin 可见。
+	if id.Tenant != "" && t.Tenant != id.Tenant {
+		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("任务不存在")))
+		return
+	}
 	result, _ := r.store.GetResult(taskID)
 	writeJSON(w, http.StatusOK, map[string]any{"task": t, "result": result})
 }
 
-// GET /api/agents —— 返回所有在线 Agent。
+// GET /api/agents —— 返回在线 Agent(按调用者租户过滤)。
+//
+// 2026 租户加固:
+//   - 正常凭据:admin(无租户)见全量;租户凭据只见本租户 Agent(服务端绑定归属)。
+//   - 部署专用 Token:它烘焙在**未鉴权**的 install.ps1 里,视同半公开——只回答
+//     「?agent_id=<id> 这一台在不在线」,不带 agent_id 直接 403,且绝不返回主机名/
+//     系统/标签/传输画像等任何清单信息(原实现可凭它拉到全局 Agent 清单)。
 func (r *Relay) handleListAgents(w http.ResponseWriter, req *http.Request) {
-	// 部署专用 Token 可读(装完上线确认)
-	if err := r.authorize(req); err != nil && !r.installTokenOK(req) {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
+	id, authErr := r.authenticate(req)
+	if authErr != nil {
+		if !r.installTokenOK(req) {
+			writeJSON(w, http.StatusUnauthorized, errMap(authErr))
+			return
+		}
+		agentID := req.URL.Query().Get("agent_id")
+		if agentID == "" {
+			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("部署 Token 仅支持 agent_id 单机查询")))
+			return
+		}
+		writeJSON(w, http.StatusOK, r.installProbeView(agentID))
 		return
 	}
 	// P2-10 修复：只调一次 Snapshot（原双次调用有 2x 拷贝开销 + 可能不一致）
-	list := r.agents.Snapshot()
+	list := r.agents.SnapshotForTenant(id.Tenant)
 	// V1:为每个 agent 附带传输画像(ub/db/uc/dc/fc,来自心跳上报)
 	agentsWithStats := make([]map[string]any, 0, len(list))
 	for _, a := range list {
@@ -467,11 +512,22 @@ func (r *Relay) handleListAgents(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
+// installProbeView 部署 Token 的单机探活视图:仅 agent_id,在线才有条目。
+// 「不在线」与「从未存在」给同一个答案(空),不提供超出在线存在性的信息。
+func (r *Relay) installProbeView(agentID string) map[string]any {
+	agents := []map[string]any{}
+	if _, online := r.agents.TenantOf(agentID); online {
+		agents = append(agents, map[string]any{"agent_id": agentID})
+	}
+	return map[string]any{"agents": agents, "count": len(agents)}
+}
+
 // POST /api/tasks —— 控制台下发任务到指定 Agent。
 //
 // 请求体即 proto.TaskRequest。Relay 找到目标 Agent 连接后，把任务封装成 Envelope 转发。
 func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -497,9 +553,19 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("未知的任务类型: %s", task.Type)))
 		return
 	}
-	// 短1:高危任务类型 RBAC(power/update)
+	// 2026 角色落地:viewer 只能提交只读型任务(先于对象校验——不向 viewer 泄漏 Agent 是否存在)
+	if id.Role == RoleViewer && !viewerTaskTypes[task.Type] {
+		log.Printf("[rbac] 拒绝 viewer 下发 %s 类型任务 %s", task.Type, task.TaskID)
+		writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("角色 viewer 为只读,只能提交 monitor 类型任务")))
+		return
+	}
+	// 2026 租户加固:对象级授权——目标 Agent 必须归属本租户(admin 全量);
+	// 离线/未知 Agent 对非 admin 一律拒绝(fail-closed,防向别家缓存任务)。
+	if !r.requireAgentAccess(w, id, task.AgentID) {
+		return
+	}
+	// 短1:高危任务类型 RBAC(power/update)——身份取服务端绑定结果(cookie/Bearer 同一道闸)
 	if task.Type == proto.TaskPower || task.Type == proto.TaskUpdate {
-		id := identityFromAuth(req)
 		action := "power.shutdown"
 		if task.Type == proto.TaskUpdate {
 			action = "update.push"
@@ -529,13 +595,46 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusForbidden, errMap(err))
 		return
 	}
-	// H-2:离线分支——曾注册且不支持→400;从未上线或支持→缓存 202
+	// H-2:离线分支——缓存为 pending,Agent 上线后由 dispatchPendingTasks 补投。
+	//
+	// 2026 修复(既有缺陷,非本次加固引入):原实现在这里直接 202「任务已缓存待投递」并返回,
+	// 而下面 C4 的 SaveTask 在它之后——**任务从未落盘**。CLI 还会据此打印「已缓存,上线后
+	// 自动投递」,实际是被静默丢弃,连审计都没有。现在真正落盘;未启用持久化时如实拒绝,
+	// 不再假称已缓存。补投时仍过 dispatchTask 的租户中央闸(只经同租户连接投递)。
 	conn := r.agents.Conn(task.AgentID)
 	caps := r.agentCapabilities(task.AgentID)
 	if conn == nil {
+		// 已知能力的 Agent 不支持该类型 → 400(缓存一个永远无法执行的任务没有意义)
 		if len(caps) > 0 && !r.agentSupports(task.AgentID, task.Type) {
 			writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent %s 不支持任务类型 %s (能力: %v)", task.AgentID, task.Type, caps)))
 			return
+		}
+		if r.store == nil {
+			writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("agent 离线,且持久化未启用,无法缓存任务")))
+			return
+		}
+		now := time.Now().UnixMilli()
+		queued := StoredTask{
+			Request: task, Status: StatusPending, Attempt: 0,
+			CreatedAt: now, UpdatedAt: now,
+			Submitted: id.auditLabel(),
+			Tenant:    id.Tenant,
+		}
+		if err := r.store.SaveTask(queued); err != nil {
+			writeJSON(w, http.StatusInternalServerError, errMap(fmt.Errorf("缓存离线任务失败: %w", err)))
+			return
+		}
+		metrics.Inc("submitted")
+		if r.audit != nil {
+			r.audit.Log(AuditEntry{
+				Event:    "task_submitted",
+				AgentID:  task.AgentID,
+				TaskID:   task.TaskID,
+				Type:     task.Type,
+				Operator: id.auditLabel(),
+				Detail:   "queued(offline) " + summarizePayload(task.Type, task.Payload),
+				Tenant:   id.Tenant,
+			})
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"task_id": task.TaskID, "status": StatusPending, "agent_id": task.AgentID,
@@ -548,15 +647,17 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// C9 审计：记录任务提交
+	// C9 审计：记录任务提交(2026 租户加固:记 Operator/Tenant)
 	metrics.Inc("submitted")
 	if r.audit != nil {
 		r.audit.Log(AuditEntry{
-			Event:   "task_submitted",
-			AgentID: task.AgentID,
-			TaskID:  task.TaskID,
-			Type:    task.Type,
-			Detail:  summarizePayload(task.Type, task.Payload),
+			Event:    "task_submitted",
+			AgentID:  task.AgentID,
+			TaskID:   task.TaskID,
+			Type:     task.Type,
+			Operator: id.auditLabel(),
+			Detail:   summarizePayload(task.Type, task.Payload),
+			Tenant:   id.Tenant,
 		})
 	}
 
@@ -568,6 +669,8 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 		Attempt:   0,
 		CreatedAt: now,
 		UpdatedAt: now,
+		Submitted: id.auditLabel(), // 2026 租户加固:启用预留的提交者字段
+		Tenant:    id.Tenant,
 	}
 	if r.store != nil {
 		if err := r.store.SaveTask(stored); err != nil {
@@ -601,20 +704,37 @@ func (r *Relay) handlePostTask(w http.ResponseWriter, req *http.Request) {
 // P0-C3 修复:投递前 CAS 占坑(CASDispatchToPending),只允许 pending→dispatched。
 // 防止 reaper.tryRedispatch 与 dispatchPendingTasks 并发向 Agent 发同一任务两次。
 func (r *Relay) dispatchTask(conn *wsConn, task proto.TaskRequest) error {
-	// E2/W1:maxAttempts 兜底,防 poison task 无限重投
 	if r.store != nil {
-		if existing, _ := r.store.GetTask(task.TaskID); existing != nil && existing.Attempt >= MaxTaskAttempts {
-			log.Printf("[task] task=%s 达到最大投递次数 %d,转 failed", task.TaskID, MaxTaskAttempts)
-			r.store.UpdateTaskStatus(task.TaskID, StatusFailed)
-			r.store.SaveResult(task.TaskID, proto.TaskResult{
-				TaskID: task.TaskID, Success: false,
-				Error: fmt.Sprintf("达到最大投递次数 %d", MaxTaskAttempts),
-			})
-			metrics.Inc("failed")
-			if r.audit != nil {
-				r.audit.Log(AuditEntry{Event: "task_max_attempts", TaskID: task.TaskID, Detail: fmt.Sprintf("超过 %d 次", MaxTaskAttempts)})
+		if existing, _ := r.store.GetTask(task.TaskID); existing != nil {
+			// 2026 租户加固·中央闸:租户任务只经**同租户**连接投递。这是全部投递路径
+			// (直接下发/离线补投/reaper 重投/batch 重试/DAG/cron)的唯一咽喉——
+			// 即使某条路径的目标解析有疏漏,任务也出不了本租户。admin 域任务不受限。
+			// 必须在 CAS 之前:被拒的投递不改任务状态(留在 pending)。
+			if existing.Tenant != "" {
+				connTenant := ""
+				if conn != nil {
+					connTenant = conn.tenant
+				}
+				if connTenant != existing.Tenant {
+					log.Printf("[tenant] 拒绝投递 task=%s: 任务归属租户 %q 与连接租户 %q 不符",
+						task.TaskID, existing.Tenant, connTenant)
+					return fmt.Errorf("任务 %s 归属租户与目标连接不符", task.TaskID)
+				}
 			}
-			return fmt.Errorf("任务 %s 超过最大投递次数", task.TaskID)
+			// E2/W1:maxAttempts 兜底,防 poison task 无限重投
+			if existing.Attempt >= MaxTaskAttempts {
+				log.Printf("[task] task=%s 达到最大投递次数 %d,转 failed", task.TaskID, MaxTaskAttempts)
+				r.store.UpdateTaskStatus(task.TaskID, StatusFailed)
+				r.store.SaveResult(task.TaskID, proto.TaskResult{
+					TaskID: task.TaskID, Success: false,
+					Error: fmt.Sprintf("达到最大投递次数 %d", MaxTaskAttempts),
+				})
+				metrics.Inc("failed")
+				if r.audit != nil {
+					r.audit.Log(AuditEntry{Event: "task_max_attempts", TaskID: task.TaskID, Detail: fmt.Sprintf("超过 %d 次", MaxTaskAttempts)})
+				}
+				return fmt.Errorf("任务 %s 超过最大投递次数", task.TaskID)
+			}
 		}
 		// P0-C3:CAS 占坑——只允许 pending→dispatched,防止并发重复投递
 		// 已 dispatched/acknowledged/终态的任务跳过(返回 error,调用方可 log 后继续)
@@ -733,7 +853,8 @@ func (r *Relay) recoverInFlightTasks() {
 //	event: task_result
 //	data: {"task_id":"...","success":true,...}
 func (r *Relay) handleSSE(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -784,6 +905,16 @@ func (r *Relay) handleSSE(w http.ResponseWriter, req *http.Request) {
 		case ev, ok := <-ch:
 			if !ok {
 				return
+			}
+			// 2026 租户加固:事件按 Agent 归属过滤——带 AgentID 的事件只发本租户/admin;
+			// 无 AgentID 的 relay 级事件发所有已认证者(SECURITY.md 写明)。
+			// 归属取服务端绑定:在线看注册表,离线(agent_offline 本身、迟到的 task_result)
+			// 回落持久绑定——本租户自己 Agent 的离线事件照常送达;他租户/未知 Agent 一律不投。
+			if id.Tenant != "" && ev.AgentID != "" {
+				tenant, known := r.agentBoundTenant(ev.AgentID)
+				if !known || tenant != id.Tenant {
+					continue
+				}
 			}
 			// P1-C4:每次写前重置 deadline(空闲超时,而非连接绝对超时)
 			rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
@@ -842,8 +973,10 @@ func writeSSE(w http.ResponseWriter, _ http.Flusher, event string, data any) {
 // 请求体: {"agent_id": "agent-host01"}
 // 响应: {"agent_id":"...", "token":"<32字节hex>", "expires_in":3600}
 func (r *Relay) handleGenEnrollToken(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
+	// RequireRole("agent.enroll-token") 已完成鉴权并把身份写入上下文。
+	id, ok := r.identityOf(req)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("无效的鉴权 token")))
 		return
 	}
 	if r.ca == nil {
@@ -857,10 +990,23 @@ func (r *Relay) handleGenEnrollToken(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id 不能为空")))
 		return
 	}
+	// 2026 租户加固:租户内的 admin 只能给自己租户(或尚未绑定)的 Agent 签发注册令牌。
+	// 注册令牌 → 该 ID 的客户端证书;证书在 mTLS 数据面连接上就是身份本身,
+	// 给别家已绑定的 ID 签证等于可能把正主的文件传输挂到冒充者的连接上。
+	// 判定用 mayClaimAgent 而非 requireAgentAccess:这里的目标恰恰是尚未接入的新 Agent,
+	// 「未知即拒」会把租户接入自己的新机器一并挡掉。
+	if !r.mayClaimAgent(id, body.AgentID) {
+		log.Printf("[tenant] 拒绝为 Agent %s 签发注册令牌(调用者租户 %q 不匹配)", body.AgentID, id.Tenant)
+		writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("无权访问该 Agent")))
+		return
+	}
 	token, err := r.ca.GenerateEnrollmentToken(body.AgentID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errMap(err))
 		return
+	}
+	if r.audit != nil {
+		r.audit.Log(AuditEntry{Event: "enroll_token_issued", AgentID: body.AgentID, Operator: id.auditLabel(), Tenant: id.Tenant})
 	}
 	log.Printf("[ca] 为 %s 生成注册令牌", body.AgentID)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -937,6 +1083,16 @@ func (r *Relay) handleRevokeAgent(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id 不能为空")))
 		return
 	}
+	// 2026 租户加固:吊销证书 = 让该 Agent 永久掉线。RequireRole("agent.revoke") 只管角色,
+	// 租户内的 admin 角色原本可凭 ID 吊销**别家** Agent 的证书(跨租户拒绝服务)。
+	id, ok := r.identityOf(req)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("无效的鉴权 token")))
+		return
+	}
+	if !r.requireAgentAccess(w, id, body.AgentID) {
+		return
+	}
 
 	r.ca.RevokeAgent(body.AgentID)
 	// C3 修复：撤销后主动关闭 WS 连接（踢下线）。
@@ -953,7 +1109,7 @@ func (r *Relay) handleRevokeAgent(w http.ResponseWriter, req *http.Request) {
 		TS:      time.Now().UnixMilli(),
 	})
 	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "agent_revoked", AgentID: body.AgentID, Detail: "证书撤销"})
+		r.audit.Log(AuditEntry{Event: "agent_revoked", AgentID: body.AgentID, Operator: id.auditLabel(), Detail: "证书撤销", Tenant: id.Tenant})
 	}
 	notifyAgentRevoked(body.AgentID) // F11:webhook 告警(证书撤销)
 	log.Printf("[ca] 撤销 Agent %s 证书", body.AgentID)
@@ -965,9 +1121,10 @@ func (r *Relay) handleRevokeAgent(w http.ResponseWriter, req *http.Request) {
 
 // --- H2 定时任务 ---
 
-// GET /api/crons —— 列出所有定时规则。
+// GET /api/crons —— 列出定时规则(按调用者租户过滤)。
 func (r *Relay) handleListCrons(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -976,12 +1133,22 @@ func (r *Relay) handleListCrons(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	rules := r.scheduler.ListRules()
+	if id.Tenant != "" { // 2026 租户加固:只保留本租户规则(旧规则无租户 → 仅 admin 可见)
+		visible := make([]CronRule, 0, len(rules))
+		for _, rl := range rules {
+			if rl.Tenant == id.Tenant {
+				visible = append(visible, rl)
+			}
+		}
+		rules = visible
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"crons": rules, "count": len(rules), "enabled": true})
 }
 
 // POST /api/crons —— 新建定时规则。
 func (r *Relay) handleAddCron(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -1002,6 +1169,10 @@ func (r *Relay) handleAddCron(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("未知的任务类型: %s", rule.TaskType)))
 		return
 	}
+	// 2026 租户加固:cron 是持久化定时执行——目标 Agent 归属校验 + 规则记录租户(派生任务继承)
+	if !r.requireAgentAccess(w, id, rule.AgentID) {
+		return
+	}
 	// P0-S2 修复:cron 规则必须经过命令策略校验(原来完全绕过)
 	// cron 是持久化执行,绕过策略 = 永久后门,危害比单次任务更大
 	if err := r.policy.CheckCommandPayload(rule.TaskType, rule.Payload); err != nil {
@@ -1017,19 +1188,21 @@ func (r *Relay) handleAddCron(w http.ResponseWriter, req *http.Request) {
 	if rule.ID == "" {
 		rule.ID = "cron-" + fmt.Sprint(time.Now().UnixMilli())
 	}
+	rule.Tenant = id.Tenant // 服务端维护,请求体声明不参与
 	if err := r.scheduler.AddRule(rule); err != nil {
 		writeJSON(w, http.StatusBadRequest, errMap(err))
 		return
 	}
 	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "cron_added", AgentID: rule.AgentID, Detail: rule.CronExpr})
+		r.audit.Log(AuditEntry{Event: "cron_added", AgentID: rule.AgentID, Operator: id.auditLabel(), Detail: rule.CronExpr, Tenant: id.Tenant})
 	}
 	writeJSON(w, http.StatusCreated, rule)
 }
 
 // DELETE /api/crons/{id} —— 删除定时规则。
 func (r *Relay) handleDeleteCron(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -1042,12 +1215,19 @@ func (r *Relay) handleDeleteCron(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, errMap(fmt.Errorf("调度器未启用")))
 		return
 	}
+	// 2026 租户加固:非本租户的规则按不存在处理
+	if id.Tenant != "" {
+		if rl, ok := r.scheduler.GetRule(ruleID); !ok || rl.Tenant != id.Tenant {
+			writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("规则不存在")))
+			return
+		}
+	}
 	if err := r.scheduler.RemoveRule(ruleID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, errMap(err))
 		return
 	}
 	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "cron_deleted", Detail: ruleID})
+		r.audit.Log(AuditEntry{Event: "cron_deleted", Operator: id.auditLabel(), Detail: ruleID, Tenant: id.Tenant})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": ruleID, "deleted": true})
 }
@@ -1057,7 +1237,8 @@ func (r *Relay) handleDeleteCron(w http.ResponseWriter, req *http.Request) {
 // POST /api/shell/open —— 开启终端会话。
 // 请求体: {"agent_id":"...", "cols":80, "rows":24, "shell":"powershell"}
 func (r *Relay) handleShellOpen(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -1069,6 +1250,10 @@ func (r *Relay) handleShellOpen(w http.ResponseWriter, req *http.Request) {
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.AgentID == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id 不能为空")))
+		return
+	}
+	// 2026 租户加固:shell 是高危通道——目标 Agent 必须归属本租户(admin 全量)
+	if !r.requireAgentAccess(w, id, body.AgentID) {
 		return
 	}
 	conn := r.agents.Conn(body.AgentID)
@@ -1088,7 +1273,7 @@ func (r *Relay) handleShellOpen(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "shell_opened", AgentID: body.AgentID, Detail: sessionID})
+		r.audit.Log(AuditEntry{Event: "shell_opened", AgentID: body.AgentID, Operator: id.auditLabel(), Detail: sessionID, Tenant: id.Tenant})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": sessionID,
@@ -1104,7 +1289,8 @@ func (r *Relay) handleShellOpen(w http.ResponseWriter, req *http.Request) {
 // 局限:shell 是交互式流,用户可分多次输入绕过单行检测(如 'Forma'+'t-Volume')。
 // 根本防线是 P0-S3(Agent 侧强制校验),这里做行级快速过滤。
 func (r *Relay) handleShellInput(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -1115,6 +1301,10 @@ func (r *Relay) handleShellInput(w http.ResponseWriter, req *http.Request) {
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.SessionID == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("session_id 不能为空")))
+		return
+	}
+	// 2026 租户加固:向会话注入 stdin 属于动作——目标 Agent 归属校验
+	if body.AgentID != "" && !r.requireAgentAccess(w, id, body.AgentID) {
 		return
 	}
 	// P0-S1:解码 base64 后过命令策略校验
@@ -1138,7 +1328,7 @@ func (r *Relay) handleShellInput(w http.ResponseWriter, req *http.Request) {
 	}
 	// P2-S4 修复:shell input 必须审计(原来完全无审计)
 	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "shell_input", AgentID: body.AgentID, Detail: summarizeBase64(body.DataB64, 200)})
+		r.audit.Log(AuditEntry{Event: "shell_input", AgentID: body.AgentID, Operator: id.auditLabel(), Detail: summarizeBase64(body.DataB64, 200), Tenant: id.Tenant})
 	}
 	input := proto.ShellInput{SessionID: body.SessionID, DataB64: body.DataB64}
 	env, _ := proto.NewEnvelope(proto.TypeShellInput, "relay", body.AgentID, input)
@@ -1168,7 +1358,8 @@ func summarizeBase64(b64 string, maxLen int) string {
 
 // POST /api/shell/close —— 关闭会话。
 func (r *Relay) handleShellClose(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -1180,6 +1371,9 @@ func (r *Relay) handleShellClose(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("session_id 不能为空")))
 		return
 	}
+	if body.AgentID != "" && !r.requireAgentAccess(w, id, body.AgentID) {
+		return
+	}
 	conn := r.agents.Conn(body.AgentID)
 	if conn != nil {
 		sc := proto.ShellClose{SessionID: body.SessionID, Reason: "console closed"}
@@ -1189,7 +1383,7 @@ func (r *Relay) handleShellClose(w http.ResponseWriter, req *http.Request) {
 		_ = conn.writeJSON(ctx, env)
 	}
 	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "shell_closed", AgentID: body.AgentID, Detail: body.SessionID})
+		r.audit.Log(AuditEntry{Event: "shell_closed", AgentID: body.AgentID, Operator: id.auditLabel(), Detail: body.SessionID, Tenant: id.Tenant})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"session_id": body.SessionID, "closed": true})
 }
@@ -1206,7 +1400,8 @@ func (r *Relay) handleShellClose(w http.ResponseWriter, req *http.Request) {
 // Relay 不落盘，仅 256KB 缓冲转发。
 func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 	xferStart := time.Now() // Q4:传输耗时日志
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -1215,6 +1410,10 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 	transferID := req.URL.Query().Get("transfer_id")
 	if agentID == "" || path == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id 和 path 不能为空")))
+		return
+	}
+	// 2026 租户加固:上传是写动作——目标 Agent 归属校验
+	if !r.requireAgentAccess(w, id, agentID) {
 		return
 	}
 	if transferID == "" {
@@ -1376,7 +1575,8 @@ func (r *Relay) handleTransferUpload(w http.ResponseWriter, req *http.Request) {
 // handleTransferDownload 下载：Agent 读文件 → 二进制帧 → Relay → Console HTTP response。
 func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request) {
 	xferStart := time.Now() // Q4:传输耗时
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -1385,6 +1585,10 @@ func (r *Relay) handleTransferDownload(w http.ResponseWriter, req *http.Request)
 	transferID := req.URL.Query().Get("transfer_id")
 	if agentID == "" || path == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id 和 path 不能为空")))
+		return
+	}
+	// 2026 租户加固:下载是读动作——目标 Agent 归属校验(cookie 路径的身份同样生效)
+	if !r.requireAgentAccess(w, id, agentID) {
 		return
 	}
 	if transferID == "" {

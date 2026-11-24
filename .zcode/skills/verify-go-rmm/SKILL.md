@@ -37,7 +37,7 @@ bash .zcode/skills/verify-go-rmm/verify.sh launch --port 28631
 bash .zcode/skills/verify-go-rmm/verify.sh doctor
 ```
 
-go build ./...（7 核心包）+ go vet ./... + `go test ./proto/` 快测 + 活实例探活。relay 包全测约 10s+、14 包全量按需手动 `go test ./... -count=1`（577 PASS + 1 既有 SKIP；函数口径 582——AGENTS 同源，2026-11-19 同步）。
+go build ./...（7 核心包）+ go vet ./... + `go test ./proto/` 快测 + 活实例探活。relay 包全测约 10s+、14 包全量按需手动 `go test ./... -count=1`（605 PASS + 1 既有 SKIP；函数口径 610——AGENTS 同源，2026-11-24 同步）。
 
 ## Drive（probe 探针组）
 

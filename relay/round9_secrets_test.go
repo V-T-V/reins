@@ -10,7 +10,7 @@ import (
 // TestSecretStorePutGetRoundTrip 验证存取往返与默认 TTL。
 func TestSecretStorePutGetRoundTrip(t *testing.T) {
 	ss := NewSecretStore()
-	ref, err := ss.Put("db-password-123", 0, false)
+	ref, err := ss.Put("db-password-123", 0, false, "")
 	if err != nil {
 		t.Fatalf("Put 失败: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestSecretStorePutGetRoundTrip(t *testing.T) {
 // TestSecretStoreOneTimeConsumed 验证一次性凭据取后即删(防重放)。
 func TestSecretStoreOneTimeConsumed(t *testing.T) {
 	ss := NewSecretStore()
-	ref, _ := ss.Put("api-key-xyz", time.Minute, true)
+	ref, _ := ss.Put("api-key-xyz", time.Minute, true, "")
 
 	v, ok := ss.Get(ref)
 	if !ok || v != "api-key-xyz" {
@@ -49,7 +49,7 @@ func TestSecretStoreOneTimeConsumed(t *testing.T) {
 // TestSecretStoreTTLExpiry 验证过期凭据不可读且被清理。
 func TestSecretStoreTTLExpiry(t *testing.T) {
 	ss := NewSecretStore()
-	ref, _ := ss.Put("short-lived", 50*time.Millisecond, false)
+	ref, _ := ss.Put("short-lived", 50*time.Millisecond, false, "")
 
 	// 未过期:命中
 	if _, ok := ss.Get(ref); !ok {
@@ -65,7 +65,7 @@ func TestSecretStoreTTLExpiry(t *testing.T) {
 // TestSecretStoreDelete 显式删除后不可读。
 func TestSecretStoreDelete(t *testing.T) {
 	ss := NewSecretStore()
-	ref, _ := ss.Put("v", 0, false)
+	ref, _ := ss.Put("v", 0, false, "")
 	ss.Delete(ref)
 	if _, ok := ss.Get(ref); ok {
 		t.Fatal("删除后应 miss")
@@ -88,7 +88,7 @@ func TestSecretStoreConcurrent(t *testing.T) {
 	const N = 50
 	refs := make([]string, N)
 	for i := 0; i < N; i++ {
-		refs[i], _ = ss.Put("val", time.Hour, true) // 全部一次性
+		refs[i], _ = ss.Put("val", time.Hour, true, "") // 全部一次性
 	}
 	var wg sync.WaitGroup
 	consumed := int32(0)
@@ -116,7 +116,7 @@ func TestSecretStoreRefUniqueness(t *testing.T) {
 	ss := NewSecretStore()
 	seen := make(map[string]bool, 100)
 	for i := 0; i < 100; i++ {
-		ref, err := ss.Put("v", 0, false)
+		ref, err := ss.Put("v", 0, false, "")
 		if err != nil {
 			t.Fatalf("Put %d 失败: %v", i, err)
 		}

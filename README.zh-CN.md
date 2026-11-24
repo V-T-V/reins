@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 [![CI](https://github.com/V-T-V/reins/actions/workflows/ci.yml/badge.svg)](https://github.com/V-T-V/reins/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/V-T-V/reins?display_name=tag&sort=semver)](../../releases)
-[![Tests](https://img.shields.io/badge/tests-582-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-610-brightgreen)]()
 [![CLI](https://img.shields.io/badge/CLI-50%2B%20commands-blue)]()
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
@@ -152,7 +152,7 @@ Reins 从 Windows 运维场景中长出来:Agent 注册为**原生 Windows 服�
 
 | | reins | MeshCentral | TacticalRMM | Teleport | RustDesk |
 |---|---|---|---|---|---|
-| License | **MIT** | Apache-2.0 | source-available | source-available¹ | AGPL-3.0 |
+| License | **MIT** | Apache-2.0 | source-available¹ | AGPL-3.0 | AGPL-3.0 |
 | 服务端 | **Go 单二进制** | Node.js | Django+Vue+Go+MQ | Go(较重) | Rust |
 | 完整 RMM(批量/DAG/监控) | ✅ | 部分 | ✅(MSP 向) | ✖(访问平面) | ✖(桌面远控) |
 | 设备身份(mTLS+CA+CRL) | ✅ | 部分 | 部分 | ✅ | ✖ |
@@ -161,7 +161,7 @@ Reins 从 Windows 运维场景中长出来:Agent 注册为**原生 Windows 服�
 | AI 代理规则门禁 | ✅ | ✖ | ✖ | ✖ | ✖ |
 | 数据面 | 自托管 | 自托管 | 自托管 | 自托管 | 自托管 |
 
-¹ Teleport Community License(2024):免费档限公司 <100 员工且年收入 <$10M。
+¹ Tactical RMM License v1.0(AmidaWare):source-available,非 OSI 认可的开源许可证。
 
 ---
 
@@ -211,7 +211,7 @@ Reins 从 Windows 运维场景中长出来:Agent 注册为**原生 Windows 服�
 ### 企业级能力
 | 能力 | 说明 |
 |------|------|
-| **多租户 RBAC** | `tenant:role:secret` token,组织/角色/权限/配额;组织 bbolt 持久化(重启不丢),禁用/删除即失效 |
+| **多租户 RBAC** | `tenant:role:secret` 凭据,租户与角色由 **Relay 配置绑定**(请求方自称的前缀不参与判定);对象级租户隔离(Agent/任务/审计/事件流/Secret);组织按凭据自动建立、bbolt 持久化,禁用即失效(跨重启保持) |
 | **审计防篡改** | hash chain + SIEM 导出(CEF/Syslog/JSON) |
 | **批量分发** | 一对多分发 + 结果聚合 + 指数退避重试 + 实时进度;异步 REST 端点 + SSE 进度流 + CLI `batch start/status/watch` |
 | **DAG 编排** | 依赖图 + 并发上限 + 失败级联跳过 + 软依赖(`dag apply/list/status`) |
@@ -347,12 +347,12 @@ CLI 全局 flag:`--relay`(默认 `http://127.0.0.1:7780`)、`--token`、`--outpu
 | 层 | 机制 |
 |----|------|
 | **传输** | 反向 WS(wss://)+ mTLS 双向认证 + 内置 CA + CRL 吊销 |
-| **鉴权** | `tenant:role:secret` token;空 token 配置 = 不校验(仅 dev) |
-| **授权** | RBAC 三角色(admin/operator/viewer)+ 细粒度 action |
+| **鉴权** | 单凭据或多凭据列表(`tenant:role:secret`);身份取 Relay 配置条目,Bearer 与 cookie 同一道闸;空 token 配置 = 不校验(仅 dev) |
+| **授权** | RBAC 三角色(admin/operator/viewer);`viewer` 默认拒绝、只读,admin-only 操作无旁路端点 |
 | **命令策略** | 黑名单拦截高危命令(Format-Volume 等),批量/DAG 路径同样校验;可选 allow-only 白名单(交集语义) |
 | **审计** | hash chain 防篡改 + 异步落盘 + SIEM 导出(CEF/Syslog) |
 | **Secret** | 引用式凭据(TTL + 一次性),不落 audit |
-| **隔离** | 租户只能看自己的 Agent(tags["tenant"] 过滤) |
+| **隔离** | Agent 归属 = **注册它时所用的凭据**(Relay 维护并持久化;Agent 自报的标签不参与鉴权);任务、批量、DAG、shell、传输、审计、事件流、Secret、脚本库、cron 均按归属校验 |
 
 > 深度防御:黑名单为 best-effort(可绕过),Agent 侧二次校验兜底;需要收紧时启用白名单——
 > Relay `-policy-allow '^Get-Service,^node '`(或 `REINS_POLICY_ALLOW` env,逗号分隔正则)、
@@ -372,15 +372,20 @@ token 格式(向后兼容):
 |------|------|
 | `secret123` | 旧格式,无租户,全权限(admin) |
 | `tenant:role:secret` | 租户隔离 + 角色,如 `acme:operator:s3cr3t` |
+| `:admin:s1,acme:operator:s2,...` | **多凭据列表**(逗号分隔):每条都必须写全 `[:tenant:]role:secret`,全局 admin 写 `:admin:secret`;列表里的裸 secret 会被拒绝 |
 
 **角色**:
 - `admin` — 全权限(默认,旧 token 等效)
 - `operator` — 可下发任务/管理 Agent,不可 revoke/电源
-- `viewer` — 只读(查看 agents/tasks/metrics)
+- `viewer` — 只读(查看 agents/tasks/metrics,可提交 `monitor` 任务);其余端点默认拒绝
 
 **组织(Organization)**:每个租户一个组织实体,含名称、Agent 配额(`Quota`,0=不限)、启停(`Enabled`,禁用后该租户所有操作被拒)。
 
-**隔离规则**:`tenant=acme` 的 token 只能看到 `Tags["tenant"]="acme"` 的 Agent;旧 token(无 tenant)看全部。
+**身份绑定**:凭据认证只看 secret,租户与角色一律取 Relay 配置里那条凭据的值。持有 acme secret 的人无论出示 `acme:operator:<secret>`、裸 `<secret>` 还是伪造 `x:admin:<secret>`,身份都是 acme/operator——省略或伪造前缀不会提权。
+
+**隔离规则**:Agent 归属由**注册它的连接所用凭据**决定并持久化,`acme` 的凭据只能看到、操作归属 acme 的 Agent;其它租户与部署 Token 不能顶替已归属的 agent ID。全局 admin 凭据不受限。
+
+**一个 Relay 就是一个信任域。** 租户隔离隔开的是同一 Relay 上持凭据的用户之间;客户之间、不同密级的部门之间需要硬隔离时,请**分别部署 Relay**。完整的信任模型与已知边界见 [SECURITY.md](./SECURITY.md)。
 
 **可配置策略**:`RolePolicy` 可在启动时从配置注入角色→action 映射,也可运行期 `GrantRole` 动态加权限(替代硬编码)。
 
@@ -637,13 +642,13 @@ info, _ := c.Sysinfo("agent-1")
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 256 |
-| 代码行 | 49,000+ |
+| Go 文件 | 268 |
+| 代码行 | 33,700+(非测试 .go,`wc -l`,2026-11-24 实测) |
 | CLI 命令 | 50+ |
 | API 端点 | 40+(OpenAPI 全量契约) |
 | SDK 方法 | 45+ |
-| 测试用例 | 569 |
-| 基准测试 | 26 |
+| 测试用例 | 610(`^func Test` 全仓口径,2026-11-24) |
+| 基准测试 | 35 |
 | 任务类型 | 9 |
 | CI | build + `go test -race` + golangci + 三平台编译门禁 |
 
@@ -651,6 +656,7 @@ info, _ := c.Sysinfo("agent-1")
 
 - **Windows Agent 一等公民**;Linux Agent 覆盖 script/monitor + 15 组方言化运维命令(约 85%)——已在 Ubuntu 24.04/WSL2 实测全链路(linux relay+agent+sh 脚本执行+方言化 sysinfo,Windows CLI 跨系统操作)。
 - **单 Relay 是默认部署形态**;多 Relay 故障切换与 Redis TaskStore/EventBus 联邦已实现并有测试,生产硬化持续中。
+- **租户隔离不是硬边界**:同一 Relay 上的所有租户共用一个进程、一套命令策略与一个版本仓库,Relay 运维方对一切有权限。客户之间或不同密级之间请分别部署 Relay。
 - 命令黑名单是 best-effort 设计;严格环境请启用 allow-only 白名单(Relay `-policy-allow` + Agent `policy_allow`)。
 
 ---

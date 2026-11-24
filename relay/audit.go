@@ -40,6 +40,10 @@ type AuditLog struct {
 }
 
 // AuditEntry 单条审计记录(不含 hash,hash 在写入时计算)。
+//
+// 2026 租户加固:Tenant/Operator 新增字段均 omitempty——旧记录无值时
+// re-marshal 逐字节不变,VerifyChain 的 hash 重算对历史链保持兼容。
+// Operator 格式 "tenant/role"(admin 域为 "/admin"→ 实际记 "admin")。
 type AuditEntry struct {
 	TS       int64  `json:"ts"`
 	Event    string `json:"event"`
@@ -48,6 +52,7 @@ type AuditEntry struct {
 	Type     string `json:"type,omitempty"`
 	Operator string `json:"operator,omitempty"`
 	Detail   string `json:"detail,omitempty"`
+	Tenant   string `json:"tenant,omitempty"` // 2026 租户加固:操作者凭据绑定的租户(查询/导出按此过滤)
 }
 
 // auditRecord 写入磁盘的完整记录(含 hash chain)。
@@ -67,15 +72,65 @@ func OpenAuditLog(path string) (*AuditLog, error) {
 		return nil, fmt.Errorf("打开审计日志失败: %w", err)
 	}
 	a := &AuditLog{
-		file:    f,
-		hash:    sha256.New(),
-		ch:      make(chan AuditEntry, 256), // 缓冲 256 条,满则阻塞(背压)
-		closeCh: make(chan struct{}),
+		file:     f,
+		hash:     sha256.New(),
+		ch:       make(chan AuditEntry, 256), // 缓冲 256 条,满则阻塞(背压)
+		closeCh:  make(chan struct{}),
+		prevHash: seedPrevHash(path),
 	}
 	a.lineEnc = json.NewEncoder(&a.lineBuf)
 	// 异步写入 goroutine(真异步,不阻塞请求)
 	go a.writeLoop()
 	return a, nil
+}
+
+// seedPrevHash 回放审计文件,取最后一条可解析记录的 this_hash 作为续写链的起点。
+//
+// 2026 修复(既有缺陷):此前 prevHash 从零值起步——文件以追加模式打开却不回放,
+// Relay **每次重启后**的首条记录 prev_hash 都是空串,VerifyChain 在该行报「链断裂」。
+// 防篡改审计链每次重启自己断一次,等于链校验对重启后的记录失去证明力。
+//
+// 只读文件尾部(最后一条记录必在尾部);窗口内找不到完整记录(单条超大)才全量读。
+// 文件为空/不存在/无可解析记录 → 空串(与创世一致)。尾部撕裂的半条记录被跳过,
+// 它本身仍会被 VerifyChain 判为损坏——撕裂是真实的完整性事件,不掩盖;
+// 同理,此前已经断掉的旧链也照旧可见,这里只保证从现在起续得上。
+func seedPrevHash(path string) string {
+	const window = 64 << 10
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || fi.Size() == 0 {
+		return ""
+	}
+	size := fi.Size()
+	read := func(off, n int64) []byte {
+		buf := make([]byte, n)
+		r, _ := f.ReadAt(buf, off)
+		return buf[:r]
+	}
+	data := read(0, size)
+	if size > window {
+		if tail := read(size-window, window); len(tail) > 0 {
+			if i := bytes.IndexByte(tail, '\n'); i >= 0 {
+				data = tail[i+1:] // 窗口首行大概率被截断,丢弃到第一个换行之后
+			}
+			// 窗口内没有换行 = 单条记录超过窗口,保持全量读
+		}
+	}
+	lines := splitLines(data)
+	for i := len(lines) - 1; i >= 0; i-- {
+		if len(lines[i]) == 0 {
+			continue
+		}
+		var rec auditRecord
+		if json.Unmarshal(lines[i], &rec) == nil && rec.ThisHash != "" {
+			return rec.ThisHash
+		}
+	}
+	return ""
 }
 
 // writeLoop 异步写入循环(单 goroutine 串行写,保证顺序)。

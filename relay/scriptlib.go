@@ -6,6 +6,16 @@
 // 存储:data/scripts/<name>.ps1 (或 .sh/.bat)
 // 管理通过 SecretStore 模式(文件系统 + metadata)。
 //
+// 2026 租户加固:脚本按**命名空间**隔离——
+//
+//	data/scripts/<name>            admin 域(既有布局不变,旧脚本原地可用)
+//	data/scripts/<tenant>/<name>   租户 <tenant> 的私有脚本
+//
+// 脚本常内嵌口令与部署参数,原来是全局共享的:任一租户都能读、能删、
+// 还能在自己的 Agent 上运行别的租户上传的脚本(等于拿到对方的脚本内容)。
+// 租户身份被固定在本租户命名空间;admin 默认在根命名空间,可用 ?tenant=<id>
+// 进入某租户的命名空间查看/管理。脚本名禁止含路径分隔符,租户无法借名字越出自己的目录。
+//
 // API:
 //
 //	POST   /api/scripts          上传脚本(name + content)
@@ -32,15 +42,27 @@ type ScriptLibrary struct {
 	dir string // data/scripts/
 }
 
-// validateScriptName 校验脚本名安全:禁止路径穿越(../, 绝对路径, 分隔符),
-// 并二次确认解析后路径仍在脚本目录内(纵深防御,防清理绕过)。
+// scopeDir 返回命名空间对应的目录。scope 为空 = 根目录(admin 域);
+// 否则必须是合法租户 ID(单一路径段),目录为 data/scripts/<scope>/。
+func (lib *ScriptLibrary) scopeDir(scope string) (string, bool) {
+	if scope == "" {
+		return lib.dir, true
+	}
+	if !validTenantID(scope) {
+		return "", false
+	}
+	return filepath.Join(lib.dir, scope), true
+}
+
+// validateScriptNameIn 校验脚本名相对目录 dir 是否安全:禁止路径穿越(../, 绝对路径,
+// 分隔符),并二次确认解析后路径仍在该目录内(纵深防御,防清理绕过)。
 // 返回安全时 (cleanedName, true),危险时 ("", false)。
 //
 // 背景:GET/DELETE /api/scripts/{name} 原先未校验 name,
 // /api/scripts/../../etc/passwd 经 filepath.Join 清理后逃逸出脚本目录,
 // 可读取/删除脚本目录外任意文件(CVE 级路径穿越)。
-func (lib *ScriptLibrary) validateScriptName(name string) (string, bool) {
-	if lib == nil || name == "" {
+func validateScriptNameIn(dir, name string) (string, bool) {
+	if dir == "" || name == "" {
 		return "", false
 	}
 	// 第一道:字符级黑名单(快速拒绝明显的穿越尝试)。
@@ -48,8 +70,8 @@ func (lib *ScriptLibrary) validateScriptName(name string) (string, bool) {
 		return "", false
 	}
 	// 第二道:解析后路径必须严格位于脚本目录内(防清理绕过,如 URL 编码/符号链接)。
-	cleaned := filepath.Clean(filepath.Join(lib.dir, name))
-	absDir, err1 := filepath.Abs(lib.dir)
+	cleaned := filepath.Clean(filepath.Join(dir, name))
+	absDir, err1 := filepath.Abs(dir)
 	resolvedDir, err2 := filepath.Abs(cleaned)
 	if err1 != nil || err2 != nil {
 		return "", false
@@ -58,6 +80,14 @@ func (lib *ScriptLibrary) validateScriptName(name string) (string, bool) {
 		return "", false
 	}
 	return name, true
+}
+
+// validateScriptName 根命名空间(admin 域)的名字校验(既有调用方与测试沿用)。
+func (lib *ScriptLibrary) validateScriptName(name string) (string, bool) {
+	if lib == nil {
+		return "", false
+	}
+	return validateScriptNameIn(lib.dir, name)
 }
 
 // NewScriptLibrary 构造。
@@ -78,9 +108,18 @@ type ScriptInfo struct {
 	ModifiedAt int64  `json:"modified_at"`
 }
 
-// List 列出所有脚本。
+// List 列出根命名空间(admin 域)的全部脚本。
 func (lib *ScriptLibrary) List() []ScriptInfo {
-	entries, err := os.ReadDir(lib.dir)
+	return lib.ListIn("")
+}
+
+// ListIn 列出指定命名空间的全部脚本(子目录即其它命名空间,不计入)。
+func (lib *ScriptLibrary) ListIn(scope string) []ScriptInfo {
+	dir, ok := lib.scopeDir(scope)
+	if !ok {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
@@ -106,44 +145,88 @@ func (lib *ScriptLibrary) List() []ScriptInfo {
 	return infos
 }
 
-// Save 保存脚本。
-// 安全校验:name 经 validateScriptName,禁止路径穿越(纵深防御,防绕过 handler)。
+// Save 保存脚本到根命名空间(admin 域)。
 func (lib *ScriptLibrary) Save(name, content string) error {
-	if _, ok := lib.validateScriptName(name); !ok {
+	return lib.SaveIn("", name, content)
+}
+
+// SaveIn 保存脚本到指定命名空间。
+// 安全校验:name 经 validateScriptNameIn,禁止路径穿越(纵深防御,防绕过 handler)。
+func (lib *ScriptLibrary) SaveIn(scope, name, content string) error {
+	dir, ok := lib.scopeDir(scope)
+	if !ok {
+		return fmt.Errorf("脚本命名空间非法")
+	}
+	if _, ok := validateScriptNameIn(dir, name); !ok {
 		return fmt.Errorf("name 非法(路径穿越或为空)")
 	}
-	path := filepath.Join(lib.dir, name)
+	if scope != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+	path := filepath.Join(dir, name)
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
-// Read 读取脚本内容。
-// 安全校验:name 经 validateScriptName,禁止路径穿越(防读到脚本目录外文件)。
+// Read 读取根命名空间(admin 域)的脚本内容。
 func (lib *ScriptLibrary) Read(name string) (string, error) {
-	if _, ok := lib.validateScriptName(name); !ok {
+	return lib.ReadIn("", name)
+}
+
+// ReadIn 读取指定命名空间的脚本内容。
+// 安全校验:name 经 validateScriptNameIn,禁止路径穿越(防读到脚本目录外文件)。
+func (lib *ScriptLibrary) ReadIn(scope, name string) (string, error) {
+	dir, ok := lib.scopeDir(scope)
+	if !ok {
+		return "", fmt.Errorf("脚本命名空间非法")
+	}
+	if _, ok := validateScriptNameIn(dir, name); !ok {
 		return "", fmt.Errorf("name 非法(路径穿越或为空)")
 	}
-	data, err := os.ReadFile(filepath.Join(lib.dir, name))
+	data, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
 		return "", err
 	}
 	return string(data), nil
 }
 
-// Delete 删除脚本。
-// 安全校验:name 经 validateScriptName,禁止路径穿越(防删脚本目录外文件)。
+// Delete 删除根命名空间(admin 域)的脚本。
 func (lib *ScriptLibrary) Delete(name string) error {
-	if _, ok := lib.validateScriptName(name); !ok {
+	return lib.DeleteIn("", name)
+}
+
+// DeleteIn 删除指定命名空间的脚本。
+// 安全校验:name 经 validateScriptNameIn,禁止路径穿越(防删脚本目录外文件)。
+func (lib *ScriptLibrary) DeleteIn(scope, name string) error {
+	dir, ok := lib.scopeDir(scope)
+	if !ok {
+		return fmt.Errorf("脚本命名空间非法")
+	}
+	if _, ok := validateScriptNameIn(dir, name); !ok {
 		return fmt.Errorf("name 非法(路径穿越或为空)")
 	}
-	return os.Remove(filepath.Join(lib.dir, name))
+	return os.Remove(filepath.Join(dir, name))
 }
 
 // 全局实例(在 main.go 初始化)。
 var scriptLib *ScriptLibrary
 
-// handleScriptList GET /api/scripts — 列出脚本库。
+// scriptScope 解析本次请求的脚本库命名空间(2026 租户加固)。
+// 租户身份固定在本租户命名空间——?tenant= 参数对它无效,不能进入别人的目录;
+// admin 默认根命名空间(admin 域),可用 ?tenant=<id> 进入某租户的命名空间查看/管理。
+func (r *Relay) scriptScope(req *http.Request, id Identity) (string, bool) {
+	scope := id.Tenant
+	if scope == "" {
+		scope = req.URL.Query().Get("tenant")
+	}
+	return scope, scope == "" || validTenantID(scope)
+}
+
+// handleScriptList GET /api/scripts — 列出脚本库(调用者可见的命名空间)。
 func (r *Relay) handleScriptList(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -151,13 +234,19 @@ func (r *Relay) handleScriptList(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"scripts": []any{}, "enabled": false})
 		return
 	}
-	scripts := scriptLib.List()
+	scope, ok := r.scriptScope(req, id)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("tenant 参数非法")))
+		return
+	}
+	scripts := scriptLib.ListIn(scope)
 	writeJSON(w, http.StatusOK, map[string]any{"scripts": scripts, "count": len(scripts), "enabled": true})
 }
 
-// handleScriptUpload POST /api/scripts — 上传脚本。
+// handleScriptUpload POST /api/scripts — 上传脚本(落到调用者的命名空间)。
 func (r *Relay) handleScriptUpload(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -177,33 +266,49 @@ func (r *Relay) handleScriptUpload(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("name 和 content 不能为空")))
 		return
 	}
+	scope, ok := r.scriptScope(req, id)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("tenant 参数非法")))
+		return
+	}
 	// 安全:禁止路径穿越(与 get/delete/run 共用校验器)
 	if _, ok := scriptLib.validateScriptName(body.Name); !ok {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("name 含非法字符")))
 		return
 	}
-	if err := scriptLib.Save(body.Name, body.Content); err != nil {
+	if err := scriptLib.SaveIn(scope, body.Name, body.Content); err != nil {
 		writeJSON(w, http.StatusInternalServerError, errMap(err))
 		return
 	}
 	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "script_uploaded", Detail: body.Name})
+		r.audit.Log(AuditEntry{Event: "script_uploaded", Operator: id.auditLabel(), Detail: body.Name, Tenant: id.Tenant})
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"name": body.Name, "size": len(body.Content)})
 }
 
 // handleScriptGet GET /api/scripts/{name} — 读取脚本。
 func (r *Relay) handleScriptGet(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
 	name := strings.TrimPrefix(req.URL.Path, "/api/scripts/")
-	if _, ok := scriptLib.validateScriptName(name); !ok {
+	if scriptLib == nil {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("脚本库未启用")))
+		return
+	}
+	scope, ok := r.scriptScope(req, id)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("tenant 参数非法")))
+		return
+	}
+	dir, _ := scriptLib.scopeDir(scope)
+	if _, ok := validateScriptNameIn(dir, name); !ok {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("缺少 name 或含非法字符")))
 		return
 	}
-	content, err := scriptLib.Read(name)
+	content, err := scriptLib.ReadIn(scope, name)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("脚本不存在: %s", name)))
 		return
@@ -213,28 +318,41 @@ func (r *Relay) handleScriptGet(w http.ResponseWriter, req *http.Request) {
 
 // handleScriptDelete DELETE /api/scripts/{name} — 删除脚本。
 func (r *Relay) handleScriptDelete(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
 	name := strings.TrimPrefix(req.URL.Path, "/api/scripts/")
-	if _, ok := scriptLib.validateScriptName(name); !ok {
+	if scriptLib == nil {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("脚本库未启用")))
+		return
+	}
+	scope, ok := r.scriptScope(req, id)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("tenant 参数非法")))
+		return
+	}
+	dir, _ := scriptLib.scopeDir(scope)
+	if _, ok := validateScriptNameIn(dir, name); !ok {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("缺少 name 或含非法字符")))
 		return
 	}
-	if err := scriptLib.Delete(name); err != nil {
+	if err := scriptLib.DeleteIn(scope, name); err != nil {
 		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("脚本不存在")))
 		return
 	}
 	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "script_deleted", Detail: name})
+		r.audit.Log(AuditEntry{Event: "script_deleted", Operator: id.auditLabel(), Detail: name, Tenant: id.Tenant})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"name": name, "deleted": true})
 }
 
 // handleScriptRun POST /api/scripts/{name}/run — 在指定 Agent 上运行库中脚本。
+// 脚本取自调用者的命名空间;目标 Agent 必须归属调用者租户;派生任务继承租户。
 func (r *Relay) handleScriptRun(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -250,7 +368,12 @@ func (r *Relay) handleScriptRun(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("脚本名非法或脚本库未启用")))
 		return
 	}
-	content, err := scriptLib.Read(name)
+	scope, ok := r.scriptScope(req, id)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("tenant 参数非法")))
+		return
+	}
+	content, err := scriptLib.ReadIn(scope, name)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("脚本不存在: %s", name)))
 		return
@@ -262,6 +385,9 @@ func (r *Relay) handleScriptRun(w http.ResponseWriter, req *http.Request) {
 	json.NewDecoder(req.Body).Decode(&body)
 	if body.AgentID == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id 不能为空")))
+		return
+	}
+	if !r.requireAgentAccess(w, id, body.AgentID) { // 2026 租户加固:脚本执行是动作
 		return
 	}
 	if body.Timeout == 0 {
@@ -290,14 +416,14 @@ func (r *Relay) handleScriptRun(w http.ResponseWriter, req *http.Request) {
 	}
 	if r.store != nil {
 		now := time.Now().UnixMilli()
-		r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: now, UpdatedAt: now})
+		r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: now, UpdatedAt: now, Submitted: id.auditLabel(), Tenant: id.Tenant})
 	}
 	if err := r.dispatchTask(conn, task); err != nil {
 		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("下发失败: %w", err)))
 		return
 	}
 	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "script_run", AgentID: body.AgentID, TaskID: taskID, Detail: name})
+		r.audit.Log(AuditEntry{Event: "script_run", AgentID: body.AgentID, TaskID: taskID, Operator: id.auditLabel(), Detail: name, Tenant: id.Tenant})
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"script":   name,

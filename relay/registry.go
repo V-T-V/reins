@@ -14,6 +14,7 @@ import (
 type agentEntry struct {
 	info         proto.Register  // 注册信息
 	conn         *wsConn         // 主(控制)WS 连接
+	tenant       string          // 2026 租户加固:注册凭据绑定的租户(服务端归属,Tags 不参与鉴权)
 	lastBeat     time.Time       // 最近一次心跳时间
 	lastSeq      int64           // 最近心跳序号
 	registeredAt time.Time       // 注册时间
@@ -50,13 +51,20 @@ func NewRegistry() *Registry {
 
 // Register 登记一个 Agent 上线。若已存在则覆盖(重连场景)。
 // D1:注册时更新 capabilityCache。
+// 2026 租户加固:归属取 conn.tenant(注册连接凭据绑定的租户)——
+// nil conn(测试 mock)归属为空,与「无租户 Agent 仅 admin 可见」语义一致。
 func (r *Registry) Register(info proto.Register, conn *wsConn) (wasOnline bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_, wasOnline = r.agents[info.AgentID]
+	tenant := ""
+	if conn != nil {
+		tenant = conn.tenant
+	}
 	r.agents[info.AgentID] = &agentEntry{
 		info:         info,
 		conn:         conn,
+		tenant:       tenant,
 		lastBeat:     time.Now(),
 		registeredAt: time.Now(),
 	}
@@ -221,6 +229,30 @@ func (r *Registry) Snapshot() []proto.Register {
 	return out
 }
 
+// SnapshotForTenant 返回指定租户可见的 Agent 快照(2026 租户加固)。
+// tenant 为空 = admin 视角,返回全量;否则只返回归属相同的 Agent。
+func (r *Registry) SnapshotForTenant(tenant string) []proto.Register {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]proto.Register, 0, len(r.agents))
+	for _, e := range r.agents {
+		if tenant == "" || e.tenant == tenant {
+			out = append(out, e.info)
+		}
+	}
+	return out
+}
+
+// TenantOf 返回 Agent 的服务端绑定租户;Agent 不在线时 ok=false(调用方 fail-closed)。
+func (r *Registry) TenantOf(agentID string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if e, ok := r.agents[agentID]; ok {
+		return e.tenant, true
+	}
+	return "", false
+}
+
 // OnlineSince 返回 Agent 本次注册(上线)的 Unix 毫秒时间戳;不在线返回 0。
 // proto.Register 不携带注册时刻(那是 Relay 侧状态),列表端点用此补齐。
 func (r *Registry) OnlineSince(agentID string) int64 {
@@ -250,6 +282,27 @@ func (r *Registry) FindByTag(tag string) []string {
 	defer r.mu.RUnlock()
 	var out []string
 	for id, e := range r.agents {
+		for k, v := range e.info.Tags {
+			if k+"="+v == tag {
+				out = append(out, id)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// FindByTagForTenant 返回指定租户可见、且带指定标签的在线 Agent 列表(2026 租户加固)。
+// tenant 为空 = admin 视角不设限;否则结果只含归属相同的 Agent——
+// 批量/DAG 目标解析的租户收口点。
+func (r *Registry) FindByTagForTenant(tag, tenant string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for id, e := range r.agents {
+		if tenant != "" && e.tenant != tenant {
+			continue
+		}
 		for k, v := range e.info.Tags {
 			if k+"="+v == tag {
 				out = append(out, id)

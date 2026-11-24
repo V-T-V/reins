@@ -322,7 +322,8 @@ func (r *Relay) handleUpdateDownload(w http.ResponseWriter, req *http.Request) {
 //     (2026-08-18 实测:v4.5.1 推送连续 context deadline exceeded)。
 //   - inline(遗留): 从仓库读二进制 base64 内联(仅适合小体积/低延迟链路)。
 func (r *Relay) handleUpdateApply(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -341,6 +342,10 @@ func (r *Relay) handleUpdateApply(w http.ResponseWriter, req *http.Request) {
 	}
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errMap(err))
+		return
+	}
+	// 2026 租户加固:自更新替换目标机二进制——目标 Agent 归属校验
+	if !r.requireAgentAccess(w, id, body.AgentID) {
 		return
 	}
 	if body.Mode == "" {
@@ -419,14 +424,14 @@ func (r *Relay) handleUpdateApply(w http.ResponseWriter, req *http.Request) {
 	}
 	if r.store != nil {
 		now := time.Now().UnixMilli()
-		r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: now, UpdatedAt: now})
+		r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: now, UpdatedAt: now, Submitted: id.auditLabel(), Tenant: id.Tenant})
 	}
 	if err := r.dispatchTask(conn, task); err != nil {
 		writeJSON(w, http.StatusBadGateway, errMap(fmt.Errorf("下发 update 任务失败: %w", err)))
 		return
 	}
 	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "agent_update_triggered", AgentID: body.AgentID, TaskID: taskID, Detail: body.Version})
+		r.audit.Log(AuditEntry{Event: "agent_update_triggered", AgentID: body.AgentID, TaskID: taskID, Operator: id.auditLabel(), Detail: body.Version, Tenant: id.Tenant})
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"agent_id":    body.AgentID,

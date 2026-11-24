@@ -109,14 +109,18 @@ function Get-HTTPStatus([string]$Url, [hashtable]$Headers) {
 
 # Wait-AgentOnline 轮询 Relay /api/agents,直到本机 Agent 上线或超时。
 # 匹配规则:精确 agent_id(-AgentId 指定时) > hostname > agent-<hostname>-* 前缀。
+# 2026 租户加固:部署专用 Token 只支持单机查询——已知 AgentId 时带 ?agent_id= 参数;
+# 未知 AgentId 的 hostname 回退匹配仅适用于主 Token(部署 Token 会得 403,按无权限处理)。
 function Wait-AgentOnline([string]$ApiBase, [string]$Tok, [string]$WantId, [int]$TimeoutSec) {
     $h = @{}
     if ($Tok) { $h["Authorization"] = "Bearer $Tok" }
     $hostPrefix = "agent-" + $env:COMPUTERNAME + "-"
+    $listUri = "$ApiBase/api/agents"
+    if ($WantId) { $listUri = "$listUri`?agent_id=$WantId" }
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         try {
-            $resp = Invoke-RestMethod -Uri "$ApiBase/api/agents" -Headers $h -TimeoutSec 10
+            $resp = Invoke-RestMethod -Uri $listUri -Headers $h -TimeoutSec 10
             $hit = @($resp.agents | Where-Object {
                 ($WantId -and $_.agent_id -eq $WantId) -or
                 (-not $WantId -and ($_.hostname -eq $env:COMPUTERNAME -or $_.agent_id -like "$hostPrefix*"))
@@ -126,6 +130,7 @@ function Wait-AgentOnline([string]$ApiBase, [string]$Tok, [string]$WantId, [int]
             $code = 0
             if ($_.Exception.Response) { try { $code = [int]$_.Exception.Response.StatusCode } catch {} }
             if ($code -eq 401) { return @{ online = $false; err = "unauthorized" } }
+            if ($code -eq 403 -and -not $WantId) { return @{ online = $false; err = "forbidden" } }
         }
         Start-Sleep -Seconds 5
     }
@@ -285,7 +290,8 @@ if (-not $Foreground) {
                 Write-OK "Token 验证通过"
             }
         } else {
-            # 部署专用 Token(-install-token)只授权 Agent 注册与 /api/agents;
+            # 部署专用 Token(-install-token)只授权 Agent 注册与 /api/agents 单机查询
+            # (2026 收紧:须带 ?agent_id=,不再暴露全局清单);
             # 若连 /api/agents 也 401(如仅有 WS 权限或 Token 有误),不阻断安装,
             # 由 Agent 实际连接与最终上线确认环节裁决。
             Write-Info "Token 无 REST 查询权限(可能为部署专用 Token 或有误),以 Agent 实际连接为准"
@@ -414,7 +420,7 @@ if ($isRunning) {
         foreach ($a in $onlineInfo.agents) {
             Write-OK "已上线: $($a.agent_id) ($($a.os), v$($a.version))"
         }
-    } elseif ($onlineInfo.err -eq "unauthorized") {
+    } elseif ($onlineInfo.err -eq "unauthorized" -or $onlineInfo.err -eq "forbidden") {
         Write-Info "Token 无权查询 /api/agents,跳过上线自动确认(服务已运行)"
     } else {
         Write-Info "60s 内未在 Relay 观察到本机 Agent(可能仍在连接中)"

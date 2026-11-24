@@ -116,6 +116,14 @@ func (s *Scheduler) ListRules() []CronRule {
 	return s.loadRules()
 }
 
+// GetRule 按 ID 查单条规则(2026 租户加固:删除端点的归属校验用)。
+func (s *Scheduler) GetRule(ruleID string) (CronRule, bool) {
+	if rl := s.loadRuleByID(ruleID); rl != nil {
+		return *rl, true
+	}
+	return CronRule{}, false
+}
+
 // schedule 把规则加入 cron 引擎。
 func (s *Scheduler) schedule(rule CronRule) {
 	if s.cron == nil {
@@ -150,7 +158,7 @@ func (s *Scheduler) executeRule(rule CronRule) {
 		Timeout: rule.Timeout,
 	}
 
-	// 持久化任务(复用 store)
+	// 持久化任务(复用 store;2026 租户加固:继承规则的租户)
 	if s.store != nil {
 		now := time.Now().UnixMilli()
 		s.store.SaveTask(StoredTask{
@@ -158,17 +166,21 @@ func (s *Scheduler) executeRule(rule CronRule) {
 			Status:    StatusPending,
 			CreatedAt: now, // P1-C5 修复:填充时间戳
 			UpdatedAt: now, // 否则 reaper 误判超时秒数立即回收
+			Submitted: "cron:" + rule.ID,
+			Tenant:    rule.Tenant,
 		})
 	}
 
 	// 审计
 	if s.relay != nil && s.relay.audit != nil {
 		s.relay.audit.Log(AuditEntry{
-			Event:   "cron_triggered",
-			TaskID:  task.TaskID,
-			AgentID: rule.AgentID,
-			Type:    rule.TaskType,
-			Detail:  "cron:" + rule.CronExpr,
+			Event:    "cron_triggered",
+			TaskID:   task.TaskID,
+			AgentID:  rule.AgentID,
+			Type:     rule.TaskType,
+			Operator: "cron:" + rule.ID,
+			Detail:   "cron:" + rule.CronExpr,
+			Tenant:   rule.Tenant,
 		})
 	}
 

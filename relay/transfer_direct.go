@@ -42,7 +42,8 @@ const xferTicketTTL = 60 * time.Second
 //	"addrs":["ip:port",...], "expiry_unix":<sec>}
 //	或 {"direct":false, "reason":"..."}(Agent 未开启直连,CLI 回落中继)
 func (r *Relay) handleTransferDirect(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -61,6 +62,10 @@ func (r *Relay) handleTransferDirect(w http.ResponseWriter, req *http.Request) {
 	}
 	if body.Direction != "upload" && body.Direction != "download" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("direction 必须是 upload 或 download,得到 %q", body.Direction)))
+		return
+	}
+	// 2026 租户加固:直连票据是数据面凭证——目标 Agent 归属校验
+	if !r.requireAgentAccess(w, id, body.AgentID) {
 		return
 	}
 

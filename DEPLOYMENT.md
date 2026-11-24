@@ -255,7 +255,7 @@ curl -k https://your-domain.com/rmm/healthz
 | 层 | 措施 | 命令 |
 |----|------|------|
 | 鉴权 | Token(必须) | `-token $(openssl rand -hex 32)` |
-| RBAC | 多租户角色 | Token: `tenant:operator:secret` |
+| RBAC | 多凭据 + 租户隔离(身份由 Relay 配置绑定) | `-token ":admin:<s1>,acme:operator:<s2>"`(见下文) |
 | 电源 | 标签白名单 | Agent tags: `power_allowed=true` |
 | 文件 | 路径白名单 | `allow_all_roots: false` |
 | 传输 | mTLS(可选) | `-mtls -tls-cert cert.pem` |
@@ -263,6 +263,26 @@ curl -k https://your-domain.com/rmm/healthz
 | 凭据 | Secret 管理 | `POST /api/secrets`(TTL+一次性) |
 | 命令 | 策略拦截 | 自动(Format-Volume/rm -rf 拦截) |
 | 录屏 | Session 记录 | 自动(asciinema v2) |
+
+### 多凭据与租户隔离
+
+`-token`(或 `REINS_RELAY_TOKEN`)可以是**一条**凭据,也可以是逗号分隔的**列表**:
+
+```bash
+# 单凭据(旧格式,行为不变):纯 secret = 全局 admin
+reins-relay -addr :7780 -token "$(openssl rand -hex 32)"
+
+# 多凭据列表:每条都必须写全 [:tenant:]role:secret;全局 admin 写 :admin:secret
+reins-relay -addr :7780 -token ":admin:<admin-secret>,acme:operator:<acme-secret>,globex:viewer:<globex-secret>"
+```
+
+- **身份取自 Relay 的配置,不取自请求方**:持有 `<acme-secret>` 的人无论出示 `acme:operator:<acme-secret>`、裸 `<acme-secret>` 还是伪造 `x:admin:<acme-secret>`,身份都是 `acme / operator`。省略或伪造前缀不会提权。
+- **租户在启动时自动建组织**,无需手工步骤。要临时停掉一个租户,禁用其组织(跨重启保持);要彻底收回,从列表里删掉它的凭据。
+- **Agent 归属 = 注册它时所用的凭据**。用 `acme:operator:<acme-secret>` 装的 Agent 属于 acme,只有 acme 与全局 admin 可见、可操作。`GET /api/bootstrap` 对租户身份回显的是**它自己的**凭据,可直接用于给该租户装机器。
+- 列表里**不允许裸 secret**:含逗号的旧式单 token 会被当成列表,请在升级时更换(启动时会明确报错)。
+- 一个 Relay 是一个信任域。租户隔离隔开的是**同一 Relay 上持凭据的用户之间**;客户之间、不同密级的部门之间需要硬隔离时,请**分别部署 Relay**。完整的信任模型与已知边界见 [SECURITY.md](SECURITY.md)。
+
+`-install-token`(一行安装用的部署 Token)嵌在未鉴权下发的 `/install.ps1` 里,**视同公开**:它只能注册全新的 Agent、以及按 `agent_id` 单机探活,够不上其它任何接口。只在部署窗口开启,用完轮换;面向公网的 Relay 请用 mTLS 注册。
 
 ---
 

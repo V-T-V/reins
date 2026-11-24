@@ -28,7 +28,9 @@ import (
 //	since=1h|24h|7d       (默认 1h,只导出最近)
 //	limit=1000            (默认 1000)
 func (r *Relay) handleAuditExport(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	// 2026 租户加固:导出按调用者租户过滤(admin 全量);cookie 路径(<a> 下载)身份同样生效
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -56,9 +58,9 @@ func (r *Relay) handleAuditExport(w http.ResponseWriter, req *http.Request) {
 		fmt.Sscanf(l, "%d", &limit)
 	}
 
-	// 读审计文件 + 过滤
+	// 读审计文件 + 过滤(2026 租户加固:租户范围由服务端绑定身份决定)
 	auditPath := filepath.Join(dataDir(), "audit.log")
-	entries := readAuditEntries(auditPath, sinceMs, limit)
+	entries := readAuditEntries(auditPath, sinceMs, limit, id.Tenant)
 
 	// 按 format 输出
 	switch format {
@@ -82,8 +84,9 @@ func (r *Relay) handleAuditExport(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-// readAuditEntries 读审计文件,过滤时间范围。
-func readAuditEntries(path string, sinceMs int64, limit int) []auditRecord {
+// readAuditEntries 读审计文件,过滤时间范围与租户(2026 租户加固:tenant 非空=只导该租户,
+// 旧记录无租户 → 不导出,fail-closed;空=admin 全量)。
+func readAuditEntries(path string, sinceMs int64, limit int, tenant string) []auditRecord {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -96,6 +99,9 @@ func readAuditEntries(path string, sinceMs int64, limit int) []auditRecord {
 		line := scanner.Bytes()
 		var rec auditRecord
 		if err := json.Unmarshal(line, &rec); err != nil {
+			continue
+		}
+		if tenant != "" && rec.Tenant != tenant {
 			continue
 		}
 		if rec.TS >= sinceMs {

@@ -25,12 +25,14 @@ const PowerTagValue = "true"
 //	{"agent_id":"...", "op":"shutdown", "force":false, "delay":30, "message":"维护关机"}
 //
 // 安全:
-//  1. authorize token 校验
-//  2. 目标 Agent 必须带 power_allowed=true 标签(否则 403)
-//  3. 审计记录
+//  1. RequireRole("power.shutdown") 已完成鉴权(admin-only)并把身份写入上下文
+//  2. 目标 Agent 必须归属调用者租户(2026 租户加固)
+//  3. 目标 Agent 必须带 power_allowed=true 标签(否则 403)
+//  4. 审计记录
 func (r *Relay) handlePower(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
-		writeJSON(w, http.StatusUnauthorized, errMap(err))
+	id, ok := r.identityOf(req)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("无效的鉴权 token")))
 		return
 	}
 	var body proto.PowerTask
@@ -48,6 +50,10 @@ func (r *Relay) handlePower(w http.ResponseWriter, req *http.Request) {
 	}
 	if raw.AgentID == "" || raw.Op == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("agent_id 和 op 不能为空")))
+		return
+	}
+	// 2026 租户加固:电源是高危动作——目标 Agent 归属校验
+	if !r.requireAgentAccess(w, id, raw.AgentID) {
 		return
 	}
 
@@ -83,7 +89,7 @@ func (r *Relay) handlePower(w http.ResponseWriter, req *http.Request) {
 	// 持久化
 	if r.store != nil {
 		now := time.Now().UnixMilli()
-		r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: now, UpdatedAt: now})
+		r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: now, UpdatedAt: now, Submitted: id.auditLabel(), Tenant: id.Tenant})
 	}
 
 	// 找连接投递
@@ -100,10 +106,12 @@ func (r *Relay) handlePower(w http.ResponseWriter, req *http.Request) {
 	// 审计
 	if r.audit != nil {
 		r.audit.Log(AuditEntry{
-			Event:   "power_" + raw.Op,
-			AgentID: raw.AgentID,
-			TaskID:  taskID,
-			Detail:  fmt.Sprintf("op=%s force=%v delay=%d", raw.Op, raw.Force, raw.Delay),
+			Event:    "power_" + raw.Op,
+			AgentID:  raw.AgentID,
+			TaskID:   taskID,
+			Operator: id.auditLabel(),
+			Detail:   fmt.Sprintf("op=%s force=%v delay=%d", raw.Op, raw.Force, raw.Delay),
+			Tenant:   id.Tenant,
 		})
 	}
 	notifyPowerExecuted(raw.AgentID, raw.Op, raw.Delay) // F11:webhook 告警(电源操作)

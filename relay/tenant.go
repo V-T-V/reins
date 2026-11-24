@@ -209,14 +209,15 @@ func (m *TenantManager) OrgEnabled(orgID string) bool {
 // --- 租户隔离过滤 ---
 
 // FilterAgentsByTenant 按身份的 tenant 过滤 Agent 列表,实现数据隔离。
-// admin(无 tenant)看全部;租户用户只看 tags["tenant"]==自己 tenant 的。
+// 2026 租户加固:吃**服务端绑定**的归属值(注册凭据),Agent 自报 Tags 不参与鉴权。
+// admin(无 tenant)看全部;租户用户只看归属==自己 tenant 的。
 func FilterAgentsByTenant(id Identity, agents []tenantAgentView) []tenantAgentView {
 	if id.Tenant == "" {
 		return agents // admin 全量
 	}
 	out := make([]tenantAgentView, 0, len(agents))
 	for _, a := range agents {
-		if a.Tags["tenant"] == id.Tenant {
+		if a.Tenant == id.Tenant {
 			out = append(out, a)
 		}
 	}
@@ -226,7 +227,7 @@ func FilterAgentsByTenant(id Identity, agents []tenantAgentView) []tenantAgentVi
 // tenantAgentView Agent 的租户视图(只暴露隔离判定需要的字段)。
 type tenantAgentView struct {
 	AgentID string
-	Tags    map[string]string
+	Tenant  string // 服务端绑定归属(注册连接凭据);Tags 仅作展示
 }
 
 // CheckQuota 检查组织是否还能加 Agent(配额)。

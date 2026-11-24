@@ -138,10 +138,10 @@ func TestRolePolicyGrantRole(t *testing.T) {
 // TestFilterAgentsByTenantIsolation 验证按租户隔离过滤 Agent 列表。
 func TestFilterAgentsByTenantIsolation(t *testing.T) {
 	agents := []tenantAgentView{
-		{AgentID: "web-1", Tags: map[string]string{"tenant": "acme"}},
-		{AgentID: "web-2", Tags: map[string]string{"tenant": "acme"}},
-		{AgentID: "db-1", Tags: map[string]string{"tenant": "globex"}},
-		{AgentID: "shared-1", Tags: map[string]string{}}, // 无 tenant 标签
+		{AgentID: "web-1", Tenant: "acme"},
+		{AgentID: "web-2", Tenant: "acme"},
+		{AgentID: "db-1", Tenant: "globex"},
+		{AgentID: "shared-1"}, // 无归属(仅 admin 可见)
 	}
 
 	// admin(无 tenant)看全部
@@ -157,7 +157,7 @@ func TestFilterAgentsByTenantIsolation(t *testing.T) {
 		t.Fatalf("acme 应看 2 个, got %d", len(got))
 	}
 	for _, a := range got {
-		if a.Tags["tenant"] != "acme" {
+		if a.Tenant != "acme" {
 			t.Fatalf("acme 过滤泄漏了非 acme 的 Agent: %s", a.AgentID)
 		}
 	}
@@ -172,8 +172,8 @@ func TestFilterAgentsByTenantIsolation(t *testing.T) {
 // TestFilterAgentsByTenantNoLeakage 验证租户隔离不泄漏跨租户 Agent ID。
 func TestFilterAgentsByTenantNoLeakage(t *testing.T) {
 	agents := []tenantAgentView{
-		{AgentID: "secret-acme-1", Tags: map[string]string{"tenant": "acme"}},
-		{AgentID: "secret-globex-1", Tags: map[string]string{"tenant": "globex"}},
+		{AgentID: "secret-acme-1", Tenant: "acme"},
+		{AgentID: "secret-globex-1", Tenant: "globex"},
 	}
 	acme := Identity{Tenant: "acme", Role: RoleOperator}
 	got := FilterAgentsByTenant(acme, agents)
@@ -208,7 +208,7 @@ func TestTenantBackwardCompatWithRBAC(t *testing.T) {
 		t.Fatalf("新 token 解析错误: %+v", id)
 	}
 	// 两者都可用于 FilterAgentsByTenant
-	agents := []tenantAgentView{{AgentID: "a", Tags: map[string]string{"tenant": "acme"}}}
+	agents := []tenantAgentView{{AgentID: "a", Tenant: "acme"}}
 	if len(FilterAgentsByTenant(id, agents)) != 1 {
 		t.Fatal("acme operator 应看到 acme agent")
 	}

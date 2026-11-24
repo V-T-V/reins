@@ -58,8 +58,11 @@ func TestTenantPersistenceRoundTrip(t *testing.T) {
 // authorize 对禁用组织的租户身份返回错误,admin(空 tenant)不受影响。
 func TestTenantDisabledBlocksAuthorize(t *testing.T) {
 	relay := NewRelay(Config{Token: "tenant:operator:s3cret"})
-	if !relay.tenants.CreateOrg(Organization{ID: "tenant", Enabled: true}) {
-		t.Fatal("创建组织应成功")
+	// 2026:组织由凭据自动供给——此前生产没有任何建组织的途径,而 OrgEnabled 对
+	// 不存在的组织 fail-closed,租户凭据会永远 401(旧代码里没人发现:裸 secret 当 admin 绕过去了)。
+	org := relay.tenants.GetOrg("tenant")
+	if org == nil || !org.Enabled {
+		t.Fatalf("租户凭据应在启动时自动建立启用的组织,得到 %+v", org)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
@@ -78,11 +81,40 @@ func TestTenantDisabledBlocksAuthorize(t *testing.T) {
 		t.Fatal("组织删除后租户 token 应被拒绝(fail-closed)")
 	}
 
-	// admin(纯 secret,无租户语法)不受组织约束
+	// 2026 租户加固·语义翻转(红锚):服务端只配了 tenant:operator:s3cret 这一条凭据时,
+	// 以纯 secret 形式出示(s3cret,省略前缀)仍是**同一条凭据** → 绑定身份 tenant/operator,
+	// 照样受组织状态约束。旧实现把「去掉前缀」解析成 admin —— 这正是被修复的提权路径
+	// (知道 secret 的租户用户省略前缀即得全局 admin),不得复活。
+	bareReq := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	bareReq.Header.Set("Authorization", "Bearer s3cret")
+	if err := relay.authorize(bareReq); err == nil {
+		t.Fatal("纯 secret 形式出示租户凭据,组织删除后同样应被拒绝(省略前缀不得成为 admin)")
+	}
+	// 自称 admin 前缀同样无效
+	forgedReq := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	forgedReq.Header.Set("Authorization", "Bearer :admin:s3cret")
+	if err := relay.authorize(forgedReq); err == nil {
+		t.Fatal("租户凭据自称 admin,组织删除后应被拒绝")
+	}
+
+	// admin 不受组织约束——前提是服务端**单独配置了** admin 凭据(无租户条目)
+	adminRelay := NewRelay(Config{Token: ":admin:adminsecret,tenant:operator:s3cret"})
+	if adminRelay.tenants.GetOrg("tenant") == nil {
+		t.Fatal("多凭据配置下租户凭据应已自动供给组织")
+	}
+	adminRelay.tenants.SetOrgEnabled("tenant", false)
 	adminReq := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
-	adminReq.Header.Set("Authorization", "Bearer s3cret")
-	if err := relay.authorize(adminReq); err != nil {
+	adminReq.Header.Set("Authorization", "Bearer adminsecret")
+	id, err := adminRelay.authenticate(adminReq)
+	if err != nil {
 		t.Fatalf("admin token 不应受组织状态影响: %v", err)
+	}
+	if id.Role != RoleAdmin || id.Tenant != "" {
+		t.Fatalf("admin 凭据身份 = %s/%s, 期望 /admin", id.Tenant, id.Role)
+	}
+	// 同一 Relay 上租户凭据仍被禁用组织拦下
+	if _, err := adminRelay.authenticate(req); err == nil {
+		t.Fatal("多凭据下禁用组织的租户凭据应被拒绝")
 	}
 }
 
