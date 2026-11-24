@@ -152,7 +152,7 @@ Reins 从 Windows 运维场景中长出来:Agent 注册为**原生 Windows 服�
 
 | | reins | MeshCentral | TacticalRMM | Teleport | RustDesk |
 |---|---|---|---|---|---|
-| License | **MIT** | Apache-2.0 | source-available | source-available¹ | AGPL-3.0 |
+| License | **MIT** | Apache-2.0 | source-available¹ | AGPL-3.0 | AGPL-3.0 |
 | 服务端 | **Go 单二进制** | Node.js | Django+Vue+Go+MQ | Go(较重) | Rust |
 | 完整 RMM(批量/DAG/监控) | ✅ | 部分 | ✅(MSP 向) | ✖(访问平面) | ✖(桌面远控) |
 | 设备身份(mTLS+CA+CRL) | ✅ | 部分 | 部分 | ✅ | ✖ |
@@ -161,7 +161,7 @@ Reins 从 Windows 运维场景中长出来:Agent 注册为**原生 Windows 服�
 | AI 代理规则门禁 | ✅ | ✖ | ✖ | ✖ | ✖ |
 | 数据面 | 自托管 | 自托管 | 自托管 | 自托管 | 自托管 |
 
-¹ Teleport Community License(2024):免费档限公司 <100 员工且年收入 <$10M。
+¹ Tactical RMM License v1.0(AmidaWare):source-available,非 OSI 认可的开源许可证。
 
 ---
 

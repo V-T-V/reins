@@ -146,7 +146,7 @@ Full CLI reference: run `reins` (50+ commands, exit codes 0–5). API contract: 
 
 | | reins | MeshCentral | TacticalRMM | Teleport | RustDesk |
 |---|---|---|---|---|---|
-| License | **MIT** | Apache-2.0 | source-available | source-available¹ | AGPL-3.0 |
+| License | **MIT** | Apache-2.0 | source-available¹ | AGPL-3.0 | AGPL-3.0 |
 | Server | **one Go binary** | Node.js | Django+Vue+Go+MQ | Go (heavy) | Rust |
 | Full RMM (batch/DAG/monitor) | ✅ | partial | ✅ (MSP) | ✖ (access plane) | ✖ (desktop) |
 | Device identity (mTLS+CA+CRL) | ✅ | partial | partial | ✅ | ✖ |
@@ -155,7 +155,7 @@ Full CLI reference: run `reins` (50+ commands, exit codes 0–5). API contract: 
 | AI-agent rules gate | ✅ | ✖ | ✖ | ✖ | ✖ |
 | Data plane | self-hosted | self-hosted | self-hosted | self-hosted | self-hosted |
 
-¹ Teleport Community License (2024): free tier limited to companies <100 employees and <$10M revenue.
+¹ Tactical RMM License v1.0 (AmidaWare) — source-available, not an OSI-approved license.
 
 ## Security & responsible use
 
