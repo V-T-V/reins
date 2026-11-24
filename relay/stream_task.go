@@ -29,7 +29,8 @@ import (
 //	event: task_result
 //	data: {"task_id":"...","success":true,"stdout":"..."}
 func (r *Relay) handleStreamTask(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -44,6 +45,10 @@ func (r *Relay) handleStreamTask(w http.ResponseWriter, req *http.Request) {
 	}
 	if !proto.IsValidTaskType(task.Type) {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("未知任务类型: %s", task.Type)))
+		return
+	}
+	// 2026 租户加固:目标 Agent 归属校验(与 POST /api/tasks 同一道闸)
+	if !r.requireAgentAccess(w, id, task.AgentID) {
 		return
 	}
 
@@ -79,7 +84,7 @@ func (r *Relay) handleStreamTask(w http.ResponseWriter, req *http.Request) {
 	// 持久化
 	now := time.Now().UnixMilli()
 	if r.store != nil {
-		r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: now, UpdatedAt: now})
+		r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: now, UpdatedAt: now, Submitted: id.auditLabel(), Tenant: id.Tenant})
 	}
 
 	// 投递

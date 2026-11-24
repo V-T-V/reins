@@ -2,6 +2,60 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。版本单一真相源：git tag。
 
+## [未发布] — 2026-11-24 租户隔离加固(凭据绑定身份 + 对象级授权)
+
+起因:一次外部只读安全审查(针对 `d739e85`)的结论——**共享 Relay 的租户隔离没有贯穿实际接口**。本条把隔离做成真的,并如实列出顺带修掉的既有缺陷。信任模型的权威表述见 [SECURITY.md](SECURITY.md)。
+
+### 变更前的问题(源码确认,验收测试在旧代码上逐条跑红)
+
+- **凭据与身份脱钩(P0)**:`authorize` 只比较 secret,tenant/role 取请求方**自称**的前缀。知道共享 secret 的低权限用户省略前缀即得全局 admin(旧代码上裸 secret 调 `secret.put` 返回 201)。
+- **cookie 路径恒 admin(P1)**:角色守卫只读 Authorization 头,经 cookie 过鉴权的请求一律被当成 admin。
+- **对象级授权缺席(P0)**:Agent 清单全局可见;任务详情/历史、取消、批量与 DAG 的目标解析都没有归属校验。
+- **审计查询/导出/SSE 跨租户可见(P1)**;**Secret 引用无归属校验**,部署 Token 可拉全局 Agent 清单。
+- 角色矩阵形同虚设:只有 6 个端点调用 `CanPerform`,viewer 能开 shell、建 cron,`/api/updates/apply` 绕过 update.push。
+
+### 安全
+
+- **凭据绑定身份**:Relay 维护「凭据 → 固定身份」索引,身份一律取服务端配置条目;出示时的前缀不参与判定。Bearer 与 cookie 走同一套鉴权与授权(cookie 补 URL 解码)。
+- **多凭据**:`-token` 支持逗号分隔列表。**语法无歧义**:不含逗号 = 单凭据(旧格式纯 secret 行为不变);含逗号 = 列表,**每条必须写全** `[:tenant:]role:secret`,全局 admin 写 `:admin:secret`。角色/租户 ID 非法、secret 复用、列表里出现裸条目 → 启动即报错。
+- **Agent 归属由服务端维护**:注册时按连接凭据写入并持久化(`agent_tenants`)。自报标签(含 `tenant` 标签)只是展示数据。其它租户、部署 Token、仅证书的连接都**不能顶替**已绑定的 agent ID(否则顶替者可接走缓存任务)。
+- **对象级授权**覆盖:Agent 清单、任务(下发/详情/列表/取消/流式)、同步与异步批量、DAG(提交/列表/状态)、shell、传输(含直连票据)、隧道、自更新、脚本库(按租户分命名空间)、cron(派生任务继承租户)、智能调度、电源、审计查询与导出、SSE 事件流、Secret、签发注册令牌、吊销证书。拒绝码约定:动作 403、详情 404、列表直接滤掉。
+- **投递中央闸**:租户任务只经同租户连接投递——全部 11 条投递路径汇于 `dispatchTask` 一处,任何路径的目标解析有疏漏也出不了本租户。
+- **离线归属**:已绑定的 Agent 离线后其租户仍可寻址(给自己离线的机器缓存任务);未知 Agent 对租户 fail-closed。
+- **组织自动供给**:凭据里的租户在启动时建组织(此前生产没有任何建组织的途径,租户凭据会永远 401)。禁用是运行期闸门,跨重启保持。
+- **viewer 真只读**(默认拒绝,新增端点对 viewer 自动不可见);只能提交 `monitor` 类型任务。`/api/updates/upload`、`/api/updates/apply` 归入 `update.push`(admin-only)。
+- **部署 Token** 收窄为 `GET /api/agents?agent_id=X` 单机探活,只回 `agent_id`;`install.ps1` 已适配。
+- **Secret 归属**:绑定创建者租户,读取须 operator 及以上;归属校验在消费 one-time 之前(被拒不烧)。admin 可在创建时指定 `tenant` 把凭据放进某租户作用域。
+
+### 修复(加固过程中发现的既有缺陷,均非本次引入)
+
+- **启动日志明文写出全部凭据**:`slog.Info(..., "config", cfg)` 把 Config **结构体**交给 JSON handler,`Token`/`InstallToken`/`MetricsToken` 原样序列化进日志。现由 `Config.LogValue` 在类型层面脱敏。
+- **`GET /api/bootstrap` 回显整个 `cfg.Token`**(单凭据时代无害;多凭据下等于任何低权限凭据都能换走 admin secret)。现只回显调用者自己那条。
+- **离线任务从未落盘**:给离线 Agent 提交任务回 202「已缓存待投递」,但该分支直接返回,CLI 还会打印「已缓存,上线后自动投递」——实际被静默丢弃且无审计。现真正落盘;未启用持久化时如实返回 503。
+- **审计 hash chain 每次重启自断**:`OpenAuditLog` 以追加模式打开却不回放末条哈希,重启后首条记录 `prev_hash` 为空。现打开时回放尾部续链(已断的旧链不掩盖)。
+- `/metrics` 的凭据比较改为常量时间;多凭据下接受任一无租户条目。
+
+### 行为变更(升级前请看)
+
+- 含逗号的旧式单 token **不再合法**(会被当成凭据列表)。请更换,或写成列表语法。
+- 单凭据 `tenant:role:secret` 部署下,省略前缀出示 secret 得到的是该条目的租户身份,**不再是 admin**。需要 admin 请单独配一条 admin 凭据。
+- `viewer` 凭据不再能执行写操作;`operator` 不再能调用 `/api/updates/*`。
+- 部署 Token 无 `agent_id` 访问 `/api/agents` 由 200 变为 403。
+- 离线提交的任务现在会真正排队并在 Agent 上线后执行(无过期时间;不需要请显式取消)。
+
+### 验证
+
+- 新增验收 `relay/tenant_isolation_test.go`:真实 WS Agent + bbolt + HTTP,双租户 × admin/operator/viewer 共 15 个场景。该文件只用加固前后都存在的 API——**在旧代码(`1e1d265`)上原样运行 7/7 失败,加固后全绿**(红绿锚定)。
+- 单元断言 `relay/tenant_units_test.go`、`internal/taskstore/tenant_store_test.go`:bbolt 与内存两个存储实现逐条对拍(租户过滤、绑定 insert-if-absent、并发首注册)、注册准入规则(三种存储形态)、投递中央闸、审计旧格式链兼容与跨重启续链、脚本库命名空间、配置守卫、结构化日志脱敏。
+- `go test ./... -count=1` 14 包全绿;`go test -race` relay + taskstore 零数据竞争;`go vet ./...` 干净;golangci-lint v2.12.2 对 relay/taskstore 0 issues;CI 矩阵(linux/amd64、windows/amd64、darwin/arm64)及另外 3 个目标交叉编译通过。
+- 真实二进制回路(loopback):仓内 verify 技能 6/6(单凭据旧格式部署零回归:401 错误体逐字段保留、真实 PowerShell 任务执行、审计链衔接);另起真实 Relay + 两个真实 Agent 的多凭据实例 37/37(启动日志无 secret、清单隔离、伪造前缀提不了权、跨租户拒绝、bootstrap 不泄漏、部署 Token 收窄、顶替被拒并入审计)。
+- 测试函数口径 `^func Test`:585 → 610。
+
+### 文档
+
+- SECURITY.md:新增「信任模型」(一个 Relay = 一个信任域;硬隔离请分部署)、凭据语法、角色、Agent 归属、部署 Token、已知边界。
+- DEPLOYMENT.md:多凭据与租户配置;README 双语安全表述改为与实际强制行为一致。
+
 ## [未发布] — 2026-11-18 债务收口战役(文档口径 + 门禁修复 + 补账)
 
 ### 补账(v4.9.2 之后三笔提交未入 CHANGELOG)

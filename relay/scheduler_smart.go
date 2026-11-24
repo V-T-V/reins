@@ -56,7 +56,13 @@ func parseMonitorLoad(msg string) (cpu, memPct float64, ok bool) {
 //     TTL 内的采样参与评分,过期/无采样按 0 处理=无数据不阻塞调度)
 //  3. 返回最优
 func (r *Relay) SelectBestAgent(tag, taskType string) (string, error) {
-	candidates := r.agents.Snapshot()
+	return r.SelectBestAgentForTenant(tag, taskType, "")
+}
+
+// SelectBestAgentForTenant 智能选择最优 Agent(2026 租户加固:候选收口到 tenant 可见集;
+// tenant 为空 = admin 全量,与 SelectBestAgent 旧行为等价)。
+func (r *Relay) SelectBestAgentForTenant(tag, taskType, tenant string) (string, error) {
+	candidates := r.agents.SnapshotForTenant(tenant)
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("无在线 Agent")
 	}
@@ -131,13 +137,15 @@ func (r *Relay) getInflightCount(agentID string) int {
 
 // handleSelectBest GET /api/scheduler/best —— 智能选择最优 Agent。
 func (r *Relay) handleSelectBest(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
 	tag := req.URL.Query().Get("tag")
 	taskType := req.URL.Query().Get("type")
-	best, err := r.SelectBestAgent(tag, taskType)
+	// 2026 租户加固:推荐结果必须落在调用者可见集内(否则等于跨租户侦察)
+	best, err := r.SelectBestAgentForTenant(tag, taskType, id.Tenant)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, errMap(err))
 		return

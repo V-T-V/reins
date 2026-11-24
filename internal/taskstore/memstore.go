@@ -21,13 +21,17 @@ type MemoryStore struct {
 	mu      sync.Mutex
 	tasks   map[string]*StoredTask
 	results map[string]*proto.TaskResult
+	// agentTenants 2026 租户加固:agentID → tenant(与 bbolt 的 agent_tenants 同语义;
+	// 惰性初始化,容忍测试里的零值构造)。
+	agentTenants map[string]string
 }
 
 // NewMemoryStore 构造内存存储。
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		tasks:   make(map[string]*StoredTask),
-		results: make(map[string]*proto.TaskResult),
+		tasks:        make(map[string]*StoredTask),
+		results:      make(map[string]*proto.TaskResult),
+		agentTenants: make(map[string]string),
 	}
 }
 
@@ -135,12 +139,42 @@ func (s *MemoryStore) ListTasksQuery(q TaskQuery) ([]StoredTask, error) {
 		if q.Type != "" && t.Request.Type != q.Type {
 			continue
 		}
+		// 2026 租户加固:与 bbolt Store 同判据——非空 Tenant 只返回该租户的任务
+		// (旧记录 Tenant="" 仅 admin 可见)。两实现的租户过滤必须同步,漏一份即泄漏。
+		if q.Tenant != "" && t.Tenant != q.Tenant {
+			continue
+		}
 		out = append(out, *t)
 		if q.Limit > 0 && len(out) >= q.Limit {
 			break
 		}
 	}
 	return out, nil
+}
+
+// AgentTenant 返回 Agent 的服务端绑定租户;未绑定返回 ok=false。
+func (s *MemoryStore) AgentTenant(agentID string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.agentTenants[agentID]
+	return t, ok
+}
+
+// BindAgentTenant insert-if-absent(锁内查无才写),返回最终生效的租户。
+func (s *MemoryStore) BindAgentTenant(agentID, tenant string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if agentID == "" {
+		return "", fmt.Errorf("agent_id 不能为空")
+	}
+	if s.agentTenants == nil {
+		s.agentTenants = make(map[string]string)
+	}
+	if cur, ok := s.agentTenants[agentID]; ok {
+		return cur, nil
+	}
+	s.agentTenants[agentID] = tenant
+	return tenant, nil
 }
 
 func (s *MemoryStore) DeleteTask(taskID string) error {

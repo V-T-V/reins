@@ -7,7 +7,7 @@
 [![CI](https://github.com/V-T-V/reins/actions/workflows/ci.yml/badge.svg)](https://github.com/V-T-V/reins/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/V-T-V/reins?display_name=tag&sort=semver)](../../releases)
 [![Go Reference](https://pkg.go.dev/badge/github.com/V-T-V/reins/client.svg)](https://pkg.go.dev/github.com/V-T-V/reins/client)
-[![Tests](https://img.shields.io/badge/tests-582-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-610-brightgreen)]()
 [![CLI](https://img.shields.io/badge/CLI-50%2B%20commands-blue)]()
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
@@ -35,7 +35,7 @@ It is an open-source alternative to Teleport (access plane) and MeshCentral/Tact
 | **Self-hosted, single binary** | Relay is one static Go binary (Docker/Helm/systemd also provided). No database required — bbolt by default, Redis optional for horizontal scale. |
 | **Zero inbound ports** | Agents dial *out* over WebSocket/wss. Your hosts stay unreachable from the internet; NAT and home/office networks just work. |
 | **Windows remote operations, first-class** | PowerShell execution, interactive shell, service/process control, scheduled tasks, screenshots, GUI & browser automation, power ops — see the [Windows capability map](#windows-fleets-first-class) below. |
-| **Enterprise security primitives** | mTLS with built-in CA, per-device client certs, CRL revocation, `tenant:role:secret` RBAC tokens, command black/allow-lists enforced on both Relay and Agent, append-only audit hash chain, session recording (asciinema v2), secrets with TTL + one-time use. |
+| **Enterprise security primitives** | mTLS with built-in CA, per-device client certs, CRL revocation, credentials bound **server-side** to a tenant and role (`tenant:role:secret` — a claimed prefix never decides identity), object-level tenant isolation (agents, tasks, audit, live events, secrets), enforced roles (`viewer` is read-only), command black/allow-lists enforced on both Relay and Agent, append-only audit hash chain, session recording (asciinema v2), secrets with TTL + one-time use. |
 | **Ops, not just remote desktop** | Batch dispatch with retries & live progress, DAG orchestration (dependency graphs, concurrency caps, failure cascade skip), deploy playbooks, process watchdog, cron, snapshots, network diagnostics, log aggregation. |
 | **AI-agent native** | An MCP server (14 tools) plus a Go SDK (30+ tools) drive the whole platform from Claude Desktop / Cursor / any MCP client — and `.reins/rules.md` gates machine operations: automation must *read the project's operation rules and carry a content-fingerprint ack* before executing; stale acks are rejected when rules change. |
 
@@ -138,7 +138,7 @@ Linux agent: `./reins-agent run -relay ws://<relay>:7780/agent -token <token>` (
 | Monitoring | `monitor top` (glances-style TUI: CPU/mem/disk/net/GPU), snapshots + diff, smart scheduling picks the least-loaded agent, Prometheus `/metrics`, webhook alerts |
 | Diagnostics | remote `net ping/dns/trace/ports/check`, `logs tail/search`, `find name/grep/du`, `sysinfo`, fleet `topology`/`diagnose`/`compare` |
 | Fleet admin | agent enroll/revoke, service/proc/power management, process watchdog, cron, self-update with health check & automatic rollback |
-| Security | mTLS + CA + CRL, RBAC (admin/operator/viewer) + org quotas & isolation, command policy (32-entry blacklist default, optional allow-only, enforced Relay- *and* Agent-side), audit hash chain + CEF/Syslog/JSON SIEM export, secrets (TTL, one-time), script library with path-traversal protection |
+| Security | mTLS + CA + CRL, multi-credential RBAC with server-bound identities (admin/operator/viewer), object-level tenant isolation, org enable/disable (fail-closed), command policy (32-entry blacklist default, optional allow-only, enforced Relay- *and* Agent-side), audit hash chain + CEF/Syslog/JSON SIEM export, secrets (TTL, one-time), script library with path-traversal protection |
 
 Full CLI reference: run `reins` (50+ commands, exit codes 0–5). API contract: [deploy/openapi.yaml](./deploy/openapi.yaml) (40+ endpoints).
 
@@ -167,6 +167,8 @@ Design choices that matter for defenders:
 - Every device gets an mTLS client certificate; revoke per-device via CRL (`agent revoke`).
 - Command policy is enforced twice (Relay and Agent, incl. offline-cached tasks — a cached high-risk command for an offline agent is rejected at submission, 403 not 202).
 - All task submissions land in an **append-only hash-chained audit log** exportable to your SIEM — the artifact CISA AA23-025A asks for when inventorying approved RMM use.
+- **A credential maps to exactly one server-side identity.** Knowing a secret grants the tenant and role the Relay has on file for it; dropping or forging the `tenant:role:` prefix grants nothing, and the web console's cookie goes through the same gate as the CLI's Bearer header.
+- **One Relay is one trust domain.** Tenant isolation separates credentialed users of a shared Relay from each other. To hard-separate customers or clearance levels, deploy separate Relays — see the [trust model](./SECURITY.md#trust-model).
 
 If your antivirus flags the agent, see [docs/antivirus.md](./docs/antivirus.md) — false positives are a known industry-wide issue for this software category (they hit MeshCentral, TacticalRMM and RustDesk too), and every release ships a SHA256 manifest.
 
@@ -206,8 +208,8 @@ Automation guardrail — `.reins/rules.md` lives in the *managed project's* repo
 
 | | |
 |---|---|
-| Go files / LOC | 256 / 49,000+ |
-| Tests / benchmarks | 558 / 26 (`go test ./...`) |
+| Go files / LOC | 268 / 33,700+ (non-test Go, `wc -l`, measured 2026-11-24) |
+| Tests / benchmarks | 610 / 35 (`^func Test` / `^func Benchmark`, measured 2026-11-24) |
 | CLI commands / REST endpoints / executors | 50+ / 40+ / 9 |
 | CI | build + `go test -race` + golangci-lint + 3-platform compile gate |
 | Deliverables | Docker ×2, Helm, OpenAPI, goreleaser, systemd units |
@@ -216,6 +218,7 @@ Automation guardrail — `.reins/rules.md` lives in the *managed project's* repo
 
 - **Windows agent is first-class**; the Linux agent covers script/monitor + dialect-aware CLI ops (~85%) — validated end-to-end on real Ubuntu 24.04/WSL2 (linux relay + agent, sh-script execution, dialect-aware sysinfo driven from the Windows CLI).
 - **Single Relay is the default deployment**; multi-relay failover and the Redis TaskStore/EventBus federation exist and are tested, but production-hardening continues.
+- **Tenant isolation is not a hard multi-tenant boundary.** Everyone on a Relay shares one process, one command policy and one update repository, and the Relay operator can do anything. Isolate customers or clearance levels with separate Relays.
 - Command blacklist is best-effort by design; enable allow-only mode (`-policy-allow` on Relay, `policy_allow` on Agent) for strict environments.
 
 ## Documentation

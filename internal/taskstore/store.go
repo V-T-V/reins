@@ -32,6 +32,13 @@ type TaskStore interface {
 	DeleteTask(taskID string) error
 	CASDispatchToPending(taskID string) error
 	ReapToPending(taskID string) error
+	// AgentTenant 返回 Agent 的服务端绑定租户(2026 租户加固:注册时由 Relay 按连接
+	// 凭据写入,是 Agent 归属的权威来源;离线后仍可查)。未绑定返回 ok=false。
+	// 两个实现(bbolt/内存)都必须实现——归属与租户过滤不允许只修一份。
+	AgentTenant(agentID string) (string, bool)
+	// BindAgentTenant 把 Agent 绑定到租户(insert-if-absent):返回**最终生效**的租户
+	// (已绑定时返回既有绑定而不覆盖),调用方须比较返回值与期望值。
+	BindAgentTenant(agentID, tenant string) (string, error)
 	Close() error
 }
 
@@ -40,6 +47,7 @@ type TaskQuery struct {
 	Statuses []string // 状态过滤(非空走 tasks_by_status 索引,与 ListTasksByStatus 同路径)
 	AgentID  string   // 精确匹配;空=不过滤
 	Type     string   // 精确匹配;空=不过滤
+	Tenant   string   // 2026 租户加固:租户过滤(非空=只返回该租户的任务;空=admin 视角不过滤)
 	Limit    int      // 返回条数上限(<=0=不限);两路径都按"已收录数"计数
 }
 
@@ -86,6 +94,7 @@ type StoredTask struct {
 	CreatedAt int64             `json:"created_at"` // Unix 毫秒
 	UpdatedAt int64             `json:"updated_at"`
 	Submitted string            `json:"submitted_by,omitempty"` // 提交者（审计用，C9 填充）
+	Tenant    string            `json:"tenant,omitempty"`       // 2026 租户加固:提交者凭据绑定的租户;空=旧记录/admin 域(仅 admin 可见)
 }
 
 // MaxTaskAttempts 任务最大投递次数（E2/W1）。
@@ -457,12 +466,15 @@ func (s *Store) ListTasksQuery(q TaskQuery) ([]StoredTask, error) {
 		return nil, ErrStoreClosed
 	}
 	// 必要条件 needle(过滤值 JSON 不安全时不启用,正确性优先)
-	var agentNeedle, typeNeedle []byte
+	var agentNeedle, typeNeedle, tenantNeedle []byte
 	if q.AgentID != "" && jsonSafePlainTask(q.AgentID) {
 		agentNeedle = []byte(q.AgentID)
 	}
 	if q.Type != "" && jsonSafePlainTask(q.Type) {
 		typeNeedle = []byte(q.Type)
+	}
+	if q.Tenant != "" && jsonSafePlainTask(q.Tenant) {
+		tenantNeedle = []byte(q.Tenant)
 	}
 	out := make([]StoredTask, 0, 64)
 	visit := func(raw []byte) bool {
@@ -471,6 +483,9 @@ func (s *Store) ListTasksQuery(q TaskQuery) ([]StoredTask, error) {
 			return false
 		}
 		if typeNeedle != nil && !bytes.Contains(raw, typeNeedle) {
+			return false
+		}
+		if tenantNeedle != nil && !bytes.Contains(raw, tenantNeedle) {
 			return false
 		}
 		var t StoredTask
@@ -482,6 +497,9 @@ func (s *Store) ListTasksQuery(q TaskQuery) ([]StoredTask, error) {
 			return false
 		}
 		if q.Type != "" && t.Request.Type != q.Type {
+			return false
+		}
+		if q.Tenant != "" && t.Tenant != q.Tenant {
 			return false
 		}
 		out = append(out, t)
@@ -623,6 +641,7 @@ type CronRule struct {
 	LastRun   int64             `json:"last_run"`
 	NextRun   int64             `json:"next_run"`
 	Tags      map[string]string `json:"tags,omitempty"`
+	Tenant    string            `json:"tenant,omitempty"` // 2026 租户加固:创建者凭据绑定的租户;派生任务继承
 }
 
 // bucketCrons 存 cron 规则的 bbolt bucket。
@@ -695,3 +714,56 @@ func (s *Store) LoadOrgs() []StoredOrg {
 
 // bucketTenants 存多租户组织的 bbolt bucket。
 const bucketTenants = "tenants"
+
+// --- Agent 租户绑定(2026 租户加固) ---
+
+// bucketAgentTenants 存 agentID → tenant 绑定的 bbolt bucket(懒建,旧库零迁移)。
+const bucketAgentTenants = "agent_tenants"
+
+// AgentTenant 返回 Agent 的服务端绑定租户;未绑定返回 ok=false。
+func (s *Store) AgentTenant(agentID string) (string, bool) {
+	if s.db == nil || agentID == "" {
+		return "", false
+	}
+	var tenant string
+	found := false
+	s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucketAgentTenants))
+		if b == nil {
+			return nil
+		}
+		if v := b.Get([]byte(agentID)); v != nil {
+			tenant, found = string(v), true
+		}
+		return nil
+	})
+	return tenant, found
+}
+
+// BindAgentTenant insert-if-absent:同一事务内"查无才写",返回最终生效的租户。
+// 并发的两个不同租户首次注册同一 agentID 时,后到者拿到先到者的绑定并被拒。
+func (s *Store) BindAgentTenant(agentID, tenant string) (string, error) {
+	if s.db == nil {
+		return "", ErrStoreClosed
+	}
+	if agentID == "" {
+		return "", errors.New("agent_id 不能为空")
+	}
+	bound := ""
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(bucketAgentTenants))
+		if err != nil {
+			return err
+		}
+		if cur := b.Get([]byte(agentID)); cur != nil {
+			bound = string(cur)
+			return nil
+		}
+		if err := b.Put([]byte(agentID), []byte(tenant)); err != nil {
+			return err
+		}
+		bound = tenant
+		return nil
+	})
+	return bound, err
+}

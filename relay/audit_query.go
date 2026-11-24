@@ -27,6 +27,7 @@ type auditQueryFilter struct {
 	Events  []string // 精确匹配(event 支持逗号分隔多值);空=不过滤
 	AgentID string   // 精确匹配;空=不过滤
 	SinceMs int64    // 只看 ts >= now-SinceMs;0=不限
+	Tenant  string   // 2026 租户加固:非空=只看该租户的记录(旧记录无租户 → 不可见,fail-closed);空=admin 全量
 }
 
 // handleAuditQuery GET /api/audit/query —— 审计日志 JSON 查询(过滤+分页)。
@@ -41,7 +42,8 @@ type auditQueryFilter struct {
 // 响应: {"entries":[…含 prev_hash/this_hash], "count":N, "total":M, "offset":O, "limit":L}
 // 排序: 新的在前(浏览器第一页看最新;与 export 的文件序旧→新相反)。
 func (r *Relay) handleAuditQuery(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -50,8 +52,8 @@ func (r *Relay) handleAuditQuery(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// 解析过滤参数
-	f := auditQueryFilter{}
+	// 解析过滤参数(2026 租户加固:租户范围取服务端绑定身份,不可由请求参数声明)
+	f := auditQueryFilter{Tenant: id.Tenant}
 	if ev := req.URL.Query().Get("event"); ev != "" {
 		for _, s := range strings.Split(ev, ",") {
 			if s = strings.TrimSpace(s); s != "" {
@@ -157,6 +159,9 @@ func filterAuditEntries(entries []auditRecord, f auditQueryFilter) []auditRecord
 		if f.AgentID != "" && e.AgentID != f.AgentID {
 			continue
 		}
+		if f.Tenant != "" && e.Tenant != f.Tenant {
+			continue
+		}
 		out = append(out, e)
 		if len(out) >= auditQueryCap {
 			break
@@ -206,6 +211,10 @@ func queryAuditFile(path string, f auditQueryFilter) []auditRecord {
 	if f.AgentID != "" && jsonSafePlain(f.AgentID) {
 		agentNeedle = []byte(f.AgentID)
 	}
+	var tenantNeedle []byte
+	if f.Tenant != "" && jsonSafePlain(f.Tenant) {
+		tenantNeedle = []byte(f.Tenant)
+	}
 
 	out := make([]auditRecord, 0, len(lines))
 	for _, line := range lines {
@@ -217,6 +226,9 @@ func queryAuditFile(path string, f auditQueryFilter) []auditRecord {
 			continue
 		}
 		if len(eventNeedles) > 0 && !containsAnyBytes(line, eventNeedles) {
+			continue
+		}
+		if tenantNeedle != nil && !bytes.Contains(line, tenantNeedle) {
 			continue
 		}
 		var rec auditRecord
@@ -231,6 +243,9 @@ func queryAuditFile(path string, f auditQueryFilter) []auditRecord {
 			continue
 		}
 		if f.AgentID != "" && rec.AgentID != f.AgentID {
+			continue
+		}
+		if f.Tenant != "" && rec.Tenant != f.Tenant {
 			continue
 		}
 		out = append(out, rec)

@@ -60,6 +60,8 @@ type trackedDAG struct {
 	createdAt time.Time
 	done      chan struct{}
 	finished  atomic.Bool
+	tenant    string // 2026 租户加固:提交者租户(status/list 归属校验;派生任务继承)
+	owner     string // 2026 租户加固:提交者审计标注(tenant/role)
 
 	mu     sync.Mutex
 	nodes  []dagNodeStatus // 按 ID 字典序
@@ -115,7 +117,8 @@ type dagSubmitNode struct {
 // ]}
 // 响应 202: {"dag_id":"dag-...","node_count":N}
 func (r *Relay) handleDAGSubmit(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -134,6 +137,14 @@ func (r *Relay) handleDAGSubmit(w http.ResponseWriter, req *http.Request) {
 	if len(body.Nodes) == 0 {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("nodes 不能为空")))
 		return
+	}
+	// 2026 租户加固:直指 agent_id 的节点逐个做归属校验(动作类 403);
+	// tag 扇出节点在 dagResolveTargets 内收口到本租户可见集。
+	for i := range body.Nodes {
+		if body.Nodes[i].AgentID != "" && !r.canAccessAgent(id, body.Nodes[i].AgentID) {
+			writeJSON(w, http.StatusForbidden, errMap(fmt.Errorf("无权访问该 Agent")))
+			return
+		}
 	}
 
 	// 每个节点提交期校验:任务类型 + 策略(编排是策略绕过的高危面,逐节点检查)。
@@ -173,12 +184,12 @@ func (r *Relay) handleDAGSubmit(w http.ResponseWriter, req *http.Request) {
 	}
 
 	dagID := fmt.Sprintf("dag-%d-%s", time.Now().UnixNano(), randSuffix(4))
-	td := &trackedDAG{id: dagID, name: body.Name, createdAt: time.Now(), done: make(chan struct{})}
+	td := &trackedDAG{id: dagID, name: body.Name, createdAt: time.Now(), done: make(chan struct{}), tenant: id.Tenant, owner: id.auditLabel()}
 	// 快照视图节点(按 ID 字典序)与执行闭包共享同一份 dagNodeStatus。
 	statuses := make(map[string]*dagNodeStatus, len(body.Nodes))
 	for i := range body.Nodes {
 		sn := &body.Nodes[i]
-		st := &dagNodeStatus{ID: sn.ID, Continue: sn.ContinueOnError, Targets: r.dagResolveTargets(sn)}
+		st := &dagNodeStatus{ID: sn.ID, Continue: sn.ContinueOnError, Targets: r.dagResolveTargets(sn, id.Tenant)}
 		statuses[sn.ID] = st
 		td.nodes = append(td.nodes, *st)
 	}
@@ -230,7 +241,7 @@ func (r *Relay) handleDAGSubmit(w http.ResponseWriter, req *http.Request) {
 	}()
 
 	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "dag_submitted", Detail: fmt.Sprintf("%s nodes=%d concurrency=%d", body.Name, len(body.Nodes), body.MaxConcurrency)})
+		r.audit.Log(AuditEntry{Event: "dag_submitted", Operator: id.auditLabel(), Detail: fmt.Sprintf("%s nodes=%d concurrency=%d", body.Name, len(body.Nodes), body.MaxConcurrency), Tenant: id.Tenant})
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"dag_id":     dagID,
@@ -242,14 +253,16 @@ func (r *Relay) handleDAGSubmit(w http.ResponseWriter, req *http.Request) {
 
 // dagResolveTargets 解析节点目标:agent_id 直指优先,否则按 tag 扇出。
 // 无目标(占位节点)返回 nil。
-func (r *Relay) dagResolveTargets(n *dagSubmitNode) []string {
+// 2026 租户加固:tag 扇出收口到 tenant 可见集(空=admin 全量);
+// 直指 agent 的归属校验在提交期完成(handleDAGSubmit)。
+func (r *Relay) dagResolveTargets(n *dagSubmitNode, tenant string) []string {
 	if n.AgentID != "" {
 		return []string{n.AgentID}
 	}
 	if n.Tag == "" {
 		return nil
 	}
-	ids := r.agents.FindByTag(n.Tag)
+	ids := r.agents.FindByTagForTenant(n.Tag, tenant)
 	sort.Strings(ids)
 	return ids
 }
@@ -273,7 +286,7 @@ func (r *Relay) executeDAGNode(ctx context.Context, td *trackedDAG, sn *dagSubmi
 		task := proto.TaskRequest{TaskID: taskID, Type: sn.Type, AgentID: aid, Payload: sn.Payload, Timeout: sn.Timeout}
 		now := time.Now().UnixMilli()
 		if r.store != nil {
-			_ = r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: now, UpdatedAt: now})
+			_ = r.store.SaveTask(StoredTask{Request: task, Status: StatusPending, CreatedAt: now, UpdatedAt: now, Submitted: td.owner, Tenant: td.tenant})
 		}
 		conn := r.agents.Conn(aid)
 		if conn == nil {
@@ -293,7 +306,7 @@ func (r *Relay) executeDAGNode(ctx context.Context, td *trackedDAG, sn *dagSubmi
 		}
 		taskIDs = append(taskIDs, taskID)
 		if r.audit != nil {
-			r.audit.Log(AuditEntry{Event: "task_submitted", AgentID: aid, TaskID: taskID, Type: sn.Type, Detail: "dag:" + td.id + "/" + sn.ID})
+			r.audit.Log(AuditEntry{Event: "task_submitted", AgentID: aid, TaskID: taskID, Type: sn.Type, Operator: td.owner, Detail: "dag:" + td.id + "/" + sn.ID, Tenant: td.tenant})
 		}
 	}
 	if len(failed) > 0 {
@@ -349,9 +362,10 @@ func (r *Relay) pollDAGTasks(taskIDs []string) (bool, error) {
 	return completed == len(taskIDs), nil
 }
 
-// handleDAGList GET /api/dag —— 编排列表(最近 50 条,新在前)。
+// handleDAGList GET /api/dag —— 编排列表(最近 50 条,新在前;按租户过滤)。
 func (r *Relay) handleDAGList(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -363,6 +377,9 @@ func (r *Relay) handleDAGList(w http.ResponseWriter, req *http.Request) {
 	var list []entry
 	r.dags.Range(func(k, v any) bool {
 		td := v.(*trackedDAG)
+		if id.Tenant != "" && td.tenant != id.Tenant { // 2026 租户加固:非本租户不可见
+			return true
+		}
 		state := "running"
 		if td.finished.Load() {
 			state = "finished"
@@ -379,7 +396,8 @@ func (r *Relay) handleDAGList(w http.ResponseWriter, req *http.Request) {
 
 // handleDAGStatus GET /api/dag/{id} —— 单次编排快照(逐节点状态)。
 func (r *Relay) handleDAGStatus(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -388,7 +406,13 @@ func (r *Relay) handleDAGStatus(w http.ResponseWriter, req *http.Request) {
 		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("编排不存在或已过期")))
 		return
 	}
-	writeJSON(w, http.StatusOK, dagStatusView(v.(*trackedDAG)))
+	td := v.(*trackedDAG)
+	// 2026 租户加固:非本租户的编排按不存在处理(404,不泄漏存在性)
+	if id.Tenant != "" && td.tenant != id.Tenant {
+		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("编排不存在或已过期")))
+		return
+	}
+	writeJSON(w, http.StatusOK, dagStatusView(td))
 }
 
 // dagStatusView 编排的对外视图。

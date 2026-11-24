@@ -137,16 +137,16 @@ reins/
 └── Makefile            # 世界级构建系统(15 targets)
 ```
 
-## 指标(v4.9.2,2026-11-18 债务收口战役口径刷新)
+## 指标(v4.9.2,2026-11-24 租户隔离加固口径刷新)
 
 > v4.9.2 tag 后的未发布轮次(2026-11-13 UI 打磨+打包分发+发布纪律 / 11-14 性能优化轮 / 11-16 死码收口 / 11-17 F5 批 C+verify 技能 / 11-18 本轮)账目见 CHANGELOG.md 各 `[未发布]` 节;下一版候选 v5.0.0(产物已预打包于 dist/release/v5.0.0/,tag 未打)。
 
 | 项目 | 数值 |
 |------|------|
-| Go 文件 | 264 |
-| 代码行 | 50,800+ |
+| Go 文件 | 268 |
+| 代码行 | 33,700+(非测试 .go,`wc -l`,2026-11-24 实测;此前的 50,800+ 基准无法复现,不再沿用) |
 | Go 包 | 7 核心包(relay/agent/cmd/client/proto/console/executors) |
-| 测试用例 | 582(函数口径,门禁/徽章同源;运行口径 577 PASS + 1 既有 SKIP=非 Windows 守卫) |
+| 测试用例 | 610(函数口径,门禁/徽章同源;运行口径 605 PASS + 1 既有 SKIP=非 Windows 守卫——2026-11-24 实测) |
 | 基准测试 | 35 |
 | CLI 命令 | 50+ |
 | API 端点 | 40+ |
@@ -190,9 +190,9 @@ reins/
 
 ---
 
-## 测试覆盖(v4.9.2,2026-11-18 复测)
+## 测试覆盖(v4.9.2,2026-11-24 复测)
 
-582 测试函数(grep `^func Test` 全仓口径,check-docs 门禁与 README 徽章同源)+ 35 基准;运行口径 `go test ./... -count=1` 14 包全绿 = 577 PASS + 1 SKIP(`TestScriptNonWindowsGuard` 非 Windows 守卫,既有)——函数口径与运行口径的差 = 平台构建标签孪生文件(`//go:build linux` 的 monitor_procfs 3 函数、`!windows` 的 job_unix 孪生)+TestMain 助手行。按包分布与重点验证场景:
+610 测试函数(grep `^func Test` 全仓口径,check-docs 门禁与 README 徽章同源)+ 35 基准;运行口径 `go test ./... -count=1` 14 包全绿 = 605 PASS + 1 SKIP(`TestScriptNonWindowsGuard` 非 Windows 守卫,既有)——函数口径与运行口径的差 = 平台构建标签孪生文件(`//go:build linux` 的 monitor_procfs 3 函数、`!windows` 的 job_unix 孪生)+TestMain 助手行。按包分布与重点验证场景:
 
 | 包 | 测试数 | _test 文件 | 重点场景 |
 |----|--------|--------|----------|
@@ -234,6 +234,17 @@ reins/
 > **2026-11-18 欠条复核(债务收口战役)**:未划掉的三项——①水平扩展 Redis 联邦实测(待环境:本机无 Docker/Redis)、②Linux 执行器补齐(systemd/包管理/journalctl,大特性)、③控制台租户/组织管理 UI+审计回放(大特性)——均需 owner 决策或环境,维持原状。仓内文档承诺扫描:审计 tail 注释承诺已由 `/api/audit/query` 接棒收口(2026-11-13,CHANGELOG 有账)、三份 web 拷贝(web//console/web//relay/web/)实测逐位同步、OpenAPI 含全部审计端点、非测试 Go 代码 TODO/FIXME 零标记。
 
 ### P0 — 生产硬化
+
+**已完成(2026-11-24,租户隔离加固——外部只读审查 `d739e85` 的结论「共享 Relay 的租户隔离没有贯穿实际接口」;信任模型权威表述见 SECURITY.md)**:
+- ✅ **凭据绑定身份(P0)**:`authorize` 原只比 secret、tenant/role 取请求方**自称**的前缀(旧代码上裸 secret 调 `secret.put` = 201)。现 `authenticate` 维护「凭据→固定身份」索引(`rbac.go`),身份一律取服务端配置条目;`identityFromAuth`(无头默认 admin → cookie 路径恒 admin)已删除,Bearer 与 cookie 同一道闸(`credentialFromRequest` 补 URL 解码)。**多凭据语法无歧义**:不含逗号 = 单凭据(旧格式纯 secret 行为不变);含逗号 = 列表,**每条必须写全** `[:tenant:]role:secret`(全局 admin 写 `:admin:secret`)——列表里出现裸条目/角色非法/secret 复用/租户 ID 非法 → `NewRelay` Fatal。
+- ✅ **Agent 归属由服务端维护**:`wsConn.tenant` 取自注册连接的凭据 → `Registry.Register` 写入 `agentEntry.tenant`;首次以租户凭据注册即持久绑定(`taskstore` 的 `agent_tenants` bucket,insert-if-absent,bbolt 与内存**双实现**——首版漏了内存版的租户过滤)。`admitAgentRegistration`(`tenant_binding.go`):其它租户 / 部署 Token / 仅证书连接**不得顶替**已绑定的 ID(否则顶替者可接走缓存任务),全局 admin 凭据不受约束;无租户连接不给未绑定 ID 建绑定(单 admin 部署零行为变化)。自报 `Tags["tenant"]` 只是展示数据。离线归属回落持久绑定(`agentBoundTenant`),未知 Agent 对租户 fail-closed;注册令牌签发用 `mayClaimAgent`(未绑定或本租户)——注册令牌的目标恰恰是尚未接入的新 Agent,用 requireAgentAccess 会把租户接入自己的新机器一并挡掉。
+- ✅ **对象级授权全覆盖**:`requireAgentAccess` / `FindByTagForTenant` / `SnapshotForTenant` 贯穿 Agent 清单、任务(下发/详情/列表/取消/流式)、同步与异步批量、DAG、shell、传输(含直连票据)、隧道、自更新、脚本库、cron、调度、电源、签发注册令牌、吊销证书;任务/规则/审计记录带 `Tenant`;审计查询与导出、SSE 事件流、Secret、脚本库命名空间(`data/scripts/<tenant>/`)按归属过滤。**投递中央闸**在 `dispatchTask`(全仓唯一构造任务信封处,11 条投递路径汇于一点):租户任务只经同租户连接投递,且在 CAS 之前(被拒不改状态)。
+- ✅ **角色落地**:viewer 默认拒绝(`enforceRolePolicy` 挂在整个 `/api/` 下:只读白名单 + 仅 `monitor` 类型任务;`sysinfo/service/proc` 是 powershell 包装,Relay 分不清,故不可用);`/api/updates/upload|apply` 归入 `update.push`(此前绕过了 POST /api/tasks 的同一道检查)。⚠ `registerHTTP` 现为**内外两层 mux**:`/api/` 经角色门;`/healthz`、`/metrics`、`/dl/`、`/install.ps1`、pprof **必须注册在外层**(重构时曾把 `/install.ps1` 留在内层 → 404,还吃掉了两条路由;以新旧路由集合机械对账 54=54 才定稿)。
+- ✅ **部署 Token 收窄**:它烘焙在**未鉴权**的 `/install.ps1` 里 = 视同公开;只能 `GET /api/agents?agent_id=X` 单机探活(只回 `agent_id`),无参数 403,其余端点 401。`relay/web/install.ps1` 已适配。
+- ✅ **顺带修掉的既有缺陷(均非本次引入)**:①启动日志 `slog.Info(..., "config", cfg)` 把 Config **结构体**交给 JSON handler → Token/InstallToken/MetricsToken 明文落日志(现 `Config.LogValue` 类型级脱敏);②`/api/bootstrap` 回显整个 `cfg.Token`(多凭据下 = 任何低权限凭据可换走 admin secret;现只回显调用者自身的规范凭据);③给离线 Agent 提交任务回 202「已缓存待投递」却**从未落盘**(现真正落盘 + 审计;无持久化时 503;**无过期时间**);④审计 hash chain 每次重启自断(`OpenAuditLog` 以追加模式打开却不回放末条哈希;现 `seedPrevHash` 续链,已断的旧链不掩盖);⑤`/metrics` 凭据比较改常量时间,多凭据下接受任一无租户条目。
+- **行为变更**:含逗号的旧式单 token 不再合法;单凭据 `tenant:role:secret` 部署下省略前缀**不再得 admin**;viewer 不再能写;operator 不再能调 `/api/updates/*`。下面 2026-08-18 那条「`tenant:role:secret` 须先创建组织」**作废**——组织现由凭据在启动时自动供给(此前生产没有任何建组织的途径,租户凭据永远 401,实际没人用得了)。
+- 测试 +25 函数(585 → 610):验收 `relay/tenant_isolation_test.go`(真实 WS Agent + bbolt + HTTP,双租户 × admin/operator/viewer 共 15 个场景;**只用加固前后都存在的 API——在旧代码 `1e1d265` 上原样运行 7/7 失败,加固后全绿**)+ 单元 `relay/tenant_units_test.go`、`internal/taskstore/tenant_store_test.go`(两存储实现对拍、注册准入三种存储形态、中央闸、旧格式审计链兼容与跨重启续链)。真实回路:verify 技能 6/6(单凭据旧格式零回归:401 错误体逐字段保留)+ 真实二进制多凭据实例 37/37。`-race` 零数据竞争;golangci-lint v2.12.2 对 relay/taskstore 0 issues。
+- **留给 owner 的决策**:离线排队任务是否加 TTL;mTLS 证书是否携带租户(现 mTLS Agent 的租户只能来自随连接出示的凭据);**一个 Relay = 一个信任域**,客户级硬隔离请分别部署 Relay(SECURITY.md「Trust model」)。
 
 **已完成(v4.4.0, 2026-09-03, sess_610cef8e loan-kiosk 部署会话复盘)**:
 - ✅ **项目规则门禁(.reins/rules.md)全链路**:被部署项目在项目根放 `.reins/rules.md` 写定制运维规则(勿营业时段杀壳/部署排除表/重启走哪个 cmdlet 等),AI/自动化操作前必须先加载——把"部署会话里人肉反复交代的注意事项"变成机器可执行的约束。四层实现:① `proto.TaskRequest.RulesAck` 字段(relay 结构体 re-marshal 全链路透传,含持久化重投);② `executors/rulesgate.go`——发现(allowed_roots+workspace 深度 2,跳系统目录,30s TTL 缓存)+指纹(SHA256 前 16 hex,单文件=自身/多文件=组合;门禁接受组合或任一单项目指纹——AI 读了本项目规则即可操作,不被同机其他项目卡死)+`Dispatcher.Dispatch` 校验(与命令策略同为 Agent 侧最后防线;拒绝信息**不回显指纹**防跳过阅读直接重放);③ file 任务新 op=`rules`(rules read 后端,指定 -p 目录或自动发现,FilePolicy 越界拒绝);④ CLI `rules read`(读全文+缓存 ack 到用户缓存目录)+ `task run/stream/exec/deploy` 自动携带(本地 CWD 有 `.reins/rules.md` 时规则全文打 stderr 进 AI 上下文+本地指纹为 ack;显式 `--rules-ack` 优先;`--no-rules` 跳过)。豁免 file/screenshot/monitor(读规则必经+只读观测,防鸡生蛋)。Agent config `rules_gate: true` 开启,默认关(向后兼容)。

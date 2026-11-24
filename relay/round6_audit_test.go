@@ -37,7 +37,7 @@ func TestReadAuditEntriesTimeFilter(t *testing.T) {
 
 	// sinceMs = 1 小时前 → 只应返回 recent-event
 	since := time.Now().Add(-1 * time.Hour).UnixMilli()
-	got := readAuditEntries(path, since, 100)
+	got := readAuditEntries(path, since, 100, "")
 	if len(got) != 1 || got[0].Event != "recent-event" {
 		t.Fatalf("应只返回最近事件, got %+v", got)
 	}
@@ -54,7 +54,7 @@ func TestReadAuditEntriesLimit(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	a.Close()
 
-	got := readAuditEntries(path, 0, 5)
+	got := readAuditEntries(path, 0, 5, "")
 	if len(got) != 5 {
 		t.Fatalf("limit=5 应返回 5 条, got %d", len(got))
 	}
@@ -62,7 +62,7 @@ func TestReadAuditEntriesLimit(t *testing.T) {
 
 // TestReadAuditEntriesMissingFile 验证文件不存在时返回空(不 panic)。
 func TestReadAuditEntriesMissingFile(t *testing.T) {
-	got := readAuditEntries("/nonexistent/path/audit.log", 0, 10)
+	got := readAuditEntries("/nonexistent/path/audit.log", 0, 10, "")
 	if len(got) != 0 {
 		t.Fatalf("不存在的文件应返回空, got %+v", got)
 	}
@@ -81,7 +81,7 @@ func TestReadAuditEntriesMalformedLine(t *testing.T) {
 	appendLine(t, path, "this-is-not-json{")
 	appendLine(t, path, mustJSONLine(auditRecord{AuditEntry: AuditEntry{Event: "good-2", TS: time.Now().UnixMilli()}, ThisHash: "x"}))
 
-	got := readAuditEntries(path, 0, 100)
+	got := readAuditEntries(path, 0, 100, "")
 	// 应包含 good-1 + good-2，跳过损坏行
 	events := map[string]bool{}
 	for _, e := range got {
@@ -192,7 +192,7 @@ func TestAuditAsyncOrdering(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	a.Close()
 
-	got := readAuditEntries(path, 0, 100)
+	got := readAuditEntries(path, 0, 100, "")
 	if len(got) != 10 {
 		t.Fatalf("应写入 10 条, got %d", len(got))
 	}
@@ -223,7 +223,7 @@ func TestAuditLogCreatesParentDir(t *testing.T) {
 	a.Log(AuditEntry{Event: "init"})
 	time.Sleep(150 * time.Millisecond)
 	a.Close()
-	got := readAuditEntries(nested, 0, 10)
+	got := readAuditEntries(nested, 0, 10, "")
 	if len(got) != 1 {
 		t.Fatalf("应写入 1 条, got %d", len(got))
 	}

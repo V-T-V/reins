@@ -28,7 +28,8 @@ import (
 // 请求体: proto.TunnelOpen{tunnel_id, network, target}
 // 流程: 找 Agent conn → 发 TunnelOpen → 等 TunnelReady → 返回 200(或 502 失败)。
 func (r *Relay) handleTunnelOpen(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -44,6 +45,10 @@ func (r *Relay) handleTunnelOpen(w http.ResponseWriter, req *http.Request) {
 	}
 	if body.TunnelID == "" || body.AgentID == "" || body.Target == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("tunnel_id/agent_id/target 不能为空")))
+		return
+	}
+	// 2026 租户加固:隧道打到别家机器 = 数据面越权——目标 Agent 归属校验
+	if !r.requireAgentAccess(w, id, body.AgentID) {
 		return
 	}
 
@@ -103,7 +108,8 @@ func (r *Relay) handleTunnelOpen(w http.ResponseWriter, req *http.Request) {
 // 简化:本端点只做 Console→Agent 方向(POST body → Agent)。
 // Agent→Console 方向用 GET /api/tunnel/poll?  简化用 dataCh 读取。
 func (r *Relay) handleTunnelData(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -111,6 +117,9 @@ func (r *Relay) handleTunnelData(w http.ResponseWriter, req *http.Request) {
 	agentID := req.URL.Query().Get("agent_id")
 	if tunnelID == "" || agentID == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("tunnel_id/agent_id 不能为空")))
+		return
+	}
+	if !r.requireAgentAccess(w, id, agentID) { // 2026 租户加固
 		return
 	}
 	conn := r.agents.Conn(agentID)
@@ -143,7 +152,8 @@ func (r *Relay) handleTunnelData(w http.ResponseWriter, req *http.Request) {
 // handleTunnelPoll POST /api/tunnel/poll —— 拉 Agent→Console 方向的隧道数据。
 // 用 SSE 式流:从 dataCh 读数据,流式写 HTTP response。
 func (r *Relay) handleTunnelPoll(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -151,6 +161,9 @@ func (r *Relay) handleTunnelPoll(w http.ResponseWriter, req *http.Request) {
 	agentID := req.URL.Query().Get("agent_id")
 	if tunnelID == "" {
 		writeJSON(w, http.StatusBadRequest, errMap(fmt.Errorf("tunnel_id 不能为空")))
+		return
+	}
+	if agentID != "" && !r.requireAgentAccess(w, id, agentID) { // 2026 租户加固
 		return
 	}
 	conn := r.agents.Conn(agentID)
@@ -187,7 +200,8 @@ func (r *Relay) handleTunnelPoll(w http.ResponseWriter, req *http.Request) {
 
 // handleTunnelClose POST /api/tunnel/close —— 关闭隧道。
 func (r *Relay) handleTunnelClose(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -198,6 +212,9 @@ func (r *Relay) handleTunnelClose(w http.ResponseWriter, req *http.Request) {
 	}
 	if err := decodeJSON(req, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errMap(err))
+		return
+	}
+	if body.AgentID != "" && !r.requireAgentAccess(w, id, body.AgentID) { // 2026 租户加固
 		return
 	}
 	conn := r.agents.Conn(body.AgentID)

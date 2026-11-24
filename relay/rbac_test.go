@@ -57,25 +57,39 @@ func TestCanPerform(t *testing.T) {
 }
 
 func TestTenantIsolation(t *testing.T) {
+	// 2026 租户加固:CanAccessAgent 吃服务端绑定的归属值(不再是 Agent 自报 Tags)
 	// admin(无 tenant)可访问所有
 	admin := Identity{Tenant: "", Role: RoleAdmin}
-	if !admin.CanAccessAgent(map[string]string{"tenant": "acme"}) {
+	if !admin.CanAccessAgent("acme") {
 		t.Error("admin 应能访问所有 Agent")
 	}
 	// tenant=acme 可访问 acme 的 Agent
 	acme := Identity{Tenant: "acme", Role: RoleOperator}
-	if !acme.CanAccessAgent(map[string]string{"tenant": "acme"}) {
+	if !acme.CanAccessAgent("acme") {
 		t.Error("acme operator 应能访问 acme 的 Agent")
 	}
 	// tenant=acme 不能访问 other 的 Agent
-	if acme.CanAccessAgent(map[string]string{"tenant": "other"}) {
+	if acme.CanAccessAgent("other") {
 		t.Error("acme operator 不应访问 other 的 Agent")
 	}
-	// 无 tenant 标签的 Agent,只有 admin 能访问
-	if acme.CanAccessAgent(map[string]string{}) {
-		t.Error("acme operator 不应访问无 tenant 标签的 Agent")
+	// 无归属(空 tenant)的 Agent,只有 admin 能访问
+	if acme.CanAccessAgent("") {
+		t.Error("acme operator 不应访问无归属的 Agent")
 	}
-	if !admin.CanAccessAgent(map[string]string{}) {
-		t.Error("admin 应能访问无标签 Agent")
+	if !admin.CanAccessAgent("") {
+		t.Error("admin 应能访问无归属 Agent")
+	}
+}
+
+// TestParseCredentialsInvalid 凭据配置校验:非法角色/secret 复用必须报错(fail-fast)。
+func TestParseCredentialsInvalid(t *testing.T) {
+	if _, err := parseCredentials("acme:boss:s1"); err == nil {
+		t.Error("非法角色应报错")
+	}
+	if _, err := parseCredentials("acme:operator:s1,globex:viewer:s1"); err == nil {
+		t.Error("secret 复用应报错")
+	}
+	if _, err := parseCredentials(":admin:adminsec,acme:operator:s1,globex:viewer:s2"); err != nil {
+		t.Errorf("合法多凭据不应报错: %v", err)
 	}
 }

@@ -31,6 +31,7 @@ type trackedBatch struct {
 	result    *BatchResult // 分发结束后填充(投递层聚合;任务执行结果经 task result 查询)
 	done      chan struct{}
 	createdAt time.Time
+	tenant    string // 2026 租户加固:启动者租户(status/progress 端点归属校验)
 }
 
 // handleBatchStart POST /api/batch —— 异步启动带重试与进度跟踪的批量分发。
@@ -38,7 +39,8 @@ type trackedBatch struct {
 // 请求体: {"tag":"env=prod","type":"powershell","payload":{...},"timeout":30,"max_retries":2}
 // 响应 202: {"batch_id":"b-...","total":N}
 func (r *Relay) handleBatchStart(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	req, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
@@ -72,7 +74,8 @@ func (r *Relay) handleBatchStart(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	agentIDs := r.agents.FindByTag(body.Tag)
+	// 2026 租户加固:目标解析收口到本租户可见集(admin 全量)
+	agentIDs := r.agents.FindByTagForTenant(body.Tag, id.Tenant)
 	if len(agentIDs) == 0 {
 		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("无带标签 %s 的在线 Agent", body.Tag)))
 		return
@@ -80,7 +83,7 @@ func (r *Relay) handleBatchStart(w http.ResponseWriter, req *http.Request) {
 
 	batchID := fmt.Sprintf("b-%d-%s", time.Now().UnixNano(), randSuffix(4))
 	progress := newBatchProgress(batchID, len(agentIDs))
-	tb := &trackedBatch{progress: progress, done: make(chan struct{}), createdAt: time.Now()}
+	tb := &trackedBatch{progress: progress, done: make(chan struct{}), createdAt: time.Now(), tenant: id.Tenant}
 	r.batches.Store(batchID, tb)
 	r.gcBatches()
 
@@ -101,7 +104,7 @@ func (r *Relay) handleBatchStart(w http.ResponseWriter, req *http.Request) {
 	}()
 
 	if r.audit != nil {
-		r.audit.Log(AuditEntry{Event: "task_submitted", Type: body.Type, Detail: fmt.Sprintf("batch-async:%s targets=%d retries=%d", body.Tag, len(agentIDs), body.MaxRetries)})
+		r.audit.Log(AuditEntry{Event: "task_submitted", Type: body.Type, Operator: id.auditLabel(), Detail: fmt.Sprintf("batch-async:%s targets=%d retries=%d", body.Tag, len(agentIDs), body.MaxRetries), Tenant: id.Tenant})
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"batch_id":    batchID,
@@ -131,12 +134,18 @@ func (r *Relay) dispatchForBatch(ctx context.Context, agentID string, task proto
 
 // handleBatchStatus GET /api/batch/{id} —— 进度快照(轮询用)。
 func (r *Relay) handleBatchStatus(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
 	tb, ok := r.lookupBatch(req.PathValue("id"))
 	if !ok {
+		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("批次不存在或已过期")))
+		return
+	}
+	// 2026 租户加固:非本租户的批次按不存在处理(404,不泄漏存在性)
+	if id.Tenant != "" && tb.tenant != id.Tenant {
 		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("批次不存在或已过期")))
 		return
 	}
@@ -146,12 +155,18 @@ func (r *Relay) handleBatchStatus(w http.ResponseWriter, req *http.Request) {
 // handleBatchProgressSSE GET /api/batch/{id}/progress —— SSE 实时进度。
 // 每秒推送一帧 snapshot;终态后推送 done 事件(带聚合结果)并关闭流。
 func (r *Relay) handleBatchProgressSSE(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	_, id, err := r.authenticateCtx(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
 	tb, ok := r.lookupBatch(req.PathValue("id"))
 	if !ok {
+		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("批次不存在或已过期")))
+		return
+	}
+	// 2026 租户加固:非本租户的批次按不存在处理(404,不泄漏存在性)
+	if id.Tenant != "" && tb.tenant != id.Tenant {
 		writeJSON(w, http.StatusNotFound, errMap(fmt.Errorf("批次不存在或已过期")))
 		return
 	}

@@ -7,12 +7,13 @@ import (
 	"github.com/V-T-V/reins/proto"
 )
 
-// === RBAC authorizeRBAC 集成 ===
+// === RBAC authenticate 集成(2026 租户加固:原 authorizeRBAC 用例迁到 authenticate,
+// 断言口径升级为「服务端绑定身份」——请求方声明的前缀不参与判定) ===
 
-func TestAuthorizeRBACNoTokenConfig(t *testing.T) {
+func TestAuthenticateNoTokenConfig(t *testing.T) {
 	r := &Relay{cfg: Config{}} // Token="" 不校验
 	req := httptest.NewRequest("GET", "/api/agents", nil)
-	id, err := r.authorizeRBAC(req)
+	id, err := r.authenticate(req)
 	if err != nil {
 		t.Fatalf("无 token 配置应放行: %v", err)
 	}
@@ -21,26 +22,30 @@ func TestAuthorizeRBACNoTokenConfig(t *testing.T) {
 	}
 }
 
-func TestAuthorizeRBACValidToken(t *testing.T) {
+func TestAuthenticateValidLegacyToken(t *testing.T) {
 	r := &Relay{cfg: Config{Token: "secret123"}}
 	req := httptest.NewRequest("GET", "/api/agents", nil)
 	req.Header.Set("Authorization", "Bearer secret123")
-	id, err := r.authorizeRBAC(req)
+	id, err := r.authenticate(req)
 	if err != nil {
 		t.Fatalf("有效 token 应放行: %v", err)
 	}
 	// 旧格式 token = admin
-	if id.Role != RoleAdmin {
-		t.Errorf("Role = %s", id.Role)
+	if id.Role != RoleAdmin || id.Tenant != "" {
+		t.Errorf("期望 admin/无租户,得到 %s/%s", id.Tenant, id.Role)
+	}
+	// Secret 不外带
+	if id.Secret != "" {
+		t.Errorf("authenticate 返回值不应携带 Secret")
 	}
 }
 
-func TestAuthorizeRBACRBACToken(t *testing.T) {
+func TestAuthenticateRBACToken(t *testing.T) {
 	// 服务端配 tenant:role:secret,客户端发同样格式
 	r := &Relay{cfg: Config{Token: "acme:operator:shared-secret"}}
 	req := httptest.NewRequest("GET", "/api/agents", nil)
 	req.Header.Set("Authorization", "Bearer acme:operator:shared-secret")
-	id, err := r.authorizeRBAC(req)
+	id, err := r.authenticate(req)
 	if err != nil {
 		t.Fatalf("RBAC token 应放行: %v", err)
 	}
@@ -52,20 +57,56 @@ func TestAuthorizeRBACRBACToken(t *testing.T) {
 	}
 }
 
-func TestAuthorizeRBACInvalidToken(t *testing.T) {
-	r := &Relay{cfg: Config{Token: "correct"}}
-	req := httptest.NewRequest("GET", "/api/agents", nil)
-	req.Header.Set("Authorization", "Bearer wrong")
-	_, err := r.authorizeRBAC(req)
-	if err == nil {
-		t.Error("错误 token 应拒绝")
+// TestAuthenticateIgnoresClientDeclaredIdentity 红锚:知道 secret 的一方
+// 自称任意租户/admin,身份仍必须是服务端条目的绑定值(提权路径消灭)。
+func TestAuthenticateIgnoresClientDeclaredIdentity(t *testing.T) {
+	r := &Relay{cfg: Config{Token: ":admin:adminsecret,acme:operator:s1,globex:viewer:s2"}}
+
+	cases := []struct {
+		name, presented, wantTenant, wantRole string
+	}{
+		{"acme secret 自称 victim 租户 admin", "victim:admin:s1", "acme", RoleOperator},
+		{"acme secret 自称本租户 admin", "acme:admin:s1", "acme", RoleOperator},
+		{"acme secret 以纯 secret 形式出现(旧客户端)", "s1", "acme", RoleOperator},
+		{"globex secret 自称 acme admin", "acme:admin:s2", "globex", RoleViewer},
+		{"admin 纯 secret 自称租户", "acme:admin:adminsecret", "", RoleAdmin},
+		{"多凭据下未知 role 前缀不影响绑定", "x:nonsense:s2", "globex", RoleViewer},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/api/agents", nil)
+			req.Header.Set("Authorization", "Bearer "+c.presented)
+			id, err := r.authenticate(req)
+			if err != nil {
+				t.Fatalf("应放行: %v", err)
+			}
+			if id.Tenant != c.wantTenant || id.Role != c.wantRole {
+				t.Errorf("身份 = %s/%s, 期望服务端绑定值 %s/%s", id.Tenant, id.Role, c.wantTenant, c.wantRole)
+			}
+		})
 	}
 }
 
-func TestAuthorizeRBACNoHeader(t *testing.T) {
+func TestAuthenticateInvalidToken(t *testing.T) {
+	r := &Relay{cfg: Config{Token: "correct"}}
+	req := httptest.NewRequest("GET", "/api/agents", nil)
+	req.Header.Set("Authorization", "Bearer wrong")
+	_, err := r.authenticate(req)
+	if err == nil {
+		t.Error("错误 token 应拒绝")
+	}
+	// 错误消息是 e2e/verify 契约面,逐字保留
+	req.Header.Set("Authorization", "Bearer wrong")
+	_, err = r.authenticate(req)
+	if err == nil || err.Error() != "无效的鉴权 token" {
+		t.Errorf("错误消息漂移: %v", err)
+	}
+}
+
+func TestAuthenticateNoHeader(t *testing.T) {
 	r := &Relay{cfg: Config{Token: "secret"}}
 	req := httptest.NewRequest("GET", "/api/agents", nil)
-	_, err := r.authorizeRBAC(req)
+	_, err := r.authenticate(req)
 	if err == nil {
 		t.Error("无 Authorization header 应拒绝")
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -35,6 +34,12 @@ type wsConn struct {
 	// M2：mTLS 客户端证书身份（非 mTLS 模式为空）
 	certCN  string
 	certDNS []string
+	// 2026 租户加固:该连接注册凭据绑定的租户(Agent 归属的服务端事实来源)。
+	// 非 mTLS 连接 = 注册所用凭据的租户;mTLS 连接若同时携带凭据则取其租户,
+	// 否则为空(仅 admin 可见)。Agent 自报的 Tags 不参与。
+	tenant string
+	// adminCred:连接携带全局 admin 凭据(或 Relay 未启用鉴权)——注册不受归属绑定约束。
+	adminCred bool
 
 	// B1/P0-C1 修复:二进制帧路由——serveAgent 的 Read 循环拦截二进制帧,
 	// 按 transferID 路由到对应 channel,HTTP handler 从 channel 消费。
@@ -315,16 +320,53 @@ type Relay struct {
 	tenants    *TenantManager // 多租户组织管理(P0-1),可为 nil(禁用租户校验)
 	batches    sync.Map       // P0-1 批量分发注册表: batchID → *trackedBatch(TTL 懒清理)
 	dags       sync.Map       // v4.6 DAG 编排注册表: dagID → *trackedDAG(TTL 懒清理)
+
+	// 2026 租户加固:服务端凭据索引(凭据 → 固定身份;credentialIndex 惰性构建)。
+	credMu      sync.Mutex
+	credentials []Identity
+	credBuilt   bool
+
+	// 2026 租户加固:agentID → 租户 的进程内绑定缓存(持久副本在 TaskStore,见 tenant_binding.go)。
+	pinMu     sync.Mutex
+	agentPins map[string]string
 }
 
 func NewRelay(cfg Config) *Relay {
-	return &Relay{
+	// 凭据配置启动即校验:角色非法/secret 复用直接 Fatal(避免带病运行)。
+	if cfg.Token != "" {
+		if _, err := parseCredentials(cfg.Token); err != nil {
+			log.Fatalf("[auth] 配置的 token 无效: %v", err)
+		}
+	}
+	r := &Relay{
 		cfg:     cfg,
 		agents:  NewRegistry(),
 		console: NewEventBus(),
 		policy:  DefaultCommandPolicy(),
 		tenants: NewTenantManager(), // 默认内存版;有 store 时由 WithTenants 替换为持久化版
 	}
+	if cfg.Token != "" {
+		creds := r.credentialIndex()
+		roles := make(map[string]int, len(creds))
+		for _, c := range creds {
+			roles[c.Role]++
+		}
+		log.Printf("[auth] 凭据已加载: %d 条 (admin=%d operator=%d viewer=%d),租户 %d 个",
+			len(creds), roles[RoleAdmin], roles[RoleOperator], roles[RoleViewer], len(distinctTenants(creds)))
+	}
+	r.provisionTenantOrgs(true) // 静默:随后 WithTenants 换入持久化管理器时会再供给并记录
+	return r
+}
+
+// distinctTenants 凭据里出现的租户集合(日志用)。
+func distinctTenants(creds []Identity) map[string]bool {
+	out := make(map[string]bool)
+	for _, c := range creds {
+		if c.Tenant != "" {
+			out[c.Tenant] = true
+		}
+	}
+	return out
 }
 
 // WithStore 注入持久化存储(C4)。
@@ -340,8 +382,10 @@ func (r *Relay) WithUpdateRepo(u *UpdateRepo) *Relay {
 }
 
 // WithTenants 注入多租户管理器(P0-1:带持久化的版本,组织重启不丢)。
+// 换入后重新供给:凭据里的租户若在持久化组织中尚不存在则建立(已存在的禁用状态不动)。
 func (r *Relay) WithTenants(m *TenantManager) *Relay {
 	r.tenants = m
+	r.provisionTenantOrgs(false) // 持久化管理器:这里才是真正落库的供给,记录新建的组织
 	return r
 }
 
@@ -363,35 +407,15 @@ func (r *Relay) WithScheduler(s *Scheduler) *Relay {
 	return r
 }
 
-// 鉴权：校验 Bearer token（配置为空则放行）。
+// authorize 鉴权(不返回身份的薄包装,供无需身份的既有调用点)。
 //
-// S6 修复：token 比较用 crypto/subtle.ConstantTimeCompare，消除计时侧信道。
-// H4 修复：token 不经 query 传递(防日志/Referer 泄漏)。
-// UI-P3 补充：浏览器 EventSource 无法携带自定义 header,补同源 cookie 回退
-// (reins_token;cookie 不进访问日志/Referer,安全性等同 header;query 依旧拒绝)。
+// 实际逻辑见 rbac.go 的 authenticate:
+//   - S6:常量时间比较;H4:仅 Authorization 头 + 同源 cookie(query 恒拒)。
+//   - 2026 租户加固:身份(租户/角色)一律取服务端凭据条目的绑定值,
+//     请求方声明的前缀不参与判定——消除「知道 secret 即自称任意租户/admin」的提权。
 func (r *Relay) authorize(req *http.Request) error {
-	if r.cfg.Token == "" {
-		return nil
-	}
-	// H4:仅 Authorization 头 + 同源 cookie(query token 会进日志/Referer 泄漏);
-	// 短1:比较 Secret 部分(支持 tenant:role:secret 格式,纯 secret 行为不变)
-	token := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
-	if token == "" {
-		if c, err := req.Cookie("reins_token"); err == nil {
-			token = c.Value
-		}
-	}
-	ident := ParseToken(token)
-	want := ParseToken(r.cfg.Token).Secret
-	if subtle.ConstantTimeCompare([]byte(ident.Secret), []byte(want)) != 1 {
-		return errors.New("无效的鉴权 token")
-	}
-	// P0-1:租户组织校验——组织被禁用/删除后,该租户 token 立即失效(fail-closed)。
-	// tenant 为空(admin/纯 secret 部署)不受影响,向后兼容。
-	if r.tenants != nil && !r.tenants.OrgEnabled(ident.Tenant) {
-		return errors.New("所属组织已被禁用或删除")
-	}
-	return nil
+	_, err := r.authenticate(req)
+	return err
 }
 
 // installTokenOK 校验请求携带的是否为部署专用 Token(-install-token)。
@@ -411,8 +435,17 @@ func (r *Relay) installTokenOK(req *http.Request) bool {
 //   - 非 mTLS：用 token（向后兼容）
 //   - Origin：Agent 非浏览器，InsecureSkipVerify 仅在 Dev 模式（收紧）
 func (r *Relay) handleAgentWS(w http.ResponseWriter, req *http.Request) {
+	// 2026 租户加固:先解析连接凭据绑定的身份(Agent 归属的服务端事实)。
+	// adminCred = 携带全局 admin 凭据(或未启用鉴权):注册时不受归属绑定约束。
+	// 部署专用 Token / 不带凭据的 mTLS 连接:tenant 为空,只能注册未被租户绑定的 ID。
+	connTenant, adminCred := "", r.cfg.Token == ""
+	if !adminCred {
+		if id, err := r.authenticate(req); err == nil {
+			connTenant, adminCred = id.Tenant, id.Tenant == ""
+		}
+	}
 	if r.ca == nil {
-		// 非 mTLS：用 token 校验(部署专用 Token 也可注册)
+		// 非 mTLS：用 token 校验(部署专用 Token 也可注册;其归属为空 = admin 域)
 		if err := r.authorize(req); err != nil && !r.installTokenOK(req) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -428,7 +461,7 @@ func (r *Relay) handleAgentWS(w http.ResponseWriter, req *http.Request) {
 	// 限制消息大小（默认 32MiB，支持大截图/文件）
 	c.SetReadLimit(32 << 20)
 
-	wc := &wsConn{Writer: wsx.New(c), id: uuid.NewString(), role: "agent"}
+	wc := &wsConn{Writer: wsx.New(c), id: uuid.NewString(), role: "agent", tenant: connTenant, adminCred: adminCred}
 	// M2：提取 mTLS 客户端证书身份（CN + DNSNames），供 serveAgent 校验
 	if req.TLS != nil && len(req.TLS.PeerCertificates) > 0 {
 		wc.certCN = req.TLS.PeerCertificates[0].Subject.CommonName
@@ -587,6 +620,18 @@ func (r *Relay) serveAgent(ctx context.Context, wc *wsConn) {
 					wc.close(websocket.StatusPolicyViolation, "agentID does not match certificate")
 					return
 				}
+			}
+			// 2026 租户加固:归属绑定准入——租户凭据首次注册即把 agentID 钉到该租户,
+			// 此后其它租户/无租户连接(部署 Token、无凭据 mTLS)不得顶替该 ID
+			// (否则顶替者可接走该 Agent 的缓存任务)。admin 凭据不受约束。
+			if err := r.admitAgentRegistration(wc, reg.AgentID); err != nil {
+				log.Printf("[tenant] 拒绝注册: %v", err)
+				if r.audit != nil {
+					r.audit.Log(AuditEntry{Event: "agent_register_rejected", AgentID: reg.AgentID, Tenant: wc.tenant})
+				}
+				// 关闭原因不回显持有者租户名(连接方可能是冒充者)
+				wc.close(websocket.StatusPolicyViolation, "agent id is bound to another tenant")
+				return
 			}
 			agentID = reg.AgentID
 			wc.biz = agentID

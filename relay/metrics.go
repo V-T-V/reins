@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -137,32 +138,42 @@ func (m *Metrics) SetEventsDropped(n int64) {
 
 // handleMetrics GET /api/metrics 暴露运行指标(JSON 格式,需鉴权)。
 // P1-S7 修复:加鉴权(原无鉴权泄漏在线数/任务计数/goroutine数,利于侦察)。
+// 2026 租户加固:租户身份只看到本租户的在线 Agent 数(其余计数器是 Relay 级聚合,无租户维度)。
 func (r *Relay) handleMetrics(w http.ResponseWriter, req *http.Request) {
-	if err := r.authorize(req); err != nil {
+	id, err := r.authenticate(req)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, errMap(err))
 		return
 	}
 	// 更新在线数 + events_dropped(D7 从 EventBus 同步)
 	metrics.SetAgentsOnline(len(r.agents.Snapshot()))
 	metrics.SetEventsDropped(r.console.Dropped())
+	snap := metrics.Snapshot()
+	if id.Tenant != "" {
+		snap["agents_online"] = len(r.agents.SnapshotForTenant(id.Tenant))
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(metrics.Snapshot())
+	json.NewEncoder(w).Encode(snap)
 }
 
 // handlePromMetrics GET /metrics —— Prometheus 文本格式。
 // P1 生产硬化:鉴权策略——
 //   - 配了 MetricsToken:校验 Bearer(独立低权 token,供 Prometheus 专用)
-//   - 没配 MetricsToken 但有主 Token:校验主 Token(回退兼容)
+//   - 没配 MetricsToken 但有主 Token:回退到主凭据,但仅限**无租户**的凭据
+//     (2026 租户加固:指标是全 Relay 聚合,租户凭据不得读取;多凭据配置下
+//     接受其中任一无租户条目——原先整串比较 cfg.Token 在多凭据下永远对不上)
 //   - 都没配:无鉴权(仅适合内网/nginx IP 白名单兜底,生产不推荐)
 func (r *Relay) handlePromMetrics(w http.ResponseWriter, req *http.Request) {
-	// 鉴权:优先 MetricsToken,回退主 Token
-	expectedToken := r.cfg.MetricsToken
-	if expectedToken == "" {
-		expectedToken = r.cfg.Token // 回退主 Token(兼容)
-	}
-	if expectedToken != "" {
+	if r.cfg.MetricsToken != "" {
 		got := req.Header.Get("Authorization")
-		if got != "Bearer "+expectedToken {
+		// S6 对齐:常量时间比较(原 != 比较存在计时侧信道)
+		if subtle.ConstantTimeCompare([]byte(got), []byte("Bearer "+r.cfg.MetricsToken)) != 1 {
+			writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("metrics 端点需要 Bearer token")))
+			return
+		}
+	} else if r.cfg.Token != "" {
+		id, err := r.authenticate(req)
+		if err != nil || id.Tenant != "" {
 			writeJSON(w, http.StatusUnauthorized, errMap(fmt.Errorf("metrics 端点需要 Bearer token")))
 			return
 		}

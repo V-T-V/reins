@@ -156,7 +156,9 @@ func main() {
 	port := addrPort(cfg.Addr)
 	localIP := getLocalIP()
 	tokenHint := cfg.Token
-	if len(tokenHint) > 8 {
+	if strings.Contains(tokenHint, ",") {
+		tokenHint = fmt.Sprintf("<%d 条凭据,详见启动日志>", len(strings.Split(tokenHint, ","))) // 多凭据:不回显任何片段
+	} else if len(tokenHint) > 8 {
 		tokenHint = tokenHint[:8] + "..."
 	}
 
